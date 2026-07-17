@@ -1,0 +1,93 @@
+{
+  "format": "stardrive-field-mapping/v1",
+  "name": "example-coffee-cart",
+  "version": "1.0.0",
+  "$comment": "A worked example for mapping authors: a small agency's intake for mobile coffee-cart businesses. Question codes are C1..C9 — codes are yours to choose; they only need to be stable and to prefix the answer keys.",
+  "derived": [
+    {
+      "id": "eventFocused",
+      "anyOf": [{ "field": "audience", "match": "wedding|event|catering" }]
+    }
+  ],
+  "fields": [
+    {
+      "id": "bizName",
+      "source": { "code": "C1", "hint": "business.*name" },
+      "target": "config.siteName",
+      "required": true
+    },
+    {
+      "id": "pitch",
+      "source": { "code": "C2", "hint": "one sentence|describe" },
+      "skipIf": "^(no|n/a|none)$",
+      "target": "config.tagline"
+    },
+    {
+      "id": "email",
+      "source": { "code": "C3", "hint": "email" },
+      "fallback": { "scan": "values", "validate": "email", "trigger": "invalid" },
+      "validate": "email",
+      "target": "config.contactEmail",
+      "required": true
+    },
+    {
+      "id": "audience",
+      "source": { "code": "C4", "hint": "customers|audience" }
+    },
+    {
+      "id": "vibe",
+      "table": {
+        "inputs": ["audience"],
+        "target": "config.pairing",
+        "rules": [
+          { "value": "playful-bright", "match": "kids|family|festival" },
+          { "value": "quiet-luxury", "match": "wedding|upscale|corporate" }
+        ],
+        "default": "warm-craft",
+        "noteOnMatch": "Pairing {result} chosen from audience \"{in0}\".{?eventFocused: Event-focused business — lead with the booking CTA.}",
+        "noteOnDefault": "No audience keywords matched; defaulted to warm-craft."
+      }
+    },
+    {
+      "id": "menuWanted",
+      "source": { "code": "C5", "hint": "menu page" },
+      "set": [{ "append": "config.modules", "value": "menu", "when": "yes" }],
+      "notes": [{ "when": "unsure", "text": "Menu module: client is not sure — left OFF, confirm before quoting." }]
+    },
+    {
+      "id": "modulesPolicy",
+      "array": {
+        "path": "config.modules",
+        "prependIfAny": ["cms-core"],
+        "writeEmpty": true,
+        "noteIfAny": "Modules: {items} (+ cms-core).",
+        "noteIfEmpty": "No modules — a single-page site."
+      }
+    },
+    {
+      "id": "signature",
+      "when": { "outputIncludes": { "path": "config.modules", "value": "menu" } },
+      "source": { "code": "C6", "hint": "signature drink" },
+      "transform": ["splitList", "limit:3"],
+      "target": "config.menu.highlights"
+    },
+    {
+      "id": "social",
+      "links": {
+        "validate": "url",
+        "target": "config.socialLinks",
+        "items": [
+          { "code": "C7", "label": "Instagram" },
+          { "code": "C8", "label": "TikTok" }
+        ]
+      }
+    },
+    {
+      "id": "ownerName",
+      "source": { "code": "C9", "hint": "your name" },
+      "target": "contact.name",
+      "writeEmpty": true
+    }
+  ],
+  "context": [{ "code": "C4", "label": "Audience, in the client's words" }]
+}

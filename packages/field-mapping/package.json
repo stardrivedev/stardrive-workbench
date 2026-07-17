@@ -1,0 +1,19 @@
+{
+  "name": "@stardrive/field-mapping",
+  "version": "1.0.0",
+  "description": "Declarative intake-questionnaire → build-config mapping engine. Pure ESM, zero dependencies, no Node APIs.",
+  "type": "module",
+  "main": "index.mjs",
+  "types": "index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./index.d.mts",
+      "default": "./index.mjs"
+    }
+  },
+  "scripts": {
+    "test": "node test/run.mjs"
+  },
+  "license": "SEE LICENSE IN LICENSE.md",
+  "private": true
+}
