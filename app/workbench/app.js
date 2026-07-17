@@ -349,7 +349,7 @@ $('#themeBtn').addEventListener('click', () => {
 const TITLES = {
   overview: 'Overview', templates: 'Templates', studio: 'Template Studio',
   sites: 'Sites', connections: 'Connections',
-  reference: 'API Reference', keys: 'Keys & Usage', rulebook: 'Rulebook',
+  reference: 'API Reference', keys: 'Keys & Usage', billing: 'Billing', rulebook: 'Rulebook',
 };
 function route() {
   const view = (location.hash.replace('#/', '') || 'overview').split('?')[0];
@@ -360,9 +360,76 @@ function route() {
   if (v === 'templates') loadTemplates();
   if (v === 'sites') { loadSites(); loadSiteTemplateOptions(); }
   if (v === 'connections') loadConnections();
-  if (v === 'keys') renderMaskedKey();
+  if (v === 'keys') { renderMaskedKey(); loadKeys(); }
+  if (v === 'billing') loadBilling();
 }
 window.addEventListener('hashchange', route);
+
+/* ══════════════ Auth gate ══════════════ */
+async function whoami() {
+  try {
+    const res = await fetch('/auth/me');
+    if (!res.ok) return null;
+    return (await res.json()).account;
+  } catch { return null; }
+}
+
+function showGate() {
+  $('#authGate').hidden = false;
+  $('#appLayout').hidden = true;
+}
+function showApp(account) {
+  $('#authGate').hidden = true;
+  $('#appLayout').hidden = false;
+  $('#acctEmail').textContent = account.email;
+}
+
+let authMode = 'login';
+document.querySelectorAll('.authtab').forEach((t) => t.addEventListener('click', () => {
+  authMode = t.dataset.authtab;
+  document.querySelectorAll('.authtab').forEach((x) => x.classList.toggle('active', x === t));
+  $('#companyRow').hidden = authMode !== 'signup';
+  $('#authSubmit').textContent = authMode === 'signup' ? 'Create account' : 'Log in';
+  $('#authForm').querySelector('[name="password"]').setAttribute('autocomplete', authMode === 'signup' ? 'new-password' : 'current-password');
+  $('#authNote').textContent = '';
+}));
+
+$('#authForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const note = $('#authNote');
+  note.className = 'authnote';
+  const data = Object.fromEntries(new FormData(e.target).entries());
+  $('#authSubmit').disabled = true;
+  try {
+    const res = await fetch('/auth/' + authMode, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) { note.className = 'authnote err'; note.textContent = body.error?.message || 'Something went wrong.'; return; }
+    if (authMode === 'signup' && body.apiKey?.secret) {
+      // Auto-adopt the first key for product calls, and reveal it once.
+      localStorage.setItem('sd.apiKey', body.apiKey.secret);
+      $('#apiKeyInput').value = body.apiKey.secret;
+    }
+    showApp(body.account);
+    renderMaskedKey();
+    route();
+    if (authMode === 'signup') {
+      location.hash = '#/keys';
+      setTimeout(() => {
+        $('#newKeyOut').innerHTML = '<div class="keyreveal">This is your first API key — it is shown once. It is already active in this console; copy it for your own scripts.<code>' + esc(body.apiKey.secret) + '</code></div>';
+      }, 50);
+    }
+  } finally {
+    $('#authSubmit').disabled = false;
+  }
+});
+
+$('#logoutBtn').addEventListener('click', async () => {
+  await fetch('/auth/logout', { method: 'POST' });
+  localStorage.removeItem('sd.apiKey');
+  location.reload();
+});
 
 /* ══════════════ API key chip ══════════════ */
 $('#apiKeyInput').value = getApiKey();
@@ -976,7 +1043,97 @@ $('#testKeyBtn').addEventListener('click', async () => {
     (rows || '<tr><td colspan="2" style="color:var(--muted)">No usage yet this period.</td></tr>') + '</tbody></table></div>';
 });
 
+/* ══════════════ Self-service keys ══════════════ */
+async function loadKeys() {
+  const tbody = $('#keysTable tbody');
+  const res = await fetch('/v1/keys');
+  if (!res.ok) { tbody.innerHTML = '<tr><td colspan="5" style="color:var(--bad)">Log in to manage keys.</td></tr>'; return; }
+  const { keys } = await res.json();
+  if (!keys.length) { tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No keys yet — create one above.</td></tr>'; return; }
+  tbody.innerHTML = '';
+  for (const k of keys) {
+    const tr = document.createElement('tr');
+    const status = k.revoked ? '<span style="color:var(--bad)">revoked</span>' : '<span style="color:var(--good)">active</span>';
+    tr.innerHTML =
+      '<td style="color:var(--ink)">' + esc(k.name) + '</td>' +
+      '<td style="font-size:0.78rem">' + esc((k.scopes || []).join(', ')) + '</td>' +
+      '<td style="color:var(--muted)">' + esc((k.createdAt || '').slice(0, 10)) + '</td>' +
+      '<td>' + status + '</td>' +
+      '<td style="white-space:nowrap">' + (k.revoked ? '' :
+        '<button class="ghost" data-keyact="rotate" data-id="' + esc(k.id) + '">Rotate</button> ' +
+        '<button class="ghost danger" data-keyact="revoke" data-id="' + esc(k.id) + '">Revoke</button>') + '</td>';
+    tbody.appendChild(tr);
+  }
+}
+
+$('#createKeyBtn').addEventListener('click', async () => {
+  const name = $('#newKeyName').value.trim() || 'key';
+  const scopes = [...document.querySelectorAll('#scopeChecks input:checked')].map((c) => c.value);
+  const res = await fetch('/v1/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, scopes }) });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('#newKeyOut').innerHTML = '<div class="report err">' + esc(body.error?.message || 'Failed.') + '</div>'; return; }
+  $('#newKeyName').value = '';
+  $('#newKeyOut').innerHTML = '<div class="keyreveal">Key <b>' + esc(body.name) + '</b> created — copy it now, it will not be shown again.<code>' + esc(body.secret) + '</code></div>';
+  loadKeys();
+});
+
+$('#keysTable').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-keyact]');
+  if (!btn) return;
+  if (btn.dataset.keyact === 'rotate') {
+    const res = await fetch('/v1/keys/' + btn.dataset.id + '/rotate', { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) {
+      $('#newKeyOut').innerHTML = '<div class="keyreveal">Rotated <b>' + esc(body.name) + '</b> — the old secret is now dead. New secret (shown once):<code>' + esc(body.secret) + '</code></div>';
+      if (getApiKey() && confirm('Use this rotated key as the active console key too?')) {
+        localStorage.setItem('sd.apiKey', body.secret); $('#apiKeyInput').value = body.secret; renderMaskedKey();
+      }
+    }
+    loadKeys();
+  }
+  if (btn.dataset.keyact === 'revoke') {
+    if (!confirm('Revoke this key? Anything using it will stop working.')) return;
+    await fetch('/v1/keys/' + btn.dataset.id, { method: 'DELETE' });
+    loadKeys();
+  }
+});
+
+/* ══════════════ Keys & usage (product-key test) ══════════════ */
+$('#testKeyBtn').addEventListener('click', async () => {
+  const out = $('#usageOut');
+  if (!getApiKey()) { out.innerHTML = '<div class="report err">No key active — create one below or paste one up top.</div>'; return; }
+  const { status, body } = await api('/v1/usage');
+  if (status !== 200) { out.innerHTML = '<div class="report err">Key rejected (' + status + ').</div>'; return; }
+  const rows = Object.entries(body.counters || {}).sort()
+    .map(([k, v]) => '<tr><td><code>' + esc(k) + '</code></td><td style="text-align:right;font-variant-numeric:tabular-nums">' + v + '</td></tr>').join('');
+  out.innerHTML =
+    '<div class="report ok">✓ Key valid — <b>' + esc(body.name) + '</b> · period ' + esc(body.period) + '</div>' +
+    '<div class="tscroll"><table class="list"><thead><tr><th>Counter</th><th style="text-align:right">This period</th></tr></thead><tbody>' +
+    (rows || '<tr><td colspan="2" style="color:var(--muted)">No usage yet this period.</td></tr>') + '</tbody></table></div>';
+});
+
+/* ══════════════ Billing ══════════════ */
+async function loadBilling() {
+  const res = await fetch('/v1/billing');
+  if (!res.ok) { $('#planName').textContent = 'log in to view'; return; }
+  const b = await res.json();
+  $('#planName').textContent = b.planLabel + (b.plan === 'beta' ? ' (free)' : '');
+  $('#checkoutArea').innerHTML = b.checkoutConfigured
+    ? '<button class="primary" id="checkoutBtn" type="button">Upgrade plan</button>'
+    : '<div class="report" style="background:var(--code-bg);color:var(--muted)">Checkout isn\'t enabled yet. During the private beta everything is free while pricing is finalized from real usage. Stripe turns this on later — no action needed from you.</div>';
+  const tbody = $('#usageTable tbody');
+  const totals = Object.entries(b.usage?.totals || {}).sort();
+  tbody.innerHTML = totals.length
+    ? totals.map(([k, v]) => '<tr><td><code>' + esc(k) + '</code></td><td style="text-align:right;font-variant-numeric:tabular-nums">' + v + '</td></tr>').join('')
+    : '<tr><td colspan="2" style="color:var(--muted)">No usage yet' + (b.usage?.period ? ' for ' + esc(b.usage.period) : '') + '.</td></tr>';
+}
+
 /* ══════════════ Rulebook ══════════════ */
 $('#rulebookPre').textContent = RULEBOOK_PROMPT;
 
-route();
+/* ══════════════ Boot: gate on session ══════════════ */
+(async () => {
+  const account = await whoami();
+  if (account) { showApp(account); renderMaskedKey(); route(); }
+  else { showGate(); }
+})();

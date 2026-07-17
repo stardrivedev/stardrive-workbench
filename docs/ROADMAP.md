@@ -72,9 +72,19 @@ runs server-side, in a CLI, or in a browser preview.
   masked reads, per-account). Doctrine hardened in api-design.md: customers
   own their sites and hosting tiers; the engine is NEVER visible — exports/
   deploys carry assembled output only. 43-check E2E + 8-step browser smoke.
-- Payments/merchant-of-record: Paddle or Lemon Squeezy (they handle sales
-  tax — right-sized for a solo operation); subscription + metered usage.
-- Key issuance, rotation, scoping; rate limits.
+- **Accounts + self-service SHIPPED 2026-07-17**: email/password **signup &
+  login** (scrypt, httpOnly session cookies), the Workbench gated behind it,
+  self-service **API key** management from the console (create / rotate /
+  revoke — no more CLI minting required; `make-key.mjs` remains for CI), and
+  a **Billing** tab (plan + usage aggregated across the account's keys).
+  Signup mints the account's first full-scope key automatically. 51-check
+  E2E + 11-step browser smoke.
+- **Payments**: decided — **Stripe** (checkout). Built as a dormant seam
+  (`POST /v1/billing/checkout` → honest 501 until `STRIPE_SECRET_KEY` +
+  `STRIPE_PRICE_<PLAN>` are set), so real pricing can be chosen from beta
+  usage first, then activated with no code change.
+- ~~Key issuance, rotation, scoping; rate limits~~ — **done** (self-service
+  above; rate limits already live).
 - Docs polished for strangers; a worked example template + mapping.
 - stardrive.dev marketing site — build it WITH the d4 engine (dogfood + demo).
 - ~~Installer packaging + code signing~~ — eliminated by the API-first pivot.

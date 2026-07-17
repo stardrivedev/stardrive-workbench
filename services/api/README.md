@@ -10,7 +10,6 @@ field-mapping engine is imported directly from `packages/field-mapping`.
 ## Run (and see it)
 
 ```
-node scripts/make-key.mjs --name "me"
 node server.mjs [--port 4650]
 ```
 
@@ -19,32 +18,51 @@ Then open **http://localhost:4650**:
 - **/** — the public marketing site (`app/site/`): what Stardrive is, how it
   works, pricing shape, FAQ, and a request-access form whose leads land in
   `var/leads/` (public endpoint, per-IP throttled).
-- **/workbench/** — the customer console (`app/workbench/`): overview, your
-  private template library with folder upload, the Template Studio (BYO-key
-  chat against the authoring rulebook), **Sites** (assemble, watch jobs,
-  read QA reports, and upload into **asset compartments** — named slots
-  like logo/favicon/hero/gallery, each mapped to its exact path on the
-  assembled site; templates can declare extras via manifest `assetSlots`),
-  **Connections** (your own Vercel/Turso/GitHub tokens — encrypted at
-  rest, masked on read, used only at deploy time), the full API reference
-  with copy-ready curls, keys & usage, and the rulebook. Paste the minted
-  key in the top-right box.
+- **/workbench/** — the customer console (`app/workbench/`). It opens a
+  **login / signup** gate: sign up with an email + password and the console
+  creates your account, opens a session, and mints your first API key
+  automatically (shown once). Inside: overview, your private template
+  library with folder upload, the Template Studio (BYO-key chat against the
+  authoring rulebook), **Sites** (assemble, watch jobs, read QA reports,
+  and upload into **asset compartments** — named slots like
+  logo/favicon/hero/gallery, each mapped to its exact path on the assembled
+  site; templates can declare extras via manifest `assetSlots`),
+  **Connections** (your own Vercel/Turso/GitHub tokens — encrypted at rest,
+  masked on read, used only at deploy time), the API reference with
+  copy-ready curls, self-service **Keys** (create/rotate/revoke), **Billing**
+  (plan + usage; Stripe checkout dormant until configured), and the rulebook.
 
 ```
 node test/e2e.mjs        # the full end-to-end suite (spawns its own servers)
 ```
 
-## Accounts (multi-tenancy)
+`make-key.mjs` still works for minting a key from the CLI (CI, scripts):
+`node scripts/make-key.mjs --name "ci" [--scopes …] [--account <id>]`.
 
-Every key belongs to an **account**. Imported templates, stored mappings,
-and sites/jobs are private to the account that created them — the bundled
-d4 catalog is the only shared surface. `make-key.mjs --account <id>` mints
-additional keys on an existing account (CI key beside a dashboard key);
-without it, each new key gets its own fresh account.
+## Accounts, sessions, and keys
+
+**Signup** creates an account (email + scrypt-hashed password) and opens a
+browser **session** (an httpOnly cookie; only the token's sha256 is stored).
+The account OWNS its API keys and its private library. Two auth layers:
+
+- **API key** (`Authorization: Bearer sk_live_…`) — the machine license, for
+  calling the product API (`/v1/*`) from scripts and pipelines.
+- **Session** (cookie) — the human login, for the console's account
+  management: `GET /auth/me`, self-service keys (`GET/POST /v1/keys`,
+  `POST /v1/keys/:id/rotate`, `DELETE /v1/keys/:id`), and billing.
+
+Imported templates, stored mappings, and sites/jobs are private to the
+account that created them — the bundled d4 catalog is the only shared
+surface. Keys minted with `--account <id>` share one account (CI key beside
+a dashboard key); without it each new key gets its own fresh account.
 
 Environment: `PORT`, `STARDRIVE_VAR_DIR` (runtime state; default `./var`,
 never committed), `STARDRIVE_ENGINE` (`dry` default | `real` pending),
-`RATE_LIMIT_PER_MIN` (per key, default 120).
+`RATE_LIMIT_PER_MIN` (per key, default 120), `STARDRIVE_SECRET` (encryption
+key for stored hosting tokens; a `var/secret.key` is generated for dev if
+unset — production must set it), `STARDRIVE_SECURE_COOKIES=1` (adds `Secure`
+to the session cookie; set in production behind HTTPS). Billing is dormant
+until `STRIPE_SECRET_KEY` (+ `STRIPE_PRICE_<PLAN>` price ids) are set.
 
 ## What is implemented (all E2E-tested over real HTTP)
 

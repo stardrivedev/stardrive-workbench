@@ -136,6 +136,90 @@ await check('unknown route → 404', async () => {
   assert.strictEqual((await call('GET', '/v1/nope', { key: fullKey })).status, 404);
 });
 
+// ── Accounts, sessions, self-service keys, billing ───────────────────────
+console.log('accounts + sessions:');
+const cookieCall = async (method, pathname, { cookie, body } = {}) => {
+  const res = await fetch(BASE + pathname, {
+    method,
+    headers: { ...(cookie ? { Cookie: cookie } : {}), ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const setCookie = res.headers.get('set-cookie');
+  const token = setCookie ? /sd_session=([^;]*)/.exec(setCookie)?.[1] : null;
+  return { status: res.status, token, setCookie, body: await res.json().catch(() => ({})) };
+};
+let sessionCookie = null;
+let sessionKeySecret = null;
+await check('signup creates an account, sets a session cookie, and returns a first full-scope key', async () => {
+  const email = `ada+${Date.now()}@example.com`;
+  const res = await cookieCall('POST', '/auth/signup', { body: { email, password: 'correcthorse', company: 'Ada Web Co' } });
+  assert.strictEqual(res.status, 201);
+  assert.strictEqual(res.body.account.email, email);
+  assert.strictEqual(res.body.account.plan, 'beta');
+  assert.match(res.body.apiKey.secret, /^sk_live_[0-9a-f]{48}$/);
+  assert.deepStrictEqual(res.body.apiKey.scopes, ['mappings', 'templates', 'sites', 'deploy']);
+  assert.strictEqual(/HttpOnly/i.test(res.setCookie) && /SameSite=Lax/i.test(res.setCookie), true);
+  sessionCookie = `sd_session=${res.token}`;
+  sessionKeySecret = res.body.apiKey.secret;
+});
+await check('the signup key actually works against the product API (account-scoped)', async () => {
+  const t = await call('GET', '/v1/templates', { key: sessionKeySecret });
+  assert.strictEqual(t.status, 200);
+  assert.strictEqual(t.body.templates.length, 6); // the shared catalog, freshly its own account
+});
+await check('duplicate email → 409; weak password → 400; bad login → 401', async () => {
+  const email = `dupe+${Date.now()}@example.com`;
+  assert.strictEqual((await cookieCall('POST', '/auth/signup', { body: { email, password: 'longenough' } })).status, 201);
+  assert.strictEqual((await cookieCall('POST', '/auth/signup', { body: { email, password: 'longenough' } })).status, 409);
+  assert.strictEqual((await cookieCall('POST', '/auth/signup', { body: { email: `x${Date.now()}@e.com`, password: 'short' } })).status, 400);
+  assert.strictEqual((await cookieCall('POST', '/auth/login', { body: { email, password: 'wrongpass' } })).status, 401);
+});
+await check('GET /auth/me requires a session; works with the cookie', async () => {
+  assert.strictEqual((await cookieCall('GET', '/auth/me')).status, 401);
+  const me = await cookieCall('GET', '/auth/me', { cookie: sessionCookie });
+  assert.strictEqual(me.status, 200);
+  assert.strictEqual(me.body.account.company, 'Ada Web Co');
+});
+await check('login opens a fresh session; logout invalidates it', async () => {
+  const email = `log+${Date.now()}@example.com`;
+  await cookieCall('POST', '/auth/signup', { body: { email, password: 'password123' } });
+  const login = await cookieCall('POST', '/auth/login', { body: { email, password: 'password123' } });
+  assert.strictEqual(login.status, 200);
+  const c = `sd_session=${login.token}`;
+  assert.strictEqual((await cookieCall('GET', '/auth/me', { cookie: c })).status, 200);
+  const out = await cookieCall('POST', '/auth/logout', { cookie: c });
+  assert.strictEqual(out.status, 200);
+  assert.strictEqual((await cookieCall('GET', '/auth/me', { cookie: login.token ? c : '' })).status, 401);
+});
+console.log('self-service keys + billing:');
+await check('keys: list, mint (secret shown once), rotate, revoke — all session-scoped', async () => {
+  assert.strictEqual((await cookieCall('GET', '/v1/keys')).status, 401); // no session
+  const list0 = await cookieCall('GET', '/v1/keys', { cookie: sessionCookie });
+  assert.strictEqual(list0.body.keys.length, 1); // the signup key
+  const mint = await cookieCall('POST', '/v1/keys', { cookie: sessionCookie, body: { name: 'CI key', scopes: ['mappings', 'templates'] } });
+  assert.strictEqual(mint.status, 201);
+  assert.match(mint.body.secret, /^sk_live_/);
+  assert.deepStrictEqual(mint.body.scopes, ['mappings', 'templates']);
+  const rotated = await cookieCall('POST', `/v1/keys/${mint.body.id}/rotate`, { cookie: sessionCookie });
+  assert.strictEqual(rotated.status, 200);
+  assert.notStrictEqual(rotated.body.secret, mint.body.secret); // new secret
+  const old = await call('GET', '/v1/templates', { key: mint.body.secret });
+  assert.strictEqual(old.status, 401, 'rotated-away secret no longer authenticates');
+  const del = await cookieCall('DELETE', `/v1/keys/${mint.body.id}`, { cookie: sessionCookie });
+  assert.strictEqual(del.status, 200);
+  assert.strictEqual((await call('GET', '/v1/templates', { key: rotated.body.secret })).status, 401, 'revoked key rejected');
+});
+await check('billing: plan + aggregated usage; checkout is an honest 501 until Stripe is configured', async () => {
+  const b = await cookieCall('GET', '/v1/billing', { cookie: sessionCookie });
+  assert.strictEqual(b.status, 200);
+  assert.strictEqual(b.body.plan, 'beta');
+  assert.strictEqual(b.body.checkoutConfigured, false);
+  assert.strictEqual(typeof b.body.usage.totals, 'object');
+  const co = await cookieCall('POST', '/v1/billing/checkout', { cookie: sessionCookie, body: { plan: 'studio' } });
+  assert.strictEqual(co.status, 501);
+  assert.strictEqual(co.body.error.code, 'billing_unconfigured');
+});
+
 // ── Mappings ─────────────────────────────────────────────────────────────
 console.log('mappings:');
 await check('validate: good mapping ok, garbage rejected with reasons', async () => {

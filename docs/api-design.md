@@ -39,6 +39,34 @@ their account — cross-account reads 404, and two accounts can hold
 same-named templates without collision. The bundled d4 catalog is the only
 shared surface, and imports can never shadow its names.
 
+## Accounts, sessions, self-service keys (implemented)
+
+Two auth layers, one account id threading both:
+
+- **API key** — the machine license (above), for the product surface.
+- **Session** — the human login for the console. `POST /auth/signup`
+  (email + scrypt-hashed password) creates the account and mints its first
+  full-scope key; `POST /auth/login` / `POST /auth/logout` / `GET /auth/me`
+  manage the session, carried in an httpOnly `sd_session` cookie whose token
+  is stored only as a sha256. Session-authed account management:
+
+| | |
+|---|---|
+| `GET /v1/keys` | List the account's keys (id, name, scopes, timestamps — never the secret). |
+| `POST /v1/keys` | Mint a key (`{ name, scopes }`) — secret shown once. |
+| `POST /v1/keys/{id}/rotate` | New secret on the same key; the old one dies immediately. |
+| `DELETE /v1/keys/{id}` | Revoke. |
+
+## Billing (implemented as a dormant seam)
+
+| | |
+|---|---|
+| `GET /v1/billing` | Plan + this month's usage aggregated across the account's keys. |
+| `POST /v1/billing/checkout` | Stripe Checkout session. Honest `501` until `STRIPE_SECRET_KEY` (+ `STRIPE_PRICE_<PLAN>`) are set — pricing is finalized from real usage first, then the key lights this up with no code change. |
+
+The meter that will price is **sites assembled** (already counted per key).
+Everything is free on the `beta` plan during the private beta.
+
 ## Endpoints
 
 ### Mappings (the M1 engine as a service — pure, cheap, first to ship)

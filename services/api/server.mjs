@@ -15,7 +15,10 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createServer, json, fail, readBody, matchRoute } from './lib/http.mjs';
 import { VarStore, assertSafeSlug } from './lib/store.mjs';
-import { createAuth } from './lib/auth.mjs';
+import { createAuth, SCOPES } from './lib/auth.mjs';
+import { mintKey, listKeys, rotateKey, revokeKey } from './lib/keys.mjs';
+import { createAccounts } from './lib/accounts.mjs';
+import { createBilling } from './lib/billing.mjs';
 import { loadCatalog, createImportedStore, validateManifest, validateBundle, summarize } from './lib/templates.mjs';
 import { createJobRunner } from './lib/jobs.mjs';
 import { relayChat } from './lib/chat-proxy.mjs';
@@ -33,13 +36,30 @@ const PORT = Number(portArg >= 0 ? args[portArg + 1] : process.env.PORT) || 4650
 const VAR_DIR = process.env.STARDRIVE_VAR_DIR || path.join(HERE, 'var');
 const ENGINE = process.env.STARDRIVE_ENGINE || 'dry';
 
+const SECURE_COOKIES = process.env.STARDRIVE_SECURE_COOKIES === '1' || process.env.NODE_ENV === 'production';
+
 const store = new VarStore(VAR_DIR);
 const auth = createAuth(store, { rateLimitPerMin: Number(process.env.RATE_LIMIT_PER_MIN) || 120 });
+const accounts = createAccounts(store);
+const billing = createBilling(accounts);
 const catalog = loadCatalog(); // throws at boot if the bundle is bad
 const imported = createImportedStore(store);
 const assets = createAssets(store);
 const jobs = createJobRunner(store, { engine: ENGINE, assets });
 const connections = createConnections(store, VAR_DIR);
+
+function parseCookies(req) {
+  const out = {};
+  for (const part of String(req.headers.cookie || '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
+}
+const sessionCookie = (token) =>
+  `sd_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 3600}${SECURE_COOKIES ? '; Secure' : ''}`;
+const clearCookie = () =>
+  `sd_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${SECURE_COOKIES ? '; Secure' : ''}`;
 // Two static roots: the public marketing site at /, the licensee console at /workbench/.
 const site = createStaticServer(path.join(HERE, '..', '..', 'app', 'site'));
 const workbench = createStaticServer(path.join(HERE, '..', '..', 'app', 'workbench'));
@@ -104,6 +124,79 @@ const ROUTES = [
         endpoints: ROUTES.map((r) => `${r.method} ${r.pattern}${r.scope === 'public' ? '' : ` (scope: ${r.scope})`}`),
       },
     }),
+  },
+
+  // Auth — the human front door (browser session; the API key stays the
+  // machine license). Signup mints the account's first full-scope key.
+  {
+    method: 'POST', pattern: '/auth/signup', scope: 'public', bodyLimit: 20_000,
+    handler: ({ body }) => {
+      const account = accounts.signup(body || {});
+      const { record, secret } = mintKey(store, { name: 'Default key', scopes: SCOPES, account: account.id });
+      const token = accounts.createSession(account.id);
+      return { status: 201, cookies: [sessionCookie(token)], body: { account, apiKey: { ...record, secret } } };
+    },
+  },
+  {
+    method: 'POST', pattern: '/auth/login', scope: 'public', bodyLimit: 20_000,
+    handler: ({ body }) => {
+      const account = accounts.login(body || {});
+      if (!account) throw httpError(401, 'bad_credentials', 'Email or password is incorrect.');
+      const token = accounts.createSession(account.id);
+      return { status: 200, cookies: [sessionCookie(token)], body: { account } };
+    },
+  },
+  {
+    method: 'POST', pattern: '/auth/logout', scope: 'public',
+    handler: ({ req }) => {
+      accounts.destroySession(parseCookies(req).sd_session);
+      return { status: 200, cookies: [clearCookie()], body: { ok: true } };
+    },
+  },
+  {
+    method: 'GET', pattern: '/auth/me', scope: 'session',
+    handler: ({ account }) => ({ status: 200, body: { account } }),
+  },
+
+  // Self-service API keys (session-authed — these are account management).
+  {
+    method: 'GET', pattern: '/v1/keys', scope: 'session',
+    handler: ({ account }) => ({ status: 200, body: { keys: listKeys(store, account.id) } }),
+  },
+  {
+    method: 'POST', pattern: '/v1/keys', scope: 'session', bodyLimit: 10_000,
+    handler: ({ account, body }) => {
+      const { record, secret } = mintKey(store, { name: body?.name || 'key', scopes: body?.scopes, account: account.id });
+      return { status: 201, body: { ...record, secret } };
+    },
+  },
+  {
+    method: 'POST', pattern: '/v1/keys/:id/rotate', scope: 'session',
+    handler: ({ account, params }) => {
+      const out = rotateKey(store, params.id, account.id);
+      if (!out) throw httpError(404, 'not_found', 'No such active key on this account.');
+      return { status: 200, body: { ...out.record, secret: out.secret } };
+    },
+  },
+  {
+    method: 'DELETE', pattern: '/v1/keys/:id', scope: 'session',
+    handler: ({ account, params }) => {
+      if (!revokeKey(store, params.id, account.id)) throw httpError(404, 'not_found', 'No such key on this account.');
+      return { status: 200, body: { revoked: params.id } };
+    },
+  },
+
+  // Billing — plan + a Stripe-ready checkout seam, dormant until configured.
+  {
+    method: 'GET', pattern: '/v1/billing', scope: 'session',
+    handler: ({ account }) => {
+      const usage = billing.usageSummary(account, listKeys, auth.usageFor, store);
+      return { status: 200, body: billing.summary(account, usage) };
+    },
+  },
+  {
+    method: 'POST', pattern: '/v1/billing/checkout', scope: 'session', bodyLimit: 10_000,
+    handler: async ({ account, body }) => ({ status: 200, body: await billing.createCheckout(account, body || {}) }),
   },
 
   // Mappings — the M1 engine as a service.
@@ -537,7 +630,12 @@ const server = createServer(async (req, res) => {
 
   const { route, params } = match;
   let key = null;
-  if (route.scope !== 'public') {
+  let account = null;
+  if (route.scope === 'session') {
+    // Browser session (the console's account-management surface).
+    account = accounts.verifySession(parseCookies(req).sd_session);
+    if (!account) return fail(res, 401, 'unauthenticated', 'Log in to continue.');
+  } else if (route.scope !== 'public') {
     key = auth.verify(req);
     if (!key) return fail(res, 401, 'unauthenticated', 'A valid API key is required: Authorization: Bearer sk_live_…');
     const rate = auth.rateCheck(key.id);
@@ -548,11 +646,12 @@ const server = createServer(async (req, res) => {
   }
 
   const body = req.method === 'POST' || req.method === 'PUT' ? await readBody(req, route.bodyLimit) : undefined;
-  const out = await route.handler({ params, body, key, req });
+  const out = await route.handler({ params, body, key, account, req });
   if (key) {
     auth.meter(key.id, 'requests');
     if (route.meter && out.status < 400) auth.meter(key.id, route.meter);
   }
+  if (out.cookies) res.setHeader('Set-Cookie', out.cookies);
   if (out.raw) {
     res.writeHead(out.status, { ...out.headers, 'Content-Length': out.buffer.length });
     return res.end(out.buffer);

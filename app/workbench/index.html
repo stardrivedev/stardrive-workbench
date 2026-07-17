@@ -8,7 +8,32 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%235348c7'/%3E%3Ctext x='16' y='22' font-size='17' font-family='Segoe UI' font-weight='800' fill='white' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E">
 </head>
 <body>
-<div class="layout">
+<!-- ═══ Auth gate (shown until logged in) ═══ -->
+<div id="authGate" class="authgate" hidden>
+  <div class="authcard">
+    <div class="authbrand"><span class="authlogo">S</span> Stardrive <span class="authtag">Workbench</span></div>
+    <div class="authtabs">
+      <button class="authtab active" data-authtab="login" type="button">Log in</button>
+      <button class="authtab" data-authtab="signup" type="button">Sign up</button>
+    </div>
+    <form id="authForm" class="authform">
+      <label class="authrow" id="companyRow" hidden>Studio / company (optional)
+        <input name="company" autocomplete="organization">
+      </label>
+      <label class="authrow">Email
+        <input name="email" type="email" required autocomplete="email">
+      </label>
+      <label class="authrow">Password
+        <input name="password" type="password" required minlength="8" autocomplete="current-password" placeholder="at least 8 characters">
+      </label>
+      <button class="primary authsubmit" id="authSubmit" type="submit">Log in</button>
+      <p class="authnote" id="authNote" role="status"></p>
+    </form>
+    <p class="authfine">Your account owns your private templates, mappings, sites, and API keys. Signing up mints your first API key automatically.</p>
+  </div>
+</div>
+
+<div class="layout" id="appLayout" hidden>
   <aside class="sidebar">
     <div class="brand">
       <div class="logo">S</div>
@@ -21,10 +46,12 @@
     <a class="nav-item" href="#/connections" data-view="connections"><span class="glyph">⇄</span> Connections</a>
     <a class="nav-item" href="#/reference" data-view="reference"><span class="glyph">⌘</span> API Reference</a>
     <a class="nav-item" href="#/keys" data-view="keys"><span class="glyph">⚿</span> Keys &amp; Usage</a>
+    <a class="nav-item" href="#/billing" data-view="billing"><span class="glyph">$</span> Billing</a>
     <a class="nav-item" href="#/rulebook" data-view="rulebook"><span class="glyph">§</span> Rulebook</a>
     <div class="spacer"></div>
     <div class="foot">
-      <div><span class="statusdot" id="statusDot"></span><span id="statusText">checking…</span></div>
+      <div class="acct"><span class="acct-email" id="acctEmail"></span><button class="theme-btn" id="logoutBtn" type="button" style="margin-top:0.35rem">Log out</button></div>
+      <div style="margin-top:0.5rem"><span class="statusdot" id="statusDot"></span><span id="statusText">checking…</span></div>
       <div id="versionText" style="margin-top:0.25rem"></div>
       <button class="theme-btn" id="themeBtn" type="button">Theme: system</button>
     </div>
@@ -199,29 +226,55 @@
 
     <!-- ═══ Keys & Usage ═══ -->
     <section class="view" id="view-keys">
-      <p class="lede">Keys are minted on the operator machine and shown once; only hashes are stored. Scopes limit what a key can do; keys sharing an account share one private library.</p>
+      <p class="lede">Your API keys — the machine license for calling the API from your own scripts and pipeline. Create as many as you like, rotate a leaked one, revoke what you no longer need. Secrets are shown once and stored only as hashes.</p>
+      <div class="card">
+        <h2>Active key for this console</h2>
+        <div class="kvs"><span class="k">In use here</span><span class="v" id="maskedKey">none saved</span></div>
+        <p style="font-size:0.82rem;color:var(--muted);margin:0.5rem 0 0.8rem">This is the key the Templates/Sites tabs use for product calls. Signing up set one automatically; paste a different one in the box up top to switch.</p>
+        <button class="ghost" id="testKeyBtn" type="button">Test key &amp; load usage</button>
+        <div id="usageOut"></div>
+      </div>
+      <div class="card">
+        <h2>Create a key</h2>
+        <div class="grid2">
+          <div class="field"><label for="newKeyName">Name</label><input id="newKeyName" placeholder="e.g. CI pipeline"></div>
+          <div class="field"><label>Scopes</label>
+            <div id="scopeChecks" style="display:flex;gap:0.9rem;flex-wrap:wrap;font-size:0.85rem;padding-top:0.4rem">
+              <label class="checkline"><input type="checkbox" value="mappings" checked> mappings</label>
+              <label class="checkline"><input type="checkbox" value="templates" checked> templates</label>
+              <label class="checkline"><input type="checkbox" value="sites" checked> sites</label>
+              <label class="checkline"><input type="checkbox" value="deploy" checked> deploy</label>
+            </div>
+          </div>
+        </div>
+        <button class="primary" id="createKeyBtn" type="button">Create key</button>
+        <div id="newKeyOut"></div>
+      </div>
+      <div class="card">
+        <h2>Your keys</h2>
+        <div class="tscroll"><table class="list" id="keysTable">
+          <thead><tr><th>Name</th><th>Scopes</th><th>Created</th><th>Status</th><th></th></tr></thead>
+          <tbody><tr><td colspan="5" style="color:var(--muted)">Loading…</td></tr></tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <!-- ═══ Billing ═══ -->
+    <section class="view" id="view-billing">
+      <p class="lede">Your plan and this month's usage. During the private beta everything is free while pricing is set from real usage — the meter that will matter is sites assembled. Checkout turns on when Stripe is connected.</p>
       <div class="grid2">
         <div class="card">
-          <h2>This key</h2>
-          <div class="kvs" id="keyInfo"><span class="k">Key</span><span class="v" id="maskedKey">none saved</span></div>
-          <div style="margin-top:0.8rem"><button class="primary" id="testKeyBtn" type="button">Test key &amp; load usage</button></div>
-          <div id="usageOut"></div>
+          <h2>Plan</h2>
+          <div class="kvs" id="planKvs"><span class="k">Current</span><span class="v" id="planName">…</span></div>
+          <div id="checkoutArea" style="margin-top:0.9rem"></div>
         </div>
         <div class="card">
-          <h2>Mint &amp; manage</h2>
-          <h3>New account + key</h3>
-          <div class="codeblock"><pre>node scripts/make-key.mjs --name "acme agency" --scopes mappings,templates,sites</pre><button class="copybtn" type="button">Copy</button></div>
-          <h3>Extra key on the same account</h3>
-          <div class="codeblock"><pre>node scripts/make-key.mjs --name "acme ci" --account &lt;accountId&gt;</pre><button class="copybtn" type="button">Copy</button></div>
-          <h3>Revoke</h3>
-          <div class="codeblock"><pre>node scripts/make-key.mjs --revoke &lt;keyId&gt;</pre><button class="copybtn" type="button">Copy</button></div>
-          <h3>Scopes</h3>
-          <div class="tscroll"><table class="list">
-            <tr><td><code>mappings</code></td><td>validate / parse / store field mappings</td></tr>
-            <tr><td><code>templates</code></td><td>catalog, import, validate templates</td></tr>
-            <tr><td><code>sites</code></td><td>assemble, jobs, changes, export</td></tr>
-            <tr><td><code>deploy</code></td><td>deploys (pending the real engine)</td></tr>
+          <h2>This month's usage</h2>
+          <div class="tscroll"><table class="list" id="usageTable">
+            <thead><tr><th>Metered action</th><th style="text-align:right">Count</th></tr></thead>
+            <tbody><tr><td colspan="2" style="color:var(--muted)">Loading…</td></tr></tbody>
           </table></div>
+          <p style="font-size:0.8rem;color:var(--muted);margin:0.7rem 0 0">Usage is aggregated across all your keys. Failed calls are never counted.</p>
         </div>
       </div>
     </section>
