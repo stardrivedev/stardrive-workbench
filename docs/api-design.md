@@ -25,6 +25,14 @@ document is the M2 build spec — REST, versioned under `/v1`, JSON in/out.
 limits and usage counters. 401 unauthenticated, 403 out-of-scope, 429 over
 rate/plan.
 
+## Tenancy (implemented)
+
+Every key carries an **account** id; keys minted with `--account` share
+one. Imported templates, stored mappings, and sites/jobs are private to
+their account — cross-account reads 404, and two accounts can hold
+same-named templates without collision. The bundled d4 catalog is the only
+shared surface, and imports can never shadow its names.
+
 ## Endpoints
 
 ### Mappings (the M1 engine as a service — pure, cheap, first to ship)

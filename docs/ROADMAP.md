@@ -49,8 +49,18 @@ runs server-side, in a CLI, or in a browser preview.
 - Turso-backed store swap; container packaging; CORS for the Workbench.
 
 ## M3 — Sellable 1.0 (~6–12 sessions + owner tasks)
-- The Workbench: thin web dashboard over the API (template library, mapping
-  editor with live validate, client-facts form, build/QA/deploy status).
+- ~~The Workbench~~ — **v1 SHIPPED 2026-07-17**, served by the API itself at
+  `/` (zero build step, zero deps): developer-console UI (overview,
+  private template library with folder-upload import, API reference with
+  live copy-ready curls, keys & usage, the embedded rulebook) plus the
+  **Template Studio** — a BYO-key chat (OpenAI-compatible or Anthropic;
+  the licensee's provider key relays per-request, never stored) that
+  generates templates against the rulebook system prompt and imports them
+  through the standard gate, with rejection errors fed back into the chat
+  for the model to fix. Browser-smoke-tested end to end. Multi-tenancy
+  landed with it: accounts on keys; templates/mappings/sites/jobs private
+  per account, catalog shared. Remaining Workbench work: mapping editor,
+  client-facts form, build/QA/deploy status views (with the real engine).
 - Payments/merchant-of-record: Paddle or Lemon Squeezy (they handle sales
   tax — right-sized for a solo operation); subscription + metered usage.
 - Key issuance, rotation, scoping; rate limits.

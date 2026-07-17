@@ -9,7 +9,9 @@
  *   imported — licensee templates accepted through POST /v1/templates as
  *              template BUNDLES ({ manifest, files }), validated + linted
  *              by @stardrive/template-kit (the same gate Deneb4's own
- *              no-code upload uses), stored under var/templates/.
+ *              no-code upload uses), stored under var/templates/<account>/.
+ *              PRIVATE to the importing account: a licensee's templates are
+ *              theirs alone — only the bundled catalog is shared.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -35,24 +37,25 @@ export function loadCatalog() {
   return catalog;
 }
 
-/** Imported-template store over the var dir. */
+/** Per-account imported-template store over the var dir. */
 export function createImportedStore(store) {
-  const rel = (name) => `templates/${name}.json`;
+  const rel = (account, name) => `templates/${account}/${name}.json`;
 
-  function get(name) {
-    const rec = store.readJson(rel(name));
+  function get(account, name) {
+    const rec = store.readJson(rel(account, name));
     return rec ? { manifest: rec.bundle.manifest, source: 'imported', record: rec } : null;
   }
 
-  function list() {
-    return store.listIds('templates').map((name) => get(name)).filter(Boolean);
+  function list(account) {
+    return store.listIds(`templates/${account}`).map((name) => get(account, name)).filter(Boolean);
   }
 
-  function put(bundle, warnings) {
+  function put(account, bundle, warnings) {
     const name = bundle.manifest.name;
-    const existed = Boolean(store.readJson(rel(name)));
-    store.writeJson(rel(name), {
+    const existed = Boolean(store.readJson(rel(account, name)));
+    store.writeJson(rel(account, name), {
       name,
+      account,
       bundle,
       warnings,
       importedAt: new Date().toISOString(),
@@ -61,8 +64,8 @@ export function createImportedStore(store) {
     return { name, existed };
   }
 
-  function remove(name) {
-    return store.deleteJson(rel(name));
+  function remove(account, name) {
+    return store.deleteJson(rel(account, name));
   }
 
   return { get, list, put, remove };

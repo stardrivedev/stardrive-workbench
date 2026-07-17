@@ -3,10 +3,17 @@
  * Mint a Stardrive API key.
  *
  *   node scripts/make-key.mjs --name "beta agency" --scopes mappings,templates,sites
+ *   node scripts/make-key.mjs --name "beta agency ci" --account <accountId>
  *   node scripts/make-key.mjs --revoke <keyId>
  *
  * The secret is printed ONCE and stored only as a sha256 hash in
  * var/keys.json (override the location with --var-dir or STARDRIVE_VAR_DIR).
+ *
+ * Accounts: every key belongs to an account (licensee). Templates, stored
+ * mappings, and sites are PRIVATE to the account that created them — the
+ * bundled d4 catalog is the only shared surface. By default a new key gets
+ * its own fresh account id; pass --account to mint an additional key for an
+ * existing account (e.g. a CI key beside a dashboard key).
  */
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -38,18 +45,24 @@ const scopes = (optOf('scopes') || SCOPES.join(',')).split(',').map((s) => s.tri
 const bad = scopes.filter((s) => !SCOPES.includes(s));
 if (bad.length) { console.error(`Unknown scope(s): ${bad.join(', ')}. Valid: ${SCOPES.join(', ')}.`); process.exit(2); }
 
+const account = optOf('account') || crypto.randomUUID();
+if (optOf('account') && !keys.some((k) => k.account === account)) {
+  console.error(`Warning: no existing key belongs to account ${account} — minting anyway (this creates that account).`);
+}
+
 const secret = generateKey();
 const record = {
   id: crypto.randomUUID(),
   name,
   hash: hashKey(secret),
   scopes,
+  account,
   createdAt: new Date().toISOString(),
   revoked: null,
 };
 keys.push(record);
 store.writeJson('keys.json', keys);
 
-console.log(`Key minted for "${name}" (id ${record.id}, scopes: ${scopes.join(', ')}).`);
+console.log(`Key minted for "${name}" (id ${record.id}, account ${account}, scopes: ${scopes.join(', ')}).`);
 console.log('The secret below is shown ONCE and stored only as a hash:');
 console.log(secret);

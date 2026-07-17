@@ -38,7 +38,10 @@ export function createAuth(store, { rateLimitPerMin = 120 } = {}) {
     for (const key of loadKeys()) {
       if (key.revoked) continue;
       const stored = Buffer.from(key.hash, 'hex');
-      if (stored.length === digest.length && crypto.timingSafeEqual(stored, digest)) return key;
+      if (stored.length === digest.length && crypto.timingSafeEqual(stored, digest)) {
+        // Pre-account key records default to their own id as the account.
+        return { ...key, account: key.account || key.id };
+      }
     }
     return null;
   }

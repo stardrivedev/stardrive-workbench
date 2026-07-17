@@ -17,6 +17,8 @@ import { VarStore, assertSafeSlug } from './lib/store.mjs';
 import { createAuth } from './lib/auth.mjs';
 import { loadCatalog, createImportedStore, validateManifest, validateBundle, summarize } from './lib/templates.mjs';
 import { createJobRunner } from './lib/jobs.mjs';
+import { relayChat } from './lib/chat-proxy.mjs';
+import { createStaticServer } from './lib/static.mjs';
 import { runMapping, validateMapping } from '../../packages/field-mapping/index.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -33,10 +35,11 @@ const auth = createAuth(store, { rateLimitPerMin: Number(process.env.RATE_LIMIT_
 const catalog = loadCatalog(); // throws at boot if the bundle is bad
 const imported = createImportedStore(store);
 const jobs = createJobRunner(store, { engine: ENGINE });
+const workbench = createStaticServer(path.join(HERE, '..', '..', 'app', 'workbench'));
 
-/** Bundled first (not overridable), then imported. */
-function getTemplate(name) {
-  return catalog.get(String(name)) || imported.get(String(name));
+/** Bundled first (shared, not overridable), then the CALLER's own imports. */
+function getTemplate(account, name) {
+  return catalog.get(String(name)) || imported.get(account, String(name));
 }
 
 const httpError = (status, code, message) => Object.assign(new Error(message), { status, code });
@@ -48,9 +51,11 @@ function assertUuid(id, what = 'id') {
   return id;
 }
 
-function loadSite(id) {
+function loadSite(id, account) {
   const site = store.readJson(`sites/${assertUuid(id, 'site id')}.json`);
-  if (!site) throw httpError(404, 'not_found', `Site ${id} not found.`);
+  if (!site || (site.account && site.account !== account)) {
+    throw httpError(404, 'not_found', `Site ${id} not found.`);
+  }
   return site;
 }
 
@@ -59,7 +64,7 @@ function resolveMappingBody(body, key) {
     throw httpError(400, 'bad_request', 'Send either mapping (inline) or mappingId (stored), not both.');
   }
   if (body?.mappingId) {
-    const rec = store.readJson(`mappings/${assertSafeSlug(body.mappingId, 'mappingId')}.json`);
+    const rec = store.readJson(`mappings/${key.account}/${assertSafeSlug(body.mappingId, 'mappingId')}.json`);
     if (!rec) throw httpError(404, 'not_found', `Mapping "${body.mappingId}" not found.`);
     return rec.mapping;
   }
@@ -114,31 +119,33 @@ const ROUTES = [
   },
   {
     method: 'PUT', pattern: '/v1/mappings/:id', scope: 'mappings',
-    handler: ({ params, body }) => {
+    handler: ({ params, body, key }) => {
       const id = assertSafeSlug(params.id, 'mapping id');
       if (body == null) throw httpError(400, 'bad_request', 'Body must be a mapping document.');
       const v = validateMapping(body);
       if (!v.ok) return { status: 422, body: { error: { code: 'invalid_mapping', message: 'Mapping rejected.' }, errors: v.errors } };
-      const existing = store.readJson(`mappings/${id}.json`);
+      const rel = `mappings/${key.account}/${id}.json`;
+      const existing = store.readJson(rel);
       const rec = {
         id,
         name: body.name ?? id,
         version: body.version ?? null,
+        account: key.account,
         mapping: body,
         createdAt: existing?.createdAt ?? new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-      store.writeJson(`mappings/${id}.json`, rec);
+      store.writeJson(rel, rec);
       return { status: existing ? 200 : 201, body: { id, name: rec.name, version: rec.version, updatedAt: rec.updatedAt } };
     },
   },
   {
     method: 'GET', pattern: '/v1/mappings', scope: 'mappings',
-    handler: () => ({
+    handler: ({ key }) => ({
       status: 200,
       body: {
-        mappings: store.listIds('mappings').map((id) => {
-          const r = store.readJson(`mappings/${id}.json`);
+        mappings: store.listIds(`mappings/${key.account}`).map((id) => {
+          const r = store.readJson(`mappings/${key.account}/${id}.json`);
           return { id: r.id, name: r.name, version: r.version, updatedAt: r.updatedAt };
         }),
       },
@@ -146,16 +153,16 @@ const ROUTES = [
   },
   {
     method: 'GET', pattern: '/v1/mappings/:id', scope: 'mappings',
-    handler: ({ params }) => {
-      const rec = store.readJson(`mappings/${assertSafeSlug(params.id, 'mapping id')}.json`);
+    handler: ({ params, key }) => {
+      const rec = store.readJson(`mappings/${key.account}/${assertSafeSlug(params.id, 'mapping id')}.json`);
       if (!rec) throw httpError(404, 'not_found', `Mapping "${params.id}" not found.`);
       return { status: 200, body: rec };
     },
   },
   {
     method: 'DELETE', pattern: '/v1/mappings/:id', scope: 'mappings',
-    handler: ({ params }) => {
-      const ok = store.deleteJson(`mappings/${assertSafeSlug(params.id, 'mapping id')}.json`);
+    handler: ({ params, key }) => {
+      const ok = store.deleteJson(`mappings/${key.account}/${assertSafeSlug(params.id, 'mapping id')}.json`);
       if (!ok) throw httpError(404, 'not_found', `Mapping "${params.id}" not found.`);
       return { status: 200, body: { deleted: params.id } };
     },
@@ -164,15 +171,15 @@ const ROUTES = [
   // Templates.
   {
     method: 'GET', pattern: '/v1/templates', scope: 'templates',
-    handler: () => ({
+    handler: ({ key }) => ({
       status: 200,
-      body: { templates: [...catalog.values(), ...imported.list()].map(summarize) },
+      body: { templates: [...catalog.values(), ...imported.list(key.account)].map(summarize) },
     }),
   },
   {
     method: 'GET', pattern: '/v1/templates/:name', scope: 'templates',
-    handler: ({ params }) => {
-      const entry = getTemplate(params.name);
+    handler: ({ params, key }) => {
+      const entry = getTemplate(key.account, params.name);
       if (!entry) throw httpError(404, 'not_found', `Template "${params.name}" not found.`);
       return {
         status: 200,
@@ -197,7 +204,7 @@ const ROUTES = [
     // path safety, required site files, token lint. Errors reject (422);
     // warnings import and are kept on the record.
     method: 'POST', pattern: '/v1/templates', scope: 'templates', meter: 'templates.import', bodyLimit: 40_000_000,
-    handler: ({ body }) => {
+    handler: ({ body, key }) => {
       const v = validateBundle(body);
       if (!v.ok) {
         return { status: 422, body: { error: { code: 'invalid_bundle', message: 'Template bundle rejected.' }, errors: v.errors, warnings: v.warnings } };
@@ -205,17 +212,17 @@ const ROUTES = [
       if (catalog.has(body.manifest.name)) {
         throw httpError(409, 'name_conflict', `"${body.manifest.name}" is a first-party catalog name — imported templates cannot shadow the bundled catalog.`);
       }
-      const { name, existed } = imported.put(body, v.warnings);
+      const { name, existed } = imported.put(key.account, body, v.warnings);
       return { status: existed ? 200 : 201, body: { name, source: 'imported', warnings: v.warnings } };
     },
   },
   {
     method: 'DELETE', pattern: '/v1/templates/:name', scope: 'templates',
-    handler: ({ params }) => {
+    handler: ({ params, key }) => {
       if (catalog.has(params.name)) {
         throw httpError(403, 'forbidden', 'The bundled first-party catalog cannot be deleted through the API.');
       }
-      if (!imported.remove(params.name)) throw httpError(404, 'not_found', `Imported template "${params.name}" not found.`);
+      if (!imported.remove(key.account, params.name)) throw httpError(404, 'not_found', `Imported template "${params.name}" not found.`);
       return { status: 200, body: { deleted: params.name } };
     },
   },
@@ -225,7 +232,7 @@ const ROUTES = [
     method: 'POST', pattern: '/v1/sites', scope: 'sites', meter: 'sites.assemble',
     handler: ({ body, key }) => {
       if (body == null) throw httpError(400, 'bad_request', 'Body required.');
-      const entry = getTemplate(body.templateId || '');
+      const entry = getTemplate(key.account, body.templateId || '');
       if (!entry) throw httpError(422, 'unknown_template', `templateId must name a known template (got ${JSON.stringify(body.templateId)}).`);
       if (entry.manifest.kind !== 'site') {
         throw httpError(422, 'not_a_base_template', `"${body.templateId}" is a ${entry.manifest.kind} module — assembly starts from a kind:"site" template; add modules via config.modules.`);
@@ -249,6 +256,7 @@ const ROUTES = [
       }
       const site = {
         id: crypto.randomUUID(),
+        account: key.account,
         templateId: body.templateId,
         config,
         parse,
@@ -257,7 +265,7 @@ const ROUTES = [
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-      const job = jobs.enqueue('assemble', site.id);
+      const job = jobs.enqueue('assemble', site.id, key.account);
       site.jobs.push(job.id);
       store.writeJson(`sites/${site.id}.json`, site);
       return { status: 202, body: { siteId: site.id, jobId: job.id, status: job.status } };
@@ -265,8 +273,8 @@ const ROUTES = [
   },
   {
     method: 'GET', pattern: '/v1/sites/:id', scope: 'sites',
-    handler: ({ params }) => {
-      const site = loadSite(params.id);
+    handler: ({ params, key }) => {
+      const site = loadSite(params.id, key.account);
       const jobSummaries = site.jobs
         .map((id) => jobs.get(id))
         .filter(Boolean)
@@ -276,16 +284,18 @@ const ROUTES = [
   },
   {
     method: 'GET', pattern: '/v1/jobs/:id', scope: 'sites',
-    handler: ({ params }) => {
+    handler: ({ params, key }) => {
       const job = jobs.get(assertUuid(params.id, 'job id'));
-      if (!job) throw httpError(404, 'not_found', `Job ${params.id} not found.`);
+      if (!job || (job.account && job.account !== key.account)) {
+        throw httpError(404, 'not_found', `Job ${params.id} not found.`);
+      }
       return { status: 200, body: job };
     },
   },
   {
     method: 'POST', pattern: '/v1/sites/:id/change', scope: 'sites', meter: 'sites.change',
-    handler: ({ params, body }) => {
-      const site = loadSite(params.id);
+    handler: ({ params, body, key }) => {
+      const site = loadSite(params.id, key.account);
       if (body?.config == null || typeof body.config !== 'object' || Array.isArray(body.config) || !Object.keys(body.config).length) {
         throw httpError(400, 'bad_request', 'Body must be { config: { …changed slots } }.');
       }
@@ -294,7 +304,7 @@ const ROUTES = [
       if (typeof site.config.siteName !== 'string' || !site.config.siteName.trim()) {
         throw httpError(422, 'incomplete_config', 'The change would leave config.siteName empty.');
       }
-      const job = jobs.enqueue('assemble', site.id);
+      const job = jobs.enqueue('assemble', site.id, key.account);
       site.jobs.push(job.id);
       site.updatedAt = new Date().toISOString();
       store.writeJson(`sites/${site.id}.json`, site);
@@ -303,16 +313,16 @@ const ROUTES = [
   },
   {
     method: 'POST', pattern: '/v1/sites/:id/deploy', scope: 'deploy',
-    handler: ({ params }) => {
-      loadSite(params.id);
+    handler: ({ params, key }) => {
+      loadSite(params.id, key.account);
       throw httpError(501, 'not_implemented',
         'Deploy (licensee Vercel/Turso/GitHub credentials) is not implemented yet — it lands with the real engine. See docs/api-design.md.');
     },
   },
   {
     method: 'GET', pattern: '/v1/sites/:id/export', scope: 'sites',
-    handler: ({ params }) => {
-      loadSite(params.id);
+    handler: ({ params, key }) => {
+      loadSite(params.id, key.account);
       throw httpError(501, 'not_implemented',
         'Export requires the real assembly engine (dry workspaces contain only a marker). See docs/api-design.md.');
     },
@@ -321,7 +331,16 @@ const ROUTES = [
   // Account.
   {
     method: 'GET', pattern: '/v1/usage', scope: 'any',
-    handler: ({ key }) => ({ status: 200, body: { keyId: key.id, name: key.name, ...auth.usageFor(key.id) } }),
+    handler: ({ key }) => ({ status: 200, body: { keyId: key.id, account: key.account, name: key.name, ...auth.usageFor(key.id) } }),
+  },
+
+  // Workbench utilities (not part of the metered v1 product surface).
+  {
+    // BYO-key chat relay for the Template Studio: the caller's OWN provider
+    // key rides inside the request and is never stored or logged. Requires a
+    // valid Stardrive key so this is never an open proxy.
+    method: 'POST', pattern: '/workbench/chat', scope: 'any', meter: 'workbench.chat', bodyLimit: 2_000_000,
+    handler: async ({ body }) => ({ status: 200, body: await relayChat(body) }),
   },
 ];
 
@@ -330,7 +349,12 @@ const ROUTES = [
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const match = matchRoute(ROUTES, req.method, url.pathname);
-  if (!match) return fail(res, 404, 'not_found', `No ${req.method} ${url.pathname}. GET /v1 lists the surface.`);
+  if (!match) {
+    // Everything that isn't an API route is the Workbench (static, no auth —
+    // the pages themselves are public; every API call they make needs a key).
+    if (workbench(req, res, url.pathname)) return;
+    return fail(res, 404, 'not_found', `No ${req.method} ${url.pathname}. GET /v1 lists the surface; the Workbench lives at /.`);
+  }
 
   const { route, params } = match;
   let key = null;

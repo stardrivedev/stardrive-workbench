@@ -39,11 +39,12 @@ export function createJobRunner(store, { engine = 'dry' } = {}) {
     save(job);
   }
 
-  function enqueue(kind, siteId) {
+  function enqueue(kind, siteId, account) {
     const job = {
       id: crypto.randomUUID(),
       kind,
       siteId,
+      account: account ?? null,
       engine,
       status: 'queued',
       logs: [],

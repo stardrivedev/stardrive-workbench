@@ -1,18 +1,36 @@
 # @stardrive/api
 
 The Stardrive API, v1 — the product surface described in
-[docs/api-design.md](../../docs/api-design.md). Zero runtime dependencies:
-`node:http` is the whole stack, state is file-backed JSON under `var/`
-(interface-compatible with a later Turso swap), and the field-mapping engine
-is imported directly from `packages/field-mapping`.
+[docs/api-design.md](../../docs/api-design.md) — **plus the Workbench**, the
+web console it serves at `/` (see `app/workbench/`). Zero runtime
+dependencies: `node:http` is the whole stack, state is file-backed JSON
+under `var/` (interface-compatible with a later Turso swap), and the
+field-mapping engine is imported directly from `packages/field-mapping`.
 
-## Run
+## Run (and see it)
 
 ```
+node scripts/make-key.mjs --name "me"
 node server.mjs [--port 4650]
-node scripts/make-key.mjs --name "beta agency" --scopes mappings,templates,sites
+```
+
+Then open **http://localhost:4650** — the Workbench: overview, your private
+template library with folder upload, the Template Studio (BYO-key chat that
+generates templates against the authoring rulebook), the full API reference
+with copy-ready curls, keys & usage, and the rulebook itself. Paste the
+minted key in the top-right box.
+
+```
 node test/e2e.mjs        # the full end-to-end suite (spawns its own servers)
 ```
+
+## Accounts (multi-tenancy)
+
+Every key belongs to an **account**. Imported templates, stored mappings,
+and sites/jobs are private to the account that created them — the bundled
+d4 catalog is the only shared surface. `make-key.mjs --account <id>` mints
+additional keys on an existing account (CI key beside a dashboard key);
+without it, each new key gets its own fresh account.
 
 Environment: `PORT`, `STARDRIVE_VAR_DIR` (runtime state; default `./var`,
 never committed), `STARDRIVE_ENGINE` (`dry` default | `real` pending),

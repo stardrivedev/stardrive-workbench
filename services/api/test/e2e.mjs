@@ -91,6 +91,7 @@ async function waitForJob(key, jobId, timeoutMs = 8000) {
 // ── Setup ────────────────────────────────────────────────────────────────
 const fullKey = mintKey('e2e full', 'mappings,templates,sites,deploy');
 const mappingsOnlyKey = mintKey('e2e mappings-only', 'mappings');
+const otherAccountKey = mintKey('e2e other licensee', 'mappings,templates,sites,deploy');
 await startServer(PORT_A);
 
 const coffeeMapping = JSON.parse(
@@ -272,6 +273,24 @@ await check('imported template appears in the list and in detail with warnings',
   assert.strictEqual(detail.body.source, 'imported');
   assert.strictEqual(detail.body.warnings.length >= 1, true);
 });
+await check('ACCOUNT ISOLATION: another licensee cannot see, fetch, or collide with my templates', async () => {
+  const theirList = await call('GET', '/v1/templates', { key: otherAccountKey });
+  assert.strictEqual(theirList.body.templates.length, 6, 'only the shared catalog');
+  assert.strictEqual(theirList.body.templates.some((t) => t.name === 'aurora-template'), false);
+  assert.strictEqual((await call('GET', '/v1/templates/aurora-template', { key: otherAccountKey })).status, 404);
+  const theirImport = await call('POST', '/v1/templates', { key: otherAccountKey, body: auroraBundle });
+  assert.strictEqual(theirImport.status, 201, 'same name, different account, no collision');
+  const mineStill = await call('GET', '/v1/templates/aurora-template', { key: fullKey });
+  assert.strictEqual(mineStill.status, 200);
+  assert.strictEqual((await call('DELETE', '/v1/templates/aurora-template', { key: otherAccountKey })).status, 200);
+});
+await check('ACCOUNT ISOLATION: stored mappings are private per account', async () => {
+  await call('PUT', '/v1/mappings/coffee-cart', { key: fullKey, body: coffeeMapping });
+  assert.strictEqual((await call('GET', '/v1/mappings/coffee-cart', { key: otherAccountKey })).status, 404);
+  const theirs = await call('GET', '/v1/mappings', { key: otherAccountKey });
+  assert.deepStrictEqual(theirs.body.mappings, []);
+  await call('DELETE', '/v1/mappings/coffee-cart', { key: fullKey });
+});
 await check('a site assembles from an imported base template', async () => {
   const created = await call('POST', '/v1/sites', {
     key: fullKey,
@@ -358,6 +377,39 @@ await check('deploy and export are honest 501s', async () => {
   assert.strictEqual(dep.status, 501);
   const exp = await call('GET', `/v1/sites/${siteId}/export`, { key: fullKey });
   assert.strictEqual(exp.status, 501);
+});
+await check('ACCOUNT ISOLATION: sites and jobs are invisible across accounts', async () => {
+  const theirView = await call('GET', `/v1/sites/${siteId}`, { key: otherAccountKey });
+  assert.strictEqual(theirView.status, 404);
+  const mine = await call('GET', `/v1/sites/${siteId}`, { key: fullKey });
+  const jobId = mine.body.jobs[0].id;
+  assert.strictEqual((await call('GET', `/v1/jobs/${jobId}`, { key: otherAccountKey })).status, 404);
+  assert.strictEqual((await call('POST', `/v1/sites/${siteId}/change`, { key: otherAccountKey, body: { config: { tagline: 'x' } } })).status, 404);
+});
+
+// ── Workbench: static pages + the BYO-key chat relay ────────────────────
+console.log('workbench:');
+await check('the Workbench serves at / with its assets; no auth needed for pages', async () => {
+  const home = await fetch(BASE + '/');
+  assert.strictEqual(home.status, 200);
+  assert.strictEqual((home.headers.get('content-type') || '').includes('text/html'), true);
+  const html = await home.text();
+  assert.strictEqual(html.includes('Stardrive'), true);
+  assert.strictEqual((await fetch(BASE + '/app.js')).status, 200);
+  assert.strictEqual((await fetch(BASE + '/styles.css')).status, 200);
+});
+await check('static serving refuses traversal and unknown types', async () => {
+  assert.strictEqual((await fetch(BASE + '/..%2Fserver.mjs')).status, 404);
+  assert.strictEqual((await fetch(BASE + '/server.mjs')).status, 404);
+});
+await check('chat relay: requires a Stardrive key, validates provider inputs, never calls out on bad input', async () => {
+  assert.strictEqual((await call('POST', '/workbench/chat', { body: {} })).status, 401);
+  const badProvider = await call('POST', '/workbench/chat', { key: fullKey, body: { provider: 'nope' } });
+  assert.strictEqual(badProvider.status, 400);
+  const noKey = await call('POST', '/workbench/chat', { key: fullKey, body: { provider: 'openai', messages: [{ role: 'user', content: 'hi' }] } });
+  assert.strictEqual(noKey.status, 400);
+  const badMessages = await call('POST', '/workbench/chat', { key: fullKey, body: { provider: 'openai', apiKey: 'sk-test-1234', messages: [] } });
+  assert.strictEqual(badMessages.status, 400);
 });
 
 // ── Usage metering ───────────────────────────────────────────────────────
