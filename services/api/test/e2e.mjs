@@ -216,10 +216,75 @@ await check('manifest validate: real manifest passes, broken one gets a full rep
   assert.strictEqual(bad.body.ok, false);
   assert.strictEqual(bad.body.errors.length >= 6, true);
 });
-await check('template import is an honest 501', async () => {
-  const { status, body } = await call('POST', '/v1/templates', { key: fullKey, body: { git: 'https://x' } });
-  assert.strictEqual(status, 501);
-  assert.strictEqual(body.error.code, 'not_implemented');
+// ── Template import (the template-kit gate) ─────────────────────────────
+console.log('template import:');
+const { REQUIRED_SITE_FILES } = await import(
+  new URL('../../../packages/template-kit/index.mjs', import.meta.url)
+);
+const auroraBundle = {
+  manifest: {
+    name: 'aurora-template',
+    version: '1.0.0',
+    kind: 'site',
+    description: 'E2E import fixture.',
+    provides: { routes: ['/', '/about', '/contact'], nav: [{ label: 'About', href: '/about' }], adminPanels: [], collections: [] },
+    copy: [{ from: 'files', to: '.' }],
+  },
+  files: [
+    ...REQUIRED_SITE_FILES.map((p) => ({
+      path: p,
+      content: p.endsWith('theme.css')
+        ? ':root { --accent: 67 56 202; }\n.dark { --accent: 159 153 255; }\n'
+        : `// default ${p}\nexport {};\n`,
+    })),
+    { path: 'src/components/Hero.tsx', content: 'const accent = "#ff5500"; export default () => null;\n' },
+  ],
+};
+await check('invalid bundle → 422 with the full error list', async () => {
+  const { status, body } = await call('POST', '/v1/templates', {
+    key: fullKey,
+    body: { manifest: { name: 'x' }, files: [{ path: '../evil.ts', content: 'x' }] },
+  });
+  assert.strictEqual(status, 422);
+  assert.strictEqual(body.error.code, 'invalid_bundle');
+  assert.strictEqual(body.errors.length >= 3, true);
+});
+await check('valid bundle imports (201) and carries its lint warnings', async () => {
+  const { status, body } = await call('POST', '/v1/templates', { key: fullKey, body: auroraBundle });
+  assert.strictEqual(status, 201);
+  assert.strictEqual(body.name, 'aurora-template');
+  assert.strictEqual(body.warnings.some((w) => w.includes('Hero.tsx')), true);
+});
+await check('re-import replaces (200); bundled names cannot be shadowed (409)', async () => {
+  assert.strictEqual((await call('POST', '/v1/templates', { key: fullKey, body: auroraBundle })).status, 200);
+  const shadow = await call('POST', '/v1/templates', {
+    key: fullKey,
+    body: { ...auroraBundle, manifest: { ...auroraBundle.manifest, name: 'd4-site-template' } },
+  });
+  assert.strictEqual(shadow.status, 409);
+});
+await check('imported template appears in the list and in detail with warnings', async () => {
+  const list = await call('GET', '/v1/templates', { key: fullKey });
+  const aurora = list.body.templates.find((t) => t.name === 'aurora-template');
+  assert.strictEqual(aurora.source, 'imported');
+  assert.strictEqual(list.body.templates.length, 7);
+  const detail = await call('GET', '/v1/templates/aurora-template', { key: fullKey });
+  assert.strictEqual(detail.body.source, 'imported');
+  assert.strictEqual(detail.body.warnings.length >= 1, true);
+});
+await check('a site assembles from an imported base template', async () => {
+  const created = await call('POST', '/v1/sites', {
+    key: fullKey,
+    body: { templateId: 'aurora-template', config: { siteName: 'Aurora Client' } },
+  });
+  assert.strictEqual(created.status, 202);
+  const job = await waitForJob(fullKey, created.body.jobId);
+  assert.strictEqual(job.status, 'done');
+});
+await check('delete imported → gone; bundled catalog protected (403)', async () => {
+  assert.strictEqual((await call('DELETE', '/v1/templates/aurora-template', { key: fullKey })).status, 200);
+  assert.strictEqual((await call('DELETE', '/v1/templates/aurora-template', { key: fullKey })).status, 404);
+  assert.strictEqual((await call('DELETE', '/v1/templates/d4-cms-core', { key: fullKey })).status, 403);
 });
 
 // ── Sites + jobs (dry engine) ────────────────────────────────────────────

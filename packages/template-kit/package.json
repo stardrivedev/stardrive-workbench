@@ -1,0 +1,17 @@
+{
+  "name": "@stardrive/template-kit",
+  "version": "1.0.0",
+  "description": "Template acceptance for the Stardrive/d4 engine: manifest validation, the portable bundle format, and the theme-token linter. Pure ESM core, zero dependencies.",
+  "type": "module",
+  "main": "index.mjs",
+  "types": "index.d.mts",
+  "exports": {
+    ".": { "types": "./index.d.mts", "default": "./index.mjs" },
+    "./node": { "types": "./node.d.mts", "default": "./node.mjs" }
+  },
+  "scripts": {
+    "test": "node test/run.mjs"
+  },
+  "license": "SEE LICENSE IN LICENSE.md",
+  "private": true
+}

@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { createServer, json, fail, readBody, matchRoute } from './lib/http.mjs';
 import { VarStore, assertSafeSlug } from './lib/store.mjs';
 import { createAuth } from './lib/auth.mjs';
-import { loadCatalog, validateManifest, summarize } from './lib/templates.mjs';
+import { loadCatalog, createImportedStore, validateManifest, validateBundle, summarize } from './lib/templates.mjs';
 import { createJobRunner } from './lib/jobs.mjs';
 import { runMapping, validateMapping } from '../../packages/field-mapping/index.mjs';
 
@@ -31,7 +31,13 @@ const ENGINE = process.env.STARDRIVE_ENGINE || 'dry';
 const store = new VarStore(VAR_DIR);
 const auth = createAuth(store, { rateLimitPerMin: Number(process.env.RATE_LIMIT_PER_MIN) || 120 });
 const catalog = loadCatalog(); // throws at boot if the bundle is bad
+const imported = createImportedStore(store);
 const jobs = createJobRunner(store, { engine: ENGINE });
+
+/** Bundled first (not overridable), then imported. */
+function getTemplate(name) {
+  return catalog.get(String(name)) || imported.get(String(name));
+}
 
 const httpError = (status, code, message) => Object.assign(new Error(message), { status, code });
 
@@ -158,14 +164,24 @@ const ROUTES = [
   // Templates.
   {
     method: 'GET', pattern: '/v1/templates', scope: 'templates',
-    handler: () => ({ status: 200, body: { templates: [...catalog.values()].map(summarize) } }),
+    handler: () => ({
+      status: 200,
+      body: { templates: [...catalog.values(), ...imported.list()].map(summarize) },
+    }),
   },
   {
     method: 'GET', pattern: '/v1/templates/:name', scope: 'templates',
     handler: ({ params }) => {
-      const entry = catalog.get(params.name);
+      const entry = getTemplate(params.name);
       if (!entry) throw httpError(404, 'not_found', `Template "${params.name}" not found.`);
-      return { status: 200, body: { source: entry.source, manifest: entry.manifest } };
+      return {
+        status: 200,
+        body: {
+          source: entry.source,
+          manifest: entry.manifest,
+          ...(entry.record ? { importedAt: entry.record.importedAt, warnings: entry.record.warnings } : {}),
+        },
+      };
     },
   },
   {
@@ -176,10 +192,31 @@ const ROUTES = [
     },
   },
   {
-    method: 'POST', pattern: '/v1/templates', scope: 'templates',
-    handler: () => {
-      throw httpError(501, 'not_implemented',
-        'Template import (git URL / tarball) is not implemented yet — validate manifests with POST /v1/templates/validate meanwhile. See docs/api-design.md.');
+    // Import a template BUNDLE: { manifest, files: [{ path, content | contentBase64 }] }.
+    // The same template-kit gate Deneb4's no-code upload uses: manifest schema,
+    // path safety, required site files, token lint. Errors reject (422);
+    // warnings import and are kept on the record.
+    method: 'POST', pattern: '/v1/templates', scope: 'templates', meter: 'templates.import', bodyLimit: 40_000_000,
+    handler: ({ body }) => {
+      const v = validateBundle(body);
+      if (!v.ok) {
+        return { status: 422, body: { error: { code: 'invalid_bundle', message: 'Template bundle rejected.' }, errors: v.errors, warnings: v.warnings } };
+      }
+      if (catalog.has(body.manifest.name)) {
+        throw httpError(409, 'name_conflict', `"${body.manifest.name}" is a first-party catalog name — imported templates cannot shadow the bundled catalog.`);
+      }
+      const { name, existed } = imported.put(body, v.warnings);
+      return { status: existed ? 200 : 201, body: { name, source: 'imported', warnings: v.warnings } };
+    },
+  },
+  {
+    method: 'DELETE', pattern: '/v1/templates/:name', scope: 'templates',
+    handler: ({ params }) => {
+      if (catalog.has(params.name)) {
+        throw httpError(403, 'forbidden', 'The bundled first-party catalog cannot be deleted through the API.');
+      }
+      if (!imported.remove(params.name)) throw httpError(404, 'not_found', `Imported template "${params.name}" not found.`);
+      return { status: 200, body: { deleted: params.name } };
     },
   },
 
@@ -188,7 +225,7 @@ const ROUTES = [
     method: 'POST', pattern: '/v1/sites', scope: 'sites', meter: 'sites.assemble',
     handler: ({ body, key }) => {
       if (body == null) throw httpError(400, 'bad_request', 'Body required.');
-      const entry = catalog.get(String(body.templateId || ''));
+      const entry = getTemplate(body.templateId || '');
       if (!entry) throw httpError(422, 'unknown_template', `templateId must name a known template (got ${JSON.stringify(body.templateId)}).`);
       if (entry.manifest.kind !== 'site') {
         throw httpError(422, 'not_a_base_template', `"${body.templateId}" is a ${entry.manifest.kind} module — assembly starts from a kind:"site" template; add modules via config.modules.`);
@@ -307,7 +344,7 @@ const server = createServer(async (req, res) => {
     }
   }
 
-  const body = req.method === 'POST' || req.method === 'PUT' ? await readBody(req) : undefined;
+  const body = req.method === 'POST' || req.method === 'PUT' ? await readBody(req, route.bodyLimit) : undefined;
   const out = await route.handler({ params, body, key, req });
   if (key) {
     auth.meter(key.id, 'requests');

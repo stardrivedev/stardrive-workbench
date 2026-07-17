@@ -5,7 +5,7 @@
  */
 import http from 'node:http';
 
-const MAX_BODY_BYTES = 1_000_000; // 1 MB — mappings and configs are small.
+const DEFAULT_MAX_BODY_BYTES = 1_000_000; // 1 MB — mappings and configs are small.
 
 export function json(res, status, obj) {
   const body = JSON.stringify(obj, null, 2);
@@ -26,13 +26,13 @@ export function fail(res, status, code, message, extraHeaders = {}) {
   res.end(body);
 }
 
-export function readBody(req) {
+export function readBody(req, maxBytes = DEFAULT_MAX_BODY_BYTES) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
     req.on('data', (c) => {
       size += c.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > maxBytes) {
         reject(Object.assign(new Error('Request body too large.'), { status: 413, code: 'body_too_large' }));
         req.destroy();
         return;
