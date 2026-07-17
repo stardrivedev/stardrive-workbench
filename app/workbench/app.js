@@ -457,10 +457,12 @@ $('#healthCurl').textContent = 'curl ' + location.origin + '/v1/health';
     $('#svcStatus').textContent = 'up';
     $('#svcVersion').textContent = body.version;
     $('#svcEngine').textContent = body.engine;
+    applyStudioConfig(body.studio);
   } catch {
     $('#statusDot').className = 'statusdot down';
     $('#statusText').textContent = 'API unreachable';
     $('#svcStatus').textContent = 'unreachable';
+    applyStudioConfig({ enabled: false });
   }
 })();
 
@@ -597,25 +599,17 @@ function renderImportReport(el, status, body) {
 
 /* ══════════════ Template Studio ══════════════ */
 const chat = { messages: [] };
-const MODEL_DEFAULTS = { openai: 'gpt-4o', anthropic: 'claude-sonnet-5' };
+let studioEnabled = false;
 
-$('#providerSel').addEventListener('change', () => {
-  const p = $('#providerSel').value;
-  const other = p === 'openai' ? 'anthropic' : 'openai';
-  if ($('#modelInput').value === MODEL_DEFAULTS[other] || !$('#modelInput').value) $('#modelInput').value = MODEL_DEFAULTS[p];
-  $('#baseUrlField').style.display = p === 'openai' ? '' : 'none';
-});
-$('#baseUrlField').style.display = '';
-
-const savedPk = localStorage.getItem('sd.providerKey');
-if (savedPk) { $('#providerKey').value = savedPk; $('#rememberKey').checked = true; }
-$('#rememberKey').addEventListener('change', () => {
-  if ($('#rememberKey').checked) localStorage.setItem('sd.providerKey', $('#providerKey').value);
-  else localStorage.removeItem('sd.providerKey');
-});
-$('#providerKey').addEventListener('input', () => {
-  if ($('#rememberKey').checked) localStorage.setItem('sd.providerKey', $('#providerKey').value);
-});
+/** Reflect the operator-configured model + on/off state (no key ever exposed). */
+function applyStudioConfig(studio) {
+  studioEnabled = Boolean(studio?.enabled);
+  $('#studioModel').textContent = studioEnabled ? (studio.model || 'configured') : 'not enabled yet';
+  $('#sendBtn').disabled = !studioEnabled;
+  $('#studioStatus').innerHTML = studioEnabled
+    ? '<div class="report ok" style="margin:0">Ready — template generation is on.</div>'
+    : '<div class="report" style="margin:0;background:var(--code-bg);color:var(--muted)">The Studio is not enabled yet. It turns on once the operator configures the model — you never need a model key of your own.</div>';
+}
 
 function addMsg(role, content) {
   const log = $('#chatlog');
@@ -647,8 +641,7 @@ async function sendChat() {
   const text = $('#chatText').value.trim();
   if (!text) return;
   if (!getApiKey()) return addMsg('systemnote', 'Save your Stardrive API key (top right) first.');
-  const providerKey = $('#providerKey').value.trim();
-  if (!providerKey) return addMsg('systemnote', 'Enter your provider API key in the Model panel.');
+  if (!studioEnabled) return addMsg('systemnote', 'The Template Studio is not enabled yet — no action needed from you; it turns on once the operator configures the model.');
 
   $('#chatText').value = '';
   chat.messages.push({ role: 'user', content: text });
@@ -658,14 +651,7 @@ async function sendChat() {
   try {
     const { status, body } = await api('/workbench/chat', {
       method: 'POST',
-      body: {
-        provider: $('#providerSel').value,
-        apiKey: providerKey,
-        model: $('#modelInput').value.trim() || undefined,
-        baseUrl: $('#baseUrlInput').value.trim() || undefined,
-        system: RULEBOOK_PROMPT + STUDIO_FORMAT,
-        messages: chat.messages,
-      },
+      body: { system: RULEBOOK_PROMPT + STUDIO_FORMAT, messages: chat.messages },
     });
     pending.remove();
     if (status !== 200) {
@@ -682,7 +668,7 @@ async function sendChat() {
     addMsg('systemnote', 'Network error: ' + err.message);
     chat.messages.pop();
   } finally {
-    $('#sendBtn').disabled = false;
+    $('#sendBtn').disabled = !studioEnabled ? true : false;
   }
 }
 
@@ -999,8 +985,8 @@ const REF = [
   ]},
   { group: 'Account', items: [
     { m: 'GET', p: '/v1/usage', d: 'This key’s monthly counters (failed calls are never metered).', curl: `curl {BASE}/v1/usage -H "Authorization: Bearer {KEY}"` },
-    { m: 'POST', p: '/workbench/chat', d: 'The Studio’s BYO-key model relay (your provider key rides in the request; never stored).',
-      curl: `curl -X POST {BASE}/workbench/chat \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"provider":"openai","apiKey":"sk-…","messages":[{"role":"user","content":"hi"}]}'` },
+    { m: 'POST', p: '/workbench/chat', d: 'The Template Studio relay — runs on Stardrive’s own model (included; no model key from you). Send { system, messages }.',
+      curl: `curl -X POST {BASE}/workbench/chat \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"messages":[{"role":"user","content":"hi"}]}'` },
   ]},
 ];
 

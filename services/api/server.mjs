@@ -21,7 +21,7 @@ import { createAccounts } from './lib/accounts.mjs';
 import { createBilling } from './lib/billing.mjs';
 import { loadCatalog, createImportedStore, validateManifest, validateBundle, summarize } from './lib/templates.mjs';
 import { createJobRunner } from './lib/jobs.mjs';
-import { relayChat } from './lib/chat-proxy.mjs';
+import { relayChat, studioConfig } from './lib/chat-proxy.mjs';
 import { createStaticServer } from './lib/static.mjs';
 import { createConnections, PROVIDERS } from './lib/connections.mjs';
 import { createAssets, MAX_ASSET_BYTES } from './lib/assets.mjs';
@@ -110,7 +110,10 @@ function resolveMappingBody(body, key) {
 const ROUTES = [
   {
     method: 'GET', pattern: '/v1/health', scope: 'public',
-    handler: () => ({ status: 200, body: { ok: true, service: 'stardrive-api', version: VERSION, engine: ENGINE } }),
+    handler: () => {
+      const s = studioConfig();
+      return { status: 200, body: { ok: true, service: 'stardrive-api', version: VERSION, engine: ENGINE, studio: { enabled: s.configured, model: s.configured ? s.model : null } } };
+    },
   },
   {
     method: 'GET', pattern: '/v1', scope: 'public',
@@ -562,11 +565,18 @@ const ROUTES = [
 
   // Workbench utilities (not part of the metered v1 product surface).
   {
-    // BYO-key chat relay for the Template Studio: the caller's OWN provider
-    // key rides inside the request and is never stored or logged. Requires a
-    // valid Stardrive key so this is never an open proxy.
-    method: 'POST', pattern: '/workbench/chat', scope: 'any', meter: 'workbench.chat', bodyLimit: 2_000_000,
-    handler: async ({ body }) => ({ status: 200, body: await relayChat(body) }),
+    // Template Studio relay. The model runs on the OPERATOR's server-side key
+    // (never sent to the browser, never in the request); the customer only
+    // sends { system, messages }. Requires a valid Stardrive key so it is
+    // never an open proxy, and meters generations + tokens to the account so
+    // this included feature can be priced.
+    method: 'POST', pattern: '/workbench/chat', scope: 'any', bodyLimit: 2_000_000,
+    handler: async ({ body, key }) => {
+      const result = await relayChat({ system: body?.system, messages: body?.messages });
+      auth.meter(key.id, 'studio.generations');
+      if (result.tokens) auth.meter(key.id, 'studio.tokens', result.tokens);
+      return { status: 200, body: result };
+    },
   },
 
   // The marketing site's request-access form. Public by design (a prospect

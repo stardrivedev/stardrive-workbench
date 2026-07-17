@@ -623,14 +623,18 @@ await check('request-access: stores valid leads, rejects junk, throttles per IP'
   for (let i = 0; i < 2; i += 1) await post({ name: 'Ada', email: 'ada@example.com' });
   assert.strictEqual((await post({ name: 'Ada', email: 'ada@example.com' })).status, 429);
 });
-await check('chat relay: requires a Stardrive key, validates provider inputs, never calls out on bad input', async () => {
-  assert.strictEqual((await call('POST', '/workbench/chat', { body: {} })).status, 401);
-  const badProvider = await call('POST', '/workbench/chat', { key: fullKey, body: { provider: 'nope' } });
-  assert.strictEqual(badProvider.status, 400);
-  const noKey = await call('POST', '/workbench/chat', { key: fullKey, body: { provider: 'openai', messages: [{ role: 'user', content: 'hi' }] } });
-  assert.strictEqual(noKey.status, 400);
-  const badMessages = await call('POST', '/workbench/chat', { key: fullKey, body: { provider: 'openai', apiKey: 'sk-test-1234', messages: [] } });
-  assert.strictEqual(badMessages.status, 400);
+await check('studio relay: needs a Stardrive key; dormant (501) until the operator configures the model; no customer key involved', async () => {
+  // No Stardrive key at all → 401.
+  assert.strictEqual((await call('POST', '/workbench/chat', { body: { messages: [{ role: 'user', content: 'hi' }] } })).status, 401);
+  // Health advertises the Studio as off in this env (no STARDRIVE_LLM_KEY).
+  const health = await call('GET', '/v1/health');
+  assert.strictEqual(health.body.studio.enabled, false);
+  assert.strictEqual(health.body.studio.model, null);
+  // Valid key + valid messages, but model unconfigured → honest 501 (never calls out).
+  const dormant = await call('POST', '/workbench/chat', { key: fullKey, body: { messages: [{ role: 'user', content: 'hi' }] } });
+  assert.strictEqual(dormant.status, 501);
+  assert.strictEqual(dormant.body.error.code, 'studio_unconfigured');
+  assert.strictEqual(dormant.body.error.message.includes('no key of yours'), true);
 });
 
 // ── Usage metering ───────────────────────────────────────────────────────
@@ -663,6 +667,18 @@ await check('a burst past the per-key limit gets 429 + Retry-After', async () =>
   assert.strictEqual(last.status, 429);
   assert.strictEqual(last.body.error.code, 'rate_limited');
   assert.strictEqual(Number(last.headers.get('retry-after')) >= 1, true);
+});
+
+// ── Studio configured (server-side model key present) ────────────────────
+console.log('studio configured:');
+await check('with the operator model key set, health advertises the Studio on + the configured model (key never exposed)', async () => {
+  const PORT_C = 4653;
+  await startServer(PORT_C, { STARDRIVE_LLM_KEY: 'operator-secret-should-never-surface', STARDRIVE_LLM_PROVIDER: 'anthropic', STARDRIVE_LLM_MODEL: 'claude-sonnet-5' });
+  const base = `http://localhost:${PORT_C}`;
+  const health = await call('GET', '/v1/health', { base });
+  assert.strictEqual(health.body.studio.enabled, true);
+  assert.strictEqual(health.body.studio.model, 'claude-sonnet-5');
+  assert.strictEqual(JSON.stringify(health.body).includes('operator-secret'), false, 'the operator key is never in a response');
 });
 
 // ── Teardown ─────────────────────────────────────────────────────────────

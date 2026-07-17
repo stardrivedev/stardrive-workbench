@@ -22,8 +22,10 @@ Then open **http://localhost:4650**:
   **login / signup** gate: sign up with an email + password and the console
   creates your account, opens a session, and mints your first API key
   automatically (shown once). Inside: overview, your private template
-  library with folder upload, the Template Studio (BYO-key chat against the
-  authoring rulebook), **Sites** (assemble, watch jobs, read QA reports,
+  library with folder upload, the Template Studio (chat against the
+  authoring rulebook — runs on the operator's own model key server-side, so
+  customers bring no model key; dormant until `STARDRIVE_LLM_KEY` is set),
+  **Sites** (assemble, watch jobs, read QA reports,
   and upload into **asset compartments** — named slots like
   logo/favicon/hero/gallery, each mapped to its exact path on the assembled
   site; templates can declare extras via manifest `assetSlots`),

@@ -53,11 +53,12 @@ runs server-side, in a CLI, or in a browser preview.
   `/` (zero build step, zero deps): developer-console UI (overview,
   private template library with folder-upload import, API reference with
   live copy-ready curls, keys & usage, the embedded rulebook) plus the
-  **Template Studio** — a BYO-key chat (OpenAI-compatible or Anthropic;
-  the licensee's provider key relays per-request, never stored) that
-  generates templates against the rulebook system prompt and imports them
-  through the standard gate, with rejection errors fed back into the chat
-  for the model to fix. Browser-smoke-tested end to end. Multi-tenancy
+  **Template Studio** — a chat that generates templates against the rulebook
+  system prompt and imports them through the standard gate, with rejection
+  errors fed back into the chat for the model to fix. (Originally BYO-key;
+  **changed 2026-07-17** to run on the OPERATOR's server-side model key so
+  customers bring no model key — generation is an included, metered feature.)
+  Browser-smoke-tested end to end. Multi-tenancy
   landed with it: accounts on keys; templates/mappings/sites/jobs private
   per account, catalog shared. Remaining Workbench work: mapping editor,
   client-facts form, build/QA/deploy status views (with the real engine).

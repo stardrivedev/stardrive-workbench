@@ -127,20 +127,11 @@
       <p class="lede">Describe the template you want; the model builds it against the full authoring rulebook (applied automatically as the system prompt). When the files look right, import straight into your library — validation errors come back into the chat so you can ask for fixes.</p>
       <div class="studio">
         <div class="card">
-          <h2>Model</h2>
-          <div class="field"><label for="providerSel">Provider</label>
-            <select id="providerSel">
-              <option value="openai">OpenAI (or compatible)</option>
-              <option value="anthropic">Anthropic</option>
-            </select></div>
-          <div class="field"><label for="modelInput">Model</label>
-            <input id="modelInput" class="mono" value="gpt-4o" spellcheck="false"></div>
-          <div class="field"><label for="providerKey">Your provider API key</label>
-            <input id="providerKey" class="mono" type="password" placeholder="sk-… (relayed, never stored)" autocomplete="off"></div>
-          <div class="field" id="baseUrlField" style="display:none"><label for="baseUrlInput">Base URL (compatible endpoints)</label>
-            <input id="baseUrlInput" class="mono" placeholder="https://api.openai.com" spellcheck="false"></div>
-          <label class="checkline"><input type="checkbox" id="rememberKey"> Remember key on this device</label>
-          <p style="font-size:0.75rem;color:var(--muted);margin:0.7rem 0 0">Your provider key rides inside each request to your provider and is never stored or logged by Stardrive. Model usage bills to your provider account.</p>
+          <h2>Included</h2>
+          <p style="font-size:0.9rem;margin:0 0 0.8rem">Template generation is part of Stardrive — no model key to bring. Just describe what you want and chat until it's right.</p>
+          <div class="kvs"><span class="k">Model</span><span class="v" id="studioModel">…</span></div>
+          <div id="studioStatus" style="margin-top:0.9rem"></div>
+          <p style="font-size:0.75rem;color:var(--muted);margin:0.9rem 0 0">The full authoring rulebook is applied automatically as the system prompt, so whatever comes out passes the import gate.</p>
         </div>
         <div class="chatpane">
           <div class="chatlog" id="chatlog">
