@@ -150,6 +150,40 @@ check('writeBundleToDir refuses unsafe paths outright', () => {
   }
 });
 
+check('assetSlots: valid extra compartments pass; every bad shape is named', () => {
+  const good = {
+    ...GOOD_MANIFEST,
+    assetSlots: [
+      { id: 'menu-pages', label: 'Menu pages', description: 'One image per menu page.', accept: ['jpg', 'jpeg', 'png'], max: 8 },
+      { id: 'press-logos', label: 'Press logos', accept: ['svg', 'png'] },
+    ],
+  };
+  assert.deepStrictEqual(validateManifest(good).errors, []);
+
+  const bad = {
+    ...GOOD_MANIFEST,
+    assetSlots: [
+      { id: 'logo', label: 'Logo' },                      // reserved standard id
+      { id: 'Menu Pages', label: 'Menu' },                // not a slug
+      { id: 'ok-slot', label: '' },                       // empty label
+      { id: 'ok-slot2', label: 'X', accept: ['exe'] },    // bad ext
+      { id: 'ok-slot3', label: 'X', max: 0 },             // bad max
+      { id: 'ok-slot4', label: 'X', mystery: true },      // unknown key
+      { id: 'press-logos', label: 'A' },
+      { id: 'press-logos', label: 'B' },                  // duplicate
+    ],
+  };
+  const v = validateManifest(bad);
+  assert.strictEqual(v.ok, false);
+  assert.strictEqual(v.errors.some((e) => e.includes('standard compartment')), true);
+  assert.strictEqual(v.errors.some((e) => e.includes('lowercase slug')), true);
+  assert.strictEqual(v.errors.some((e) => e.includes('label is required')), true);
+  assert.strictEqual(v.errors.some((e) => e.includes('subset of')), true);
+  assert.strictEqual(v.errors.some((e) => e.includes('integer 1–50')), true);
+  assert.strictEqual(v.errors.some((e) => e.includes('unknown key "mystery"')), true);
+  assert.strictEqual(v.errors.some((e) => e.includes('declared twice')), true);
+});
+
 if (failures) {
   console.error(`\n${failures} test(s) FAILED.`);
   process.exit(1);

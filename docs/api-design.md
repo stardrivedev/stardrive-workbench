@@ -67,6 +67,23 @@ shared surface, and imports can never shadow its names.
 | `POST /v1/sites/{id}/deploy` | Body: licensee credentials (Vercel token, Turso, GitHub) — passed per-call or stored encrypted per-licensee, their choice. → deploy job. |
 | `POST /v1/sites/{id}/change` | A config delta: re-assemble applies only the delta, re-QA, ready to redeploy — the d4 change-loop doctrine (QA-rejected changes auto-revert). |
 
+### Asset compartments (implemented)
+
+Named upload slots per site, so customer files land in the right place on
+the assembled site without anyone thinking about paths. Standard slots on
+every `kind:"site"` template: `logo`, `favicon`, `hero`, `about`,
+`gallery`, `team`, `misc` (ids reserved); templates declare EXTRA slots
+via manifest `assetSlots` (validated by template-kit). Each slot maps to a
+deterministic target (`public/assets/<slot>/…`; favicon → `src/app/`).
+
+| | |
+|---|---|
+| `GET /v1/sites/{id}/assets` | The site's slots (standard + template-declared) and current contents. |
+| `POST /v1/sites/{id}/assets/{slot}` | Upload `{ filename, contentBase64 }` — per-slot type allowlist, count cap, 8 MB max. Returns the resolved target path. |
+| `GET /v1/sites/{id}/assets/{slot}/{assetId}` | Serves the file back (account-scoped). |
+| `DELETE /v1/sites/{id}/assets/{slot}/{assetId}` | Remove. |
+| `POST /v1/sites/{id}/assemble` | Re-assemble with current config + latest assets; the dry engine records the slot→target resolution in the workspace marker, the real engine copies the files. |
+
 ### Connections (implemented)
 
 | | |

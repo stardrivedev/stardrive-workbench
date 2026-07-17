@@ -386,6 +386,84 @@ await check('ACCOUNT ISOLATION: sites and jobs are invisible across accounts', a
   assert.strictEqual((await call('GET', `/v1/jobs/${jobId}`, { key: otherAccountKey })).status, 404);
   assert.strictEqual((await call('POST', `/v1/sites/${siteId}/change`, { key: otherAccountKey, body: { config: { tagline: 'x' } } })).status, 404);
 });
+await check('asset compartments: upload → slotted target, wrong type/full slot named, file served, delete works', async () => {
+  const slots = await call('GET', `/v1/sites/${siteId}/assets`, { key: fullKey });
+  assert.strictEqual(slots.status, 200);
+  assert.strictEqual(slots.body.slots.some((s) => s.id === 'logo' && s.max === 1), true);
+  const png = Buffer.from('89504e470d0a1a0a', 'hex'); // PNG magic; content is irrelevant to the dry engine
+  const up = await call('POST', `/v1/sites/${siteId}/assets/logo`, {
+    key: fullKey, body: { filename: 'My Logo (final).png', contentBase64: png.toString('base64') },
+  });
+  assert.strictEqual(up.status, 201);
+  assert.strictEqual(up.body.asset.target, 'public/assets/brand/My-Logo--final-.png');
+  assert.strictEqual(up.body.note.includes('next assembly'), true);
+  // Slot caps: logo holds 1.
+  const full = await call('POST', `/v1/sites/${siteId}/assets/logo`, {
+    key: fullKey, body: { filename: 'second.png', contentBase64: png.toString('base64') },
+  });
+  assert.strictEqual(full.status, 422);
+  assert.strictEqual(full.body.error.message.includes('at most 1'), true);
+  // Wrong type for the slot.
+  const wrong = await call('POST', `/v1/sites/${siteId}/assets/hero`, {
+    key: fullKey, body: { filename: 'movie.ico', contentBase64: png.toString('base64') },
+  });
+  assert.strictEqual(wrong.status, 422);
+  // Unknown compartment.
+  assert.strictEqual((await call('POST', `/v1/sites/${siteId}/assets/nope`, { key: fullKey, body: { filename: 'x.png', contentBase64: 'aGk=' } })).status, 422);
+  // The file serves back, and only to its own account.
+  const assetId = up.body.asset.id;
+  const served = await fetch(`${BASE}/v1/sites/${siteId}/assets/logo/${assetId}`, { headers: { Authorization: `Bearer ${fullKey}` } });
+  assert.strictEqual(served.status, 200);
+  assert.strictEqual(served.headers.get('content-type'), 'image/png');
+  assert.strictEqual(Buffer.from(await served.arrayBuffer()).equals(png), true);
+  assert.strictEqual((await call('GET', `/v1/sites/${siteId}/assets/logo/${assetId}`, { key: otherAccountKey })).status, 404);
+  // Gallery takes several.
+  await call('POST', `/v1/sites/${siteId}/assets/gallery`, { key: fullKey, body: { filename: 'g1.jpg', contentBase64: png.toString('base64') } });
+  await call('POST', `/v1/sites/${siteId}/assets/gallery`, { key: fullKey, body: { filename: 'g2.jpg', contentBase64: png.toString('base64') } });
+  const after = await call('GET', `/v1/sites/${siteId}/assets`, { key: fullKey });
+  assert.strictEqual((after.body.assets.gallery || []).length, 2);
+});
+await check('re-assemble records the slotting in the workspace marker', async () => {
+  const re = await call('POST', `/v1/sites/${siteId}/assemble`, { key: fullKey, body: {} });
+  assert.strictEqual(re.status, 202);
+  await waitForJob(fullKey, re.body.jobId);
+  const marker = JSON.parse(fs.readFileSync(path.join(varDir, 'workspaces', siteId, 'd4.assembly.json'), 'utf-8'));
+  assert.strictEqual(marker.assets.logo.length, 1);
+  assert.strictEqual(marker.assets.logo[0].target, 'public/assets/brand/My-Logo--final-.png');
+  assert.strictEqual(marker.assets.gallery.length, 2);
+  assert.strictEqual(marker.assets.gallery.every((a) => a.target.startsWith('public/assets/gallery/')), true);
+  // Delete → next assembly drops it from the slotting.
+  const state = await call('GET', `/v1/sites/${siteId}/assets`, { key: fullKey });
+  const g1 = state.body.assets.gallery[0].id;
+  assert.strictEqual((await call('DELETE', `/v1/sites/${siteId}/assets/gallery/${g1}`, { key: fullKey })).status, 200);
+  const re2 = await call('POST', `/v1/sites/${siteId}/assemble`, { key: fullKey, body: {} });
+  await waitForJob(fullKey, re2.body.jobId);
+  const marker2 = JSON.parse(fs.readFileSync(path.join(varDir, 'workspaces', siteId, 'd4.assembly.json'), 'utf-8'));
+  assert.strictEqual(marker2.assets.gallery.length, 1);
+});
+await check('template-declared assetSlots surface as extra compartments', async () => {
+  const slotted = {
+    ...auroraBundle,
+    manifest: {
+      ...auroraBundle.manifest,
+      name: 'aurora-slotted',
+      assetSlots: [{ id: 'menu-pages', label: 'Menu pages', accept: ['jpg', 'png'], max: 8 }],
+    },
+  };
+  assert.strictEqual((await call('POST', '/v1/templates', { key: fullKey, body: slotted })).status, 201);
+  const mk = await call('POST', '/v1/sites', { key: fullKey, body: { templateId: 'aurora-slotted', config: { siteName: 'Slotted Cafe' } } });
+  assert.strictEqual(mk.status, 202);
+  const slots = await call('GET', `/v1/sites/${mk.body.siteId}/assets`, { key: fullKey });
+  const extra = slots.body.slots.find((s) => s.id === 'menu-pages');
+  assert.strictEqual(extra.declaredBy, 'aurora-slotted');
+  assert.strictEqual(extra.target, 'public/assets/menu-pages/');
+  // And the reserved-id guard holds at import time.
+  const badSlots = { ...auroraBundle, manifest: { ...auroraBundle.manifest, name: 'aurora-bad-slots', assetSlots: [{ id: 'logo', label: 'Logo' }] } };
+  const rejected = await call('POST', '/v1/templates', { key: fullKey, body: badSlots });
+  assert.strictEqual(rejected.status, 422);
+  assert.strictEqual(rejected.body.errors.some((e) => e.includes('standard compartment')), true);
+  await call('DELETE', '/v1/templates/aurora-slotted', { key: fullKey });
+});
 await check('GET /v1/sites lists only the caller\'s sites, newest first', async () => {
   const mine = await call('GET', '/v1/sites', { key: fullKey });
   assert.strictEqual(mine.body.sites.some((s) => s.id === siteId), true);

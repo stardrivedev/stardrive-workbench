@@ -20,7 +20,7 @@ import crypto from 'node:crypto';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export function createJobRunner(store, { engine = 'dry' } = {}) {
+export function createJobRunner(store, { engine = 'dry', assets = null } = {}) {
   const queue = [];
   let running = false;
 
@@ -99,6 +99,12 @@ export function createJobRunner(store, { engine = 'dry' } = {}) {
     log(job, `Config parsed: siteName "${site.config.siteName}", ${modules.length} module(s).`);
     await sleep(25);
 
+    // Resolve asset compartments → their exact target paths in the site.
+    // The dry marker records the slotting; the real engine copies the files.
+    const slotting = assets ? assets.slotting(job.siteId) : {};
+    const slotted = Object.values(slotting).reduce((n, arr) => n + arr.length, 0);
+    if (slotted) log(job, `Assets slotted: ${slotted} file(s) across ${Object.keys(slotting).length} compartment(s).`);
+
     const workspace = store.path('workspaces', job.siteId);
     fs.mkdirSync(workspace, { recursive: true });
     fs.writeFileSync(
@@ -109,6 +115,7 @@ export function createJobRunner(store, { engine = 'dry' } = {}) {
           template: site.templateId,
           modules,
           config: site.config,
+          assets: slotting,
           assembledAt: new Date().toISOString(),
           jobId: job.id,
         },

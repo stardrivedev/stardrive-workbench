@@ -9,6 +9,7 @@
  *
  * Mint keys with: node scripts/make-key.mjs --name "beta" --scopes mappings,templates,sites
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +21,7 @@ import { createJobRunner } from './lib/jobs.mjs';
 import { relayChat } from './lib/chat-proxy.mjs';
 import { createStaticServer } from './lib/static.mjs';
 import { createConnections, PROVIDERS } from './lib/connections.mjs';
+import { createAssets, MAX_ASSET_BYTES } from './lib/assets.mjs';
 import { runMapping, validateMapping } from '../../packages/field-mapping/index.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -35,7 +37,8 @@ const store = new VarStore(VAR_DIR);
 const auth = createAuth(store, { rateLimitPerMin: Number(process.env.RATE_LIMIT_PER_MIN) || 120 });
 const catalog = loadCatalog(); // throws at boot if the bundle is bad
 const imported = createImportedStore(store);
-const jobs = createJobRunner(store, { engine: ENGINE });
+const assets = createAssets(store);
+const jobs = createJobRunner(store, { engine: ENGINE, assets });
 const connections = createConnections(store, VAR_DIR);
 // Two static roots: the public marketing site at /, the licensee console at /workbench/.
 const site = createStaticServer(path.join(HERE, '..', '..', 'app', 'site'));
@@ -47,6 +50,7 @@ function getTemplate(account, name) {
 }
 
 const httpError = (status, code, message) => Object.assign(new Error(message), { status, code });
+const fsReadFile = (abs) => fs.readFileSync(abs);
 
 function assertUuid(id, what = 'id') {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id))) {
@@ -337,6 +341,70 @@ const ROUTES = [
       return { status: 202, body: { siteId: site.id, jobId: job.id, status: job.status } };
     },
   },
+  // Asset compartments: named slots per site, so uploads land in the right
+  // place on the assembled site without the customer thinking about paths.
+  {
+    method: 'GET', pattern: '/v1/sites/:id/assets', scope: 'sites',
+    handler: ({ params, key }) => {
+      const site = loadSite(params.id, key.account);
+      const entry = getTemplate(key.account, site.templateId);
+      return { status: 200, body: { slots: assets.slotsFor(entry?.manifest), assets: assets.state(site.id) } };
+    },
+  },
+  {
+    method: 'POST', pattern: '/v1/sites/:id/assets/:slot', scope: 'sites', meter: 'assets.upload', bodyLimit: 16_000_000,
+    handler: ({ params, body, key }) => {
+      const site = loadSite(params.id, key.account);
+      const entry = getTemplate(key.account, site.templateId);
+      const slotDef = assets.slotsFor(entry?.manifest).find((s) => s.id === String(params.slot));
+      if (!slotDef) throw httpError(422, 'unknown_slot', `No compartment "${params.slot}" on this site — GET /v1/sites/${site.id}/assets lists them.`);
+      if (typeof body?.filename !== 'string' || !body.filename.trim() || typeof body?.contentBase64 !== 'string') {
+        throw httpError(400, 'bad_request', 'Body must be { filename, contentBase64 }.');
+      }
+      const buffer = Buffer.from(body.contentBase64, 'base64');
+      if (buffer.length > MAX_ASSET_BYTES) throw httpError(422, 'too_large', `Files must be at most ${Math.round(MAX_ASSET_BYTES / 1e6)} MB.`);
+      const meta = assets.add(site.id, slotDef, body.filename.trim(), buffer);
+      return {
+        status: 201,
+        body: {
+          slot: slotDef.id,
+          asset: meta,
+          note: `Slotted for ${meta.target} — picked up at the next assembly (POST /v1/sites/${site.id}/assemble).`,
+        },
+      };
+    },
+  },
+  {
+    method: 'GET', pattern: '/v1/sites/:id/assets/:slot/:assetId', scope: 'sites',
+    handler: ({ params, key }) => {
+      const site = loadSite(params.id, key.account);
+      const hit = assets.find(site.id, String(params.slot), assertUuid(params.assetId, 'asset id'));
+      if (!hit) throw httpError(404, 'not_found', 'Asset not found.');
+      return { raw: true, status: 200, headers: { 'Content-Type': hit.meta.type, 'Cache-Control': 'no-cache' }, buffer: fsReadFile(hit.abs) };
+    },
+  },
+  {
+    method: 'DELETE', pattern: '/v1/sites/:id/assets/:slot/:assetId', scope: 'sites',
+    handler: ({ params, key }) => {
+      const site = loadSite(params.id, key.account);
+      if (!assets.remove(site.id, String(params.slot), assertUuid(params.assetId, 'asset id'))) {
+        throw httpError(404, 'not_found', 'Asset not found.');
+      }
+      return { status: 200, body: { deleted: params.assetId, slot: params.slot } };
+    },
+  },
+  {
+    // Re-run assembly with the current config + latest assets.
+    method: 'POST', pattern: '/v1/sites/:id/assemble', scope: 'sites', meter: 'sites.assemble',
+    handler: ({ params, key }) => {
+      const site = loadSite(params.id, key.account);
+      const job = jobs.enqueue('assemble', site.id, key.account);
+      site.jobs.push(job.id);
+      site.updatedAt = new Date().toISOString();
+      store.writeJson(`sites/${site.id}.json`, site);
+      return { status: 202, body: { siteId: site.id, jobId: job.id, status: job.status } };
+    },
+  },
   {
     method: 'POST', pattern: '/v1/sites/:id/deploy', scope: 'deploy',
     handler: ({ params, key }) => {
@@ -484,6 +552,10 @@ const server = createServer(async (req, res) => {
   if (key) {
     auth.meter(key.id, 'requests');
     if (route.meter && out.status < 400) auth.meter(key.id, route.meter);
+  }
+  if (out.raw) {
+    res.writeHead(out.status, { ...out.headers, 'Content-Length': out.buffer.length });
+    return res.end(out.buffer);
   }
   return json(res, out.status, out.body);
 });

@@ -27,9 +27,16 @@ const KINDS = ['site', 'core', 'feature'];
 const TOP_KEYS = new Set([
   '$schema', 'name', 'version', 'kind', 'description', 'clientFacingSummary',
   'keywords', 'requires', 'optionalIntegrations', 'provides', 'env',
-  'npmDependencies', 'npmDevDependencies', 'copy', 'postAssemble',
+  'npmDependencies', 'npmDevDependencies', 'copy', 'postAssemble', 'assetSlots',
 ]);
 const PROVIDES_KEYS = new Set(['routes', 'nav', 'adminPanels', 'collections', 'lib']);
+
+// Asset compartments. Every kind:"site" template gets the STANDARD slots for
+// free (defined by the engine); a template may declare EXTRA slots via the
+// optional manifest `assetSlots` — but never redefine a standard id.
+export const RESERVED_ASSET_SLOT_IDS = ['logo', 'favicon', 'hero', 'about', 'gallery', 'team', 'misc'];
+export const ASSET_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'svg', 'gif', 'ico'];
+const ASSET_SLOT_KEYS = ['id', 'label', 'description', 'accept', 'max'];
 
 const isStr = (v) => typeof v === 'string';
 const isStrArray = (v) => Array.isArray(v) && v.every(isStr);
@@ -144,6 +151,41 @@ export function validateManifest(manifest) {
         err('postAssemble.generatedFiles must be an array of strings.');
       }
       if ('notes' in pa && !isStr(pa.notes)) err('postAssemble.notes must be a string.');
+    }
+  }
+
+  if ('assetSlots' in manifest) {
+    if (!Array.isArray(manifest.assetSlots)) err('assetSlots must be an array.');
+    else {
+      const seen = new Set();
+      manifest.assetSlots.forEach((s, i) => {
+        if (s == null || typeof s !== 'object' || Array.isArray(s)) {
+          err(`assetSlots[${i}] must be an object { id, label, description?, accept?, max? }.`);
+          return;
+        }
+        for (const k of Object.keys(s)) {
+          if (!ASSET_SLOT_KEYS.includes(k)) err(`assetSlots[${i}]: unknown key "${k}".`);
+        }
+        if (!isStr(s.id) || !/^[a-z0-9][a-z0-9-]*$/.test(s.id)) {
+          err(`assetSlots[${i}].id must be a lowercase slug.`);
+        } else {
+          if (RESERVED_ASSET_SLOT_IDS.includes(s.id)) {
+            err(`assetSlots[${i}].id "${s.id}" is a standard compartment every site template already has — declare only EXTRA slots.`);
+          }
+          if (seen.has(s.id)) err(`assetSlots[${i}].id "${s.id}" is declared twice.`);
+          seen.add(s.id);
+        }
+        if (!isStr(s.label) || !s.label.trim()) err(`assetSlots[${i}].label is required (shown to the person uploading).`);
+        if ('description' in s && !isStr(s.description)) err(`assetSlots[${i}].description must be a string.`);
+        if ('accept' in s) {
+          if (!isStrArray(s.accept) || !s.accept.length || !s.accept.every((e) => ASSET_EXTS.includes(e))) {
+            err(`assetSlots[${i}].accept must be a non-empty subset of: ${ASSET_EXTS.join(', ')}.`);
+          }
+        }
+        if ('max' in s && (!Number.isInteger(s.max) || s.max < 1 || s.max > 50)) {
+          err(`assetSlots[${i}].max must be an integer 1–50.`);
+        }
+      });
     }
   }
 

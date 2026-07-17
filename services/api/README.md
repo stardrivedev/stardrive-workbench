@@ -22,10 +22,13 @@ Then open **http://localhost:4650**:
 - **/workbench/** — the customer console (`app/workbench/`): overview, your
   private template library with folder upload, the Template Studio (BYO-key
   chat against the authoring rulebook), **Sites** (assemble, watch jobs,
-  read QA reports), **Connections** (your own Vercel/Turso/GitHub tokens —
-  encrypted at rest, masked on read, used only at deploy time), the full
-  API reference with copy-ready curls, keys & usage, and the rulebook.
-  Paste the minted key in the top-right box.
+  read QA reports, and upload into **asset compartments** — named slots
+  like logo/favicon/hero/gallery, each mapped to its exact path on the
+  assembled site; templates can declare extras via manifest `assetSlots`),
+  **Connections** (your own Vercel/Turso/GitHub tokens — encrypted at
+  rest, masked on read, used only at deploy time), the full API reference
+  with copy-ready curls, keys & usage, and the rulebook. Paste the minted
+  key in the top-right box.
 
 ```
 node test/e2e.mjs        # the full end-to-end suite (spawns its own servers)

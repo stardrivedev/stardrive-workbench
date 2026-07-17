@@ -76,7 +76,16 @@ Rules:
   /admin, /catalog, /careers, /insights, /gallery.
 - No keys other than the ones shown plus optionally: $schema, requires,
   optionalIntegrations, env, npmDependencies, npmDevDependencies,
-  postAssemble. Unknown keys are rejected.
+  postAssemble, assetSlots. Unknown keys are rejected.
+- assetSlots (optional): EXTRA asset compartments your template needs
+  beyond the standard set every site template already has (logo, favicon,
+  hero, about, gallery, team, misc — those ids are reserved). Each entry:
+  { "id": "menu-pages", "label": "Menu pages",
+    "description": "One image per menu page.",
+    "accept": ["jpg","jpeg","png"], "max": 8 }
+  accept is a subset of png, jpg, jpeg, webp, svg, gif, ico; max is 1-50.
+  The engine slots uploads for slot "x" under public/assets/x/ — read
+  imagery from there with graceful fallbacks when a compartment is empty.
 
 =====================================================================
 4. THE THEME-TOKEN CONTRACT (MUST; the most important section)
@@ -724,14 +733,77 @@ $('#sitesTable').addEventListener('click', async (e) => {
     '<details style="margin-top:0.8rem"><summary style="cursor:pointer;color:var(--muted);font-size:0.85rem">Config (' + Object.keys(body.config).length + ' slots, ' + body.configHistory.length + ' prior versions)</summary>' +
     '<div class="codeblock"><pre>' + esc(JSON.stringify(body.config, null, 2)) + '</pre><button class="copybtn" type="button">Copy</button></div></details>' +
     '<div style="display:flex;gap:0.6rem;margin-top:0.9rem;flex-wrap:wrap">' +
+    '<button class="ghost" data-siteact="reassemble" data-id="' + esc(body.id) + '">Re-assemble</button>' +
     '<button class="ghost" data-siteact="export" data-id="' + esc(body.id) + '">Preview &amp; export</button>' +
     '<button class="ghost" data-siteact="deploy" data-id="' + esc(body.id) + '">Deploy</button></div>' +
-    '<div id="siteActOut" style="margin-top:0.6rem"></div>';
+    '<div id="siteActOut" style="margin-top:0.6rem"></div>' +
+    '<h3 style="margin-top:1.4rem;color:var(--ink)">Assets</h3>' +
+    '<p style="font-size:0.85rem;color:var(--muted);margin:0.3rem 0 0.8rem">Upload into the right compartment and each file is slotted into its exact place on the site at the next assembly — no paths to think about.</p>' +
+    '<div id="siteAssets" data-id="' + esc(body.id) + '" class="grid2"></div>';
+  loadSiteAssets(body.id);
+});
+
+async function loadSiteAssets(siteId) {
+  const root = $('#siteAssets');
+  if (!root) return;
+  const { status, body } = await api('/v1/sites/' + siteId + '/assets');
+  if (status !== 200) { root.innerHTML = '<div class="report err">Could not load assets (' + status + ').</div>'; return; }
+  root.innerHTML = '';
+  for (const slot of body.slots) {
+    const items = body.assets[slot.id] || [];
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML =
+      '<h3 style="margin-top:0">' + esc(slot.label) + ' <span style="color:var(--muted);font-weight:400;font-size:0.78rem">' + items.length + ' / ' + slot.max + (slot.declaredBy ? ' · from ' + esc(slot.declaredBy) : '') + '</span></h3>' +
+      '<p style="font-size:0.8rem;color:var(--muted);margin:0.2rem 0 0.6rem">' + esc(slot.description) + ' <span style="font-family:var(--mono);font-size:0.72rem">→ ' + esc(slot.target) + '</span></p>' +
+      (items.length ? '<ul style="list-style:none;margin:0 0 0.6rem;padding:0;display:grid;gap:0.35rem">' + items.map((a) =>
+        '<li style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem"><code>' + esc(a.filename) + '</code>' +
+        '<span style="color:var(--muted)">' + Math.max(1, Math.round(a.bytes / 1024)) + ' KB</span>' +
+        '<button class="ghost danger" data-assetdel="' + esc(a.id) + '" data-slot="' + esc(slot.id) + '" style="margin-left:auto;padding:0.1rem 0.5rem;font-size:0.72rem">Remove</button></li>').join('') + '</ul>' : '') +
+      (items.length < slot.max
+        ? '<input type="file" data-upload="' + esc(slot.id) + '" accept="' + slot.accept.map((e) => '.' + e).join(',') + '" style="font-size:0.78rem;max-width:100%">'
+        : '<div style="font-size:0.78rem;color:var(--muted)">Compartment full.</div>');
+    root.appendChild(card);
+  }
+}
+
+$('#view-sites').addEventListener('change', async (e) => {
+  const input = e.target.closest('input[data-upload]');
+  if (!input || !input.files.length) return;
+  const siteId = $('#siteAssets').dataset.id;
+  const file = input.files[0];
+  if (file.size > 8_000_000) { alert('Files must be at most 8 MB.'); input.value = ''; return; }
+  const b64 = await new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(',')[1]);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+  const { status, body } = await api('/v1/sites/' + siteId + '/assets/' + input.dataset.upload, {
+    method: 'POST', body: { filename: file.name, contentBase64: b64 },
+  });
+  if (status !== 201) alert(body.error?.message || 'Upload failed (' + status + ').');
+  loadSiteAssets(siteId);
 });
 
 $('#siteDetail').addEventListener('click', async (e) => {
+  const del = e.target.closest('button[data-assetdel]');
+  if (del) {
+    const siteId = $('#siteAssets').dataset.id;
+    await api('/v1/sites/' + siteId + '/assets/' + del.dataset.slot + '/' + del.dataset.assetdel, { method: 'DELETE' });
+    loadSiteAssets(siteId);
+    return;
+  }
   const btn = e.target.closest('button[data-siteact]');
   if (!btn) return;
+  if (btn.dataset.siteact === 'reassemble') {
+    const { status, body } = await api('/v1/sites/' + btn.dataset.id + '/assemble', { method: 'POST', body: {} });
+    $('#siteActOut').innerHTML = status === 202
+      ? '<div class="report ok">Re-assembling with the current config and assets (job ' + esc(body.jobId.slice(0, 8)) + '…).</div>'
+      : '<div class="report err">' + esc(body.error?.message || 'Failed (' + status + ').') + '</div>';
+    setTimeout(loadSites, 1500);
+    return;
+  }
   const isDeploy = btn.dataset.siteact === 'deploy';
   const { body } = await api('/v1/sites/' + btn.dataset.id + (isDeploy ? '/deploy' : '/export'), isDeploy ? { method: 'POST', body: {} } : {});
   $('#siteActOut').innerHTML = '<div class="report" style="background:var(--warn-soft);color:var(--warn)">' + esc(body.error?.message || 'Unavailable.') + '</div>';
@@ -758,8 +830,8 @@ $('#assembleBtn').addEventListener('click', async () => {
     if (job.status === 200 && (job.body.status === 'done' || job.body.status === 'failed')) {
       const qa = job.body.result?.qa;
       out.innerHTML = job.body.status === 'done'
-        ? '<div class="report ok">✓ Assembled. QA: ' + esc(qa?.status || 'recorded') + (qa?.status === 'skipped' ? ' (dry engine — the real battery lands with the rollout)' : '') + '</div>'
-        : '<div class="report err">Job failed: ' + esc((job.body.logs || []).slice(-1)[0] || 'see job log') + '</div>';
+        ? '<div class="report ok">✓ Assembled. QA: ' + esc(qa?.verdict || 'recorded') + (qa?.verdict === 'skipped' ? ' (dry engine — the real battery lands with the rollout)' : '') + '</div>'
+        : '<div class="report err">Job failed: ' + esc((job.body.logs || []).slice(-1)[0]?.line || 'see job log') + '</div>';
       loadSites();
       return;
     }
@@ -844,6 +916,11 @@ const REF = [
     { m: 'GET', p: '/v1/sites/{id}', d: 'Site record: config, history, job summaries.', curl: `curl {BASE}/v1/sites/{siteId} -H "Authorization: Bearer {KEY}"` },
     { m: 'POST', p: '/v1/sites/{id}/change', d: 'Shallow config delta → re-assemble; history kept.',
       curl: `curl -X POST {BASE}/v1/sites/{siteId}/change \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"config":{"tagline":"A new line."}}'` },
+    { m: 'GET', p: '/v1/sites/{id}/assets', d: 'The site’s asset compartments (standard + template-declared) and what’s in them.', curl: `curl {BASE}/v1/sites/{siteId}/assets -H "Authorization: Bearer {KEY}"` },
+    { m: 'POST', p: '/v1/sites/{id}/assets/{slot}', d: 'Upload into a compartment (logo, favicon, hero, about, gallery, team, misc, …) — slotted to its exact site path at the next assembly.',
+      curl: `curl -X POST {BASE}/v1/sites/{siteId}/assets/logo \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"filename":"logo.svg","contentBase64":"…"}'` },
+    { m: 'DELETE', p: '/v1/sites/{id}/assets/{slot}/{assetId}', d: 'Remove an uploaded asset.', curl: `curl -X DELETE {BASE}/v1/sites/{siteId}/assets/logo/{assetId} -H "Authorization: Bearer {KEY}"` },
+    { m: 'POST', p: '/v1/sites/{id}/assemble', d: 'Re-assemble with the current config + latest assets.', curl: `curl -X POST {BASE}/v1/sites/{siteId}/assemble -H "Authorization: Bearer {KEY}" -d '{}'` },
     { m: 'POST', p: '/v1/sites/{id}/deploy', d: 'Deploy with your own hosting tokens. Honest 501 until the real engine lands.', curl: `curl -X POST {BASE}/v1/sites/{siteId}/deploy -H "Authorization: Bearer {KEY}" -d '{}'` },
     { m: 'GET', p: '/v1/sites/{id}/export', d: 'Export the assembled repo. Honest 501 until the real engine lands.', curl: `curl {BASE}/v1/sites/{siteId}/export -H "Authorization: Bearer {KEY}"` },
   ]},
