@@ -386,21 +386,80 @@ await check('ACCOUNT ISOLATION: sites and jobs are invisible across accounts', a
   assert.strictEqual((await call('GET', `/v1/jobs/${jobId}`, { key: otherAccountKey })).status, 404);
   assert.strictEqual((await call('POST', `/v1/sites/${siteId}/change`, { key: otherAccountKey, body: { config: { tagline: 'x' } } })).status, 404);
 });
+await check('GET /v1/sites lists only the caller\'s sites, newest first', async () => {
+  const mine = await call('GET', '/v1/sites', { key: fullKey });
+  assert.strictEqual(mine.body.sites.some((s) => s.id === siteId), true);
+  assert.strictEqual(mine.body.sites.every((s) => typeof s.siteName === 'string' && s.templateId), true);
+  const theirs = await call('GET', '/v1/sites', { key: otherAccountKey });
+  assert.strictEqual(theirs.body.sites.some((s) => s.id === siteId), false);
+});
+
+// ── Connections: BYO hosting credentials ────────────────────────────────
+console.log('connections:');
+await check('connections: set → masked read (token never echoed), scoped per account', async () => {
+  const put = await call('PUT', '/v1/connections/vercel', { key: fullKey, body: { token: 'vercel_tok_abc123XYZ9' } });
+  assert.strictEqual(put.status, 200);
+  assert.strictEqual(put.body.connections.vercel.connected, true);
+  assert.strictEqual(put.body.connections.vercel.last4, 'XYZ9');
+  assert.strictEqual(JSON.stringify(put.body).includes('vercel_tok_abc123XYZ9'), false, 'full token never in a response');
+  const gh = await call('PUT', '/v1/connections/github', { key: fullKey, body: { token: 'ghp_e2etoken1234', owner: 'ada-web-co' } });
+  assert.strictEqual(gh.body.connections.github.owner, 'ada-web-co');
+  const theirs = await call('GET', '/v1/connections', { key: otherAccountKey });
+  assert.strictEqual(theirs.body.connections.vercel.connected, false, 'connections are per-account');
+});
+await check('connections: encrypted at rest — raw store never contains token plaintext', async () => {
+  const dir = path.join(varDir, 'connections');
+  const raw = fs.readdirSync(dir).map((f) => fs.readFileSync(path.join(dir, f), 'utf-8')).join('\n');
+  assert.strictEqual(raw.includes('vercel_tok_abc123XYZ9'), false);
+  assert.strictEqual(raw.includes('ghp_e2etoken1234'), false);
+  assert.strictEqual(raw.includes('"enc"'), true, 'ciphertext structure present');
+});
+await check('connections: unknown provider 422, bad token 400, delete works, deploy 501 names your connections', async () => {
+  assert.strictEqual((await call('PUT', '/v1/connections/netlify', { key: fullKey, body: { token: 'x'.repeat(20) } })).status, 422);
+  assert.strictEqual((await call('PUT', '/v1/connections/turso', { key: fullKey, body: { token: 'has spaces' } })).status, 400);
+  const dep = await call('POST', `/v1/sites/${siteId}/deploy`, { key: fullKey, body: {} });
+  assert.strictEqual(dep.status, 501);
+  assert.strictEqual(dep.body.error.message.includes('vercel'), true, '501 reflects connected providers');
+  assert.strictEqual(dep.body.error.message.includes('never ship any part of the engine'), true);
+  assert.strictEqual((await call('DELETE', '/v1/connections/github', { key: fullKey })).status, 200);
+  assert.strictEqual((await call('DELETE', '/v1/connections/github', { key: fullKey })).status, 404);
+});
 
 // ── Workbench: static pages + the BYO-key chat relay ────────────────────
 console.log('workbench:');
-await check('the Workbench serves at / with its assets; no auth needed for pages', async () => {
+await check('the marketing site serves at /, the Workbench at /workbench/; no auth for pages', async () => {
   const home = await fetch(BASE + '/');
   assert.strictEqual(home.status, 200);
   assert.strictEqual((home.headers.get('content-type') || '').includes('text/html'), true);
   const html = await home.text();
-  assert.strictEqual(html.includes('Stardrive'), true);
-  assert.strictEqual((await fetch(BASE + '/app.js')).status, 200);
-  assert.strictEqual((await fetch(BASE + '/styles.css')).status, 200);
+  assert.strictEqual(html.includes('Request access'), true, 'marketing page owns /');
+  assert.strictEqual((await fetch(BASE + '/site.js')).status, 200);
+  assert.strictEqual((await fetch(BASE + '/site.css')).status, 200);
+  const wb = await fetch(BASE + '/workbench/');
+  assert.strictEqual(wb.status, 200);
+  assert.strictEqual((await wb.text()).includes('Workbench'), true);
+  assert.strictEqual((await fetch(BASE + '/workbench/app.js')).status, 200);
+  assert.strictEqual((await fetch(BASE + '/workbench/styles.css')).status, 200);
+  const redir = await fetch(BASE + '/workbench', { redirect: 'manual' });
+  assert.strictEqual(redir.status, 302);
+  assert.strictEqual(redir.headers.get('location'), '/workbench/');
 });
-await check('static serving refuses traversal and unknown types', async () => {
+await check('static serving refuses traversal and unknown types on both roots', async () => {
   assert.strictEqual((await fetch(BASE + '/..%2Fserver.mjs')).status, 404);
   assert.strictEqual((await fetch(BASE + '/server.mjs')).status, 404);
+  assert.strictEqual((await fetch(BASE + '/workbench/..%2F..%2Fserver.mjs')).status, 404);
+  assert.strictEqual((await fetch(BASE + '/app.js')).status, 404, 'workbench assets no longer at the root');
+});
+await check('request-access: stores valid leads, rejects junk, throttles per IP', async () => {
+  const post = (body) => call('POST', '/site/request-access', { body });
+  const good = await post({ name: 'Ada Agency', email: 'ada@example.com', company: 'Ada Web Co', message: 'We ship ~20 sites a year.' });
+  assert.strictEqual(good.status, 201);
+  assert.strictEqual(good.body.ok, true);
+  assert.strictEqual((await post({ name: '', email: 'ada@example.com' })).status, 400);
+  assert.strictEqual((await post({ name: 'Ada', email: 'not-an-email' })).status, 400);
+  // Per-IP throttle is 5/hour; the calls above used 3 slots, so two more fill it.
+  for (let i = 0; i < 2; i += 1) await post({ name: 'Ada', email: 'ada@example.com' });
+  assert.strictEqual((await post({ name: 'Ada', email: 'ada@example.com' })).status, 429);
 });
 await check('chat relay: requires a Stardrive key, validates provider inputs, never calls out on bad input', async () => {
   assert.strictEqual((await call('POST', '/workbench/chat', { body: {} })).status, 401);

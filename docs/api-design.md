@@ -11,9 +11,15 @@ document is the M2 build spec — REST, versioned under `/v1`, JSON in/out.
 - **Deterministic core.** Assembly is d4-site-builder: no LLM, no
   surprises — the same config always yields the same site. Anything
   generative lives OUTSIDE the engine and is never required.
-- **Licensee owns the output.** Sites deploy to THEIR Vercel/Turso/GitHub;
-  the assembled repo is theirs to export at any time. No lock-in by
-  hostage-taking.
+- **Licensee owns the output.** Sites deploy to THEIR Vercel/Turso/GitHub
+  (stored per-account as encrypted **connections**, chosen tiers and regions
+  are theirs within the supported-provider set); the assembled repo is
+  theirs to export at any time. No lock-in by hostage-taking.
+- **The engine is never visible.** Customers receive assembled site output
+  only: standalone Next.js repos with zero Stardrive runtime dependency.
+  No export, deploy, or repo push ever contains engine code, and job
+  logs expose step names and QA results, never engine internals. This is
+  the hard IP boundary of the product.
 - **Client data is transient by default.** Intake answers and assembled
   artifacts live for the job's lifetime + a grace window, then delete.
   Stardrive is infrastructure, not a data warehouse.
@@ -60,6 +66,14 @@ shared surface, and imports can never shadow its names.
 | `GET /v1/sites/{id}/export` | The assembled repo as a tarball (or push-to-their-GitHub via deploy). Always available — their site, their code. |
 | `POST /v1/sites/{id}/deploy` | Body: licensee credentials (Vercel token, Turso, GitHub) — passed per-call or stored encrypted per-licensee, their choice. → deploy job. |
 | `POST /v1/sites/{id}/change` | A config delta: re-assemble applies only the delta, re-QA, ready to redeploy — the d4 change-loop doctrine (QA-rejected changes auto-revert). |
+
+### Connections (implemented)
+
+| | |
+|---|---|
+| `GET /v1/connections` | Masked view: which providers are connected + last4. Tokens are NEVER returned by any route. |
+| `PUT /v1/connections/{provider}` | Save the licensee's own `vercel` \| `turso` \| `github` token (+ optional GitHub owner). AES-256-GCM at rest (key from `STARDRIVE_SECRET`, or a generated `var/secret.key`); decrypted server-side at deploy time only. |
+| `DELETE /v1/connections/{provider}` | Disconnect. |
 
 ### Account
 

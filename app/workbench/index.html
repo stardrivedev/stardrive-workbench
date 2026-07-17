@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Stardrive Workbench</title>
-<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/workbench/styles.css">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%235348c7'/%3E%3Ctext x='16' y='22' font-size='17' font-family='Segoe UI' font-weight='800' fill='white' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E">
 </head>
 <body>
@@ -17,6 +17,8 @@
     <a class="nav-item" href="#/overview" data-view="overview"><span class="glyph">⌂</span> Overview</a>
     <a class="nav-item" href="#/templates" data-view="templates"><span class="glyph">▦</span> Templates</a>
     <a class="nav-item" href="#/studio" data-view="studio"><span class="glyph">✎</span> Template Studio</a>
+    <a class="nav-item" href="#/sites" data-view="sites"><span class="glyph">▤</span> Sites</a>
+    <a class="nav-item" href="#/connections" data-view="connections"><span class="glyph">⇄</span> Connections</a>
     <a class="nav-item" href="#/reference" data-view="reference"><span class="glyph">⌘</span> API Reference</a>
     <a class="nav-item" href="#/keys" data-view="keys"><span class="glyph">⚿</span> Keys &amp; Usage</a>
     <a class="nav-item" href="#/rulebook" data-view="rulebook"><span class="glyph">§</span> Rulebook</a>
@@ -130,6 +132,65 @@
       </div>
     </section>
 
+    <!-- ═══ Sites ═══ -->
+    <section class="view" id="view-sites">
+      <p class="lede">Assemble a site from any template, watch the job run, and read the QA report — so you always see what you're getting (or delivering to a client) before it ships. The visual preview and one-click deploy switch on with the assembly engine's staged rollout.</p>
+      <div class="card">
+        <h2>Assemble a site</h2>
+        <div class="grid2">
+          <div class="field"><label for="siteTemplateSel">Base template</label>
+            <select id="siteTemplateSel"><option value="">Save an API key to load templates…</option></select></div>
+          <div class="field"><label for="siteNameInput">Site name (the business)</label>
+            <input id="siteNameInput" placeholder="e.g. Acme Fixture Works"></div>
+        </div>
+        <div class="field"><label for="siteTaglineInput">Tagline (optional)</label>
+          <input id="siteTaglineInput" placeholder="e.g. Custom fixtures, built to last"></div>
+        <button class="primary" id="assembleBtn" type="button">Assemble</button>
+        <div id="assembleOut"></div>
+      </div>
+      <div class="card">
+        <h2>Your sites</h2>
+        <div class="tscroll"><table class="list" id="sitesTable">
+          <thead><tr><th>Site</th><th>Template</th><th>Last job</th><th>Updated</th><th></th></tr></thead>
+          <tbody><tr><td colspan="5" style="color:var(--muted)">Save an API key to load your sites.</td></tr></tbody>
+        </table></div>
+        <div id="siteDetail"></div>
+      </div>
+    </section>
+
+    <!-- ═══ Connections ═══ -->
+    <section class="view" id="view-connections">
+      <p class="lede">Your hosting, your accounts, your site. Connect your own Vercel, Turso, and GitHub credentials and every deploy goes to infrastructure <b>you</b> own, on whatever plan tier you choose — Stardrive never owns your website. Tokens are encrypted at rest, never shown again after saving, and only ever receive the assembled site: no part of the Stardrive engine is ever pushed to your accounts.</p>
+      <div class="grid2" id="connGrid">
+        <div class="card" data-provider="vercel">
+          <h2>Vercel <span class="badge imported" data-role="status" style="display:none">Connected</span></h2>
+          <p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.8rem">Where your sites go live. Free Hobby tier works; upgrade on your own terms.</p>
+          <div data-role="state" style="font-size:0.85rem;margin-bottom:0.6rem;color:var(--muted)">Not connected.</div>
+          <div class="field"><label>Vercel token</label><input class="mono" type="password" data-role="token" placeholder="paste token" autocomplete="off"></div>
+          <button class="ghost" data-act="save" type="button">Save</button>
+          <button class="ghost danger" data-act="disconnect" type="button" style="display:none">Disconnect</button>
+        </div>
+        <div class="card" data-provider="turso">
+          <h2>Turso <span class="badge imported" data-role="status" style="display:none">Connected</span></h2>
+          <p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.8rem">Your site's database, in your own account and region.</p>
+          <div data-role="state" style="font-size:0.85rem;margin-bottom:0.6rem;color:var(--muted)">Not connected.</div>
+          <div class="field"><label>Turso token</label><input class="mono" type="password" data-role="token" placeholder="paste token" autocomplete="off"></div>
+          <button class="ghost" data-act="save" type="button">Save</button>
+          <button class="ghost danger" data-act="disconnect" type="button" style="display:none">Disconnect</button>
+        </div>
+        <div class="card" data-provider="github">
+          <h2>GitHub <span class="badge imported" data-role="status" style="display:none">Connected</span></h2>
+          <p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.8rem">Optional: your assembled site's repo, pushed to an account you control.</p>
+          <div data-role="state" style="font-size:0.85rem;margin-bottom:0.6rem;color:var(--muted)">Not connected.</div>
+          <div class="field"><label>GitHub token</label><input class="mono" type="password" data-role="token" placeholder="paste token" autocomplete="off"></div>
+          <div class="field"><label>Owner (username or org)</label><input class="mono" data-role="owner" placeholder="e.g. ada-web-co" autocomplete="off" spellcheck="false"></div>
+          <button class="ghost" data-act="save" type="button">Save</button>
+          <button class="ghost danger" data-act="disconnect" type="button" style="display:none">Disconnect</button>
+        </div>
+      </div>
+      <div id="connNote"></div>
+    </section>
+
     <!-- ═══ API Reference ═══ -->
     <section class="view" id="view-reference">
       <p class="lede">Every endpoint, with copy-ready examples. Your saved key is filled into each snippet automatically.</p>
@@ -174,6 +235,6 @@
     </section>
   </main>
 </div>
-<script src="/app.js"></script>
+<script src="/workbench/app.js"></script>
 </body>
 </html>

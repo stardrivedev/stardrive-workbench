@@ -61,6 +61,17 @@ runs server-side, in a CLI, or in a browser preview.
   landed with it: accounts on keys; templates/mappings/sites/jobs private
   per account, catalog shared. Remaining Workbench work: mapping editor,
   client-facts form, build/QA/deploy status views (with the real engine).
+- **Customer-facing side v1 SHIPPED 2026-07-17**: the public marketing site
+  at `/` (app/site — deliberate night-sky identity, how-it-works, pillars,
+  Studio story, honest private-beta pricing card, FAQ incl. the
+  engine-invisibility promise, request-access form → `var/leads/` with
+  per-IP throttle); the Workbench moved to `/workbench/` and grew the
+  customer flow: **Sites** (assemble from any template via UI, watch the
+  job, read the QA report, honest 501s for preview/deploy) and
+  **Connections** (BYO Vercel/Turso/GitHub tokens, AES-256-GCM at rest,
+  masked reads, per-account). Doctrine hardened in api-design.md: customers
+  own their sites and hosting tiers; the engine is NEVER visible — exports/
+  deploys carry assembled output only. 43-check E2E + 8-step browser smoke.
 - Payments/merchant-of-record: Paddle or Lemon Squeezy (they handle sales
   tax — right-sized for a solo operation); subscription + metered usage.
 - Key issuance, rotation, scoping; rate limits.

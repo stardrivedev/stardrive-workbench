@@ -19,6 +19,7 @@ import { loadCatalog, createImportedStore, validateManifest, validateBundle, sum
 import { createJobRunner } from './lib/jobs.mjs';
 import { relayChat } from './lib/chat-proxy.mjs';
 import { createStaticServer } from './lib/static.mjs';
+import { createConnections, PROVIDERS } from './lib/connections.mjs';
 import { runMapping, validateMapping } from '../../packages/field-mapping/index.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -35,6 +36,9 @@ const auth = createAuth(store, { rateLimitPerMin: Number(process.env.RATE_LIMIT_
 const catalog = loadCatalog(); // throws at boot if the bundle is bad
 const imported = createImportedStore(store);
 const jobs = createJobRunner(store, { engine: ENGINE });
+const connections = createConnections(store, VAR_DIR);
+// Two static roots: the public marketing site at /, the licensee console at /workbench/.
+const site = createStaticServer(path.join(HERE, '..', '..', 'app', 'site'));
 const workbench = createStaticServer(path.join(HERE, '..', '..', 'app', 'workbench'));
 
 /** Bundled first (shared, not overridable), then the CALLER's own imports. */
@@ -272,6 +276,28 @@ const ROUTES = [
     },
   },
   {
+    method: 'GET', pattern: '/v1/sites', scope: 'sites',
+    handler: ({ key }) => ({
+      status: 200,
+      body: {
+        sites: store.listIds('sites')
+          .map((id) => store.readJson(`sites/${id}.json`))
+          .filter((s) => s && s.account === key.account)
+          .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+          .map((s) => {
+            const last = s.jobs.length ? jobs.get(s.jobs[s.jobs.length - 1]) : null;
+            return {
+              id: s.id,
+              siteName: s.config?.siteName ?? '(unnamed)',
+              templateId: s.templateId,
+              updatedAt: s.updatedAt,
+              lastJobStatus: last?.status ?? null,
+            };
+          }),
+      },
+    }),
+  },
+  {
     method: 'GET', pattern: '/v1/sites/:id', scope: 'sites',
     handler: ({ params, key }) => {
       const site = loadSite(params.id, key.account);
@@ -315,8 +341,10 @@ const ROUTES = [
     method: 'POST', pattern: '/v1/sites/:id/deploy', scope: 'deploy',
     handler: ({ params, key }) => {
       loadSite(params.id, key.account);
+      const conns = connections.get(key.account);
+      const ready = PROVIDERS.filter((p) => conns[p].connected);
       throw httpError(501, 'not_implemented',
-        'Deploy (licensee Vercel/Turso/GitHub credentials) is not implemented yet — it lands with the real engine. See docs/api-design.md.');
+        `Deploy lands with the assembly engine (staged rollout). It will use YOUR connections (${ready.length ? `connected: ${ready.join(', ')}` : 'none connected yet — see PUT /v1/connections/{provider}'}), deploy only the assembled site, and never ship any part of the engine.`);
     },
   },
   {
@@ -324,7 +352,44 @@ const ROUTES = [
     handler: ({ params, key }) => {
       loadSite(params.id, key.account);
       throw httpError(501, 'not_implemented',
-        'Export requires the real assembly engine (dry workspaces contain only a marker). See docs/api-design.md.');
+        'Export lands with the assembly engine. Exports contain the assembled site repo only — a standalone Next.js project with zero Stardrive runtime dependency; the engine itself is never included.');
+    },
+  },
+
+  // Connections — the customer's OWN hosting credentials (BYO keys).
+  // Tokens are encrypted at rest and NEVER returned by any route; reads are
+  // masked (connected + last4). They exist so deploys go to hosting the
+  // customer owns — and they only ever receive assembled site output, never
+  // the engine.
+  {
+    method: 'GET', pattern: '/v1/connections', scope: 'deploy',
+    handler: ({ key }) => ({ status: 200, body: { connections: connections.get(key.account) } }),
+  },
+  {
+    method: 'PUT', pattern: '/v1/connections/:provider', scope: 'deploy', bodyLimit: 10_000,
+    handler: ({ params, body, key }) => {
+      const provider = String(params.provider);
+      if (!PROVIDERS.includes(provider)) {
+        throw httpError(422, 'unknown_provider', `provider must be one of: ${PROVIDERS.join(', ')} — the supported set is deliberate so a deploy can never leave you with a broken site.`);
+      }
+      const token = String(body?.token ?? '');
+      if (token.length < 8 || token.length > 500 || /\s/.test(token)) {
+        throw httpError(400, 'bad_request', 'token is required (8–500 chars, no whitespace).');
+      }
+      const owner = body?.owner != null ? String(body.owner) : undefined;
+      if (provider === 'github' && owner !== undefined && !/^[a-zA-Z0-9-]{1,80}$/.test(owner)) {
+        throw httpError(400, 'bad_request', 'owner must be a GitHub username/org slug.');
+      }
+      return { status: 200, body: { connections: connections.set(key.account, provider, token, { owner }) } };
+    },
+  },
+  {
+    method: 'DELETE', pattern: '/v1/connections/:provider', scope: 'deploy',
+    handler: ({ params, key }) => {
+      if (!connections.remove(key.account, String(params.provider))) {
+        throw httpError(404, 'not_found', `No ${params.provider} connection on this account.`);
+      }
+      return { status: 200, body: { deleted: params.provider } };
     },
   },
 
@@ -342,7 +407,44 @@ const ROUTES = [
     method: 'POST', pattern: '/workbench/chat', scope: 'any', meter: 'workbench.chat', bodyLimit: 2_000_000,
     handler: async ({ body }) => ({ status: 200, body: await relayChat(body) }),
   },
+
+  // The marketing site's request-access form. Public by design (a prospect
+  // has no key yet), so it gets its own per-IP throttle and strict caps.
+  {
+    method: 'POST', pattern: '/site/request-access', scope: 'public', bodyLimit: 20_000,
+    handler: ({ body, req }) => {
+      const ip = String(req.socket?.remoteAddress || 'unknown');
+      if (!leadThrottle(ip)) throw httpError(429, 'rate_limited', 'Too many requests from this address — try again in an hour.');
+      const name = String(body?.name ?? '').trim();
+      const email = String(body?.email ?? '').trim();
+      const company = String(body?.company ?? '').trim();
+      const message = String(body?.message ?? '').trim();
+      if (!name || name.length > 200) throw httpError(400, 'bad_request', 'name is required (max 200 chars).');
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 320) {
+        throw httpError(400, 'bad_request', 'A valid email is required.');
+      }
+      if (company.length > 300 || message.length > 4000) {
+        throw httpError(400, 'bad_request', 'company max 300 chars; message max 4000 chars.');
+      }
+      const lead = { id: crypto.randomUUID(), name, email, company, message, at: new Date().toISOString() };
+      store.writeJson(`leads/${lead.id}.json`, lead);
+      return { status: 201, body: { ok: true, message: 'Request received — we reply to every one.' } };
+    },
+  },
 ];
+
+// Per-IP sliding-hour throttle for the public lead form (5/hour).
+const LEAD_WINDOW_MS = 3_600_000;
+const leadHits = new Map();
+function leadThrottle(ip) {
+  const now = Date.now();
+  const hits = (leadHits.get(ip) || []).filter((t) => now - t < LEAD_WINDOW_MS);
+  if (hits.length >= 5) return false;
+  hits.push(now);
+  leadHits.set(ip, hits);
+  if (leadHits.size > 10_000) leadHits.clear(); // memory guard; resets throttles, acceptable
+  return true;
+}
 
 // ── Server ───────────────────────────────────────────────────────────────
 
@@ -350,10 +452,19 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const match = matchRoute(ROUTES, req.method, url.pathname);
   if (!match) {
-    // Everything that isn't an API route is the Workbench (static, no auth —
-    // the pages themselves are public; every API call they make needs a key).
-    if (workbench(req, res, url.pathname)) return;
-    return fail(res, 404, 'not_found', `No ${req.method} ${url.pathname}. GET /v1 lists the surface; the Workbench lives at /.`);
+    // Everything that isn't an API route is static (no auth — the pages are
+    // public; every API call the console makes needs a key). The marketing
+    // site owns /, the licensee console owns /workbench/.
+    if (req.method === 'GET' && url.pathname === '/workbench') {
+      res.writeHead(302, { Location: '/workbench/' });
+      return res.end();
+    }
+    if (url.pathname.startsWith('/workbench/')) {
+      if (workbench(req, res, url.pathname.slice('/workbench'.length))) return;
+    } else if (site(req, res, url.pathname)) {
+      return;
+    }
+    return fail(res, 404, 'not_found', `No ${req.method} ${url.pathname}. GET /v1 lists the API surface; the site lives at /, the Workbench at /workbench/.`);
   }
 
   const { route, params } = match;

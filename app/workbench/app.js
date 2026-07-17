@@ -339,6 +339,7 @@ $('#themeBtn').addEventListener('click', () => {
 /* ══════════════ Router ══════════════ */
 const TITLES = {
   overview: 'Overview', templates: 'Templates', studio: 'Template Studio',
+  sites: 'Sites', connections: 'Connections',
   reference: 'API Reference', keys: 'Keys & Usage', rulebook: 'Rulebook',
 };
 function route() {
@@ -348,6 +349,8 @@ function route() {
   document.querySelectorAll('.nav-item').forEach((el) => el.classList.toggle('active', el.dataset.view === v));
   $('#viewTitle').textContent = TITLES[v];
   if (v === 'templates') loadTemplates();
+  if (v === 'sites') { loadSites(); loadSiteTemplateOptions(); }
+  if (v === 'connections') loadConnections();
   if (v === 'keys') renderMaskedKey();
 }
 window.addEventListener('hashchange', route);
@@ -670,6 +673,144 @@ $('#clearChatBtn').addEventListener('click', () => {
   $('#chatlog').innerHTML = '<div class="msg systemnote">Cleared. The rulebook stays loaded — describe the next template.</div>';
 });
 
+/* ══════════════ Sites ══════════════ */
+async function loadSiteTemplateOptions() {
+  const sel = $('#siteTemplateSel');
+  if (!getApiKey()) return;
+  const { status, body } = await api('/v1/templates');
+  if (status !== 200) return;
+  const bases = body.templates.filter((t) => t.kind === 'site');
+  sel.innerHTML = bases.map((t) => '<option value="' + esc(t.name) + '">' + esc(t.name) + ' (' + esc(t.source) + ')</option>').join('');
+}
+
+async function loadSites() {
+  const tbody = $('#sitesTable tbody');
+  if (!getApiKey()) {
+    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">Save an API key to load your sites.</td></tr>';
+    return;
+  }
+  const { status, body } = await api('/v1/sites');
+  if (status !== 200) {
+    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--bad)">' + (status === 403 ? 'This key lacks the sites scope.' : 'Could not load sites (' + status + ').') + '</td></tr>';
+    return;
+  }
+  if (!body.sites.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No sites yet — assemble your first one above.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = '';
+  for (const s of body.sites) {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td style="color:var(--ink);font-weight:600">' + esc(s.siteName) + '</td>' +
+      '<td><code>' + esc(s.templateId) + '</code></td>' +
+      '<td>' + esc(s.lastJobStatus || '—') + '</td>' +
+      '<td style="color:var(--muted)">' + esc((s.updatedAt || '').slice(0, 16).replace('T', ' ')) + '</td>' +
+      '<td><button class="ghost" data-site="' + esc(s.id) + '">View</button></td>';
+    tbody.appendChild(tr);
+  }
+}
+
+$('#sitesTable').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-site]');
+  if (!btn) return;
+  const { status, body } = await api('/v1/sites/' + btn.dataset.site);
+  if (status !== 200) return;
+  const jobsHtml = body.jobs.map((j) =>
+    '<tr><td><code>' + esc(j.id.slice(0, 8)) + '</code></td><td>' + esc(j.kind) + '</td><td>' + esc(j.status) + '</td><td style="color:var(--muted)">' + esc((j.finishedAt || j.createdAt || '').slice(0, 19).replace('T', ' ')) + '</td></tr>').join('');
+  $('#siteDetail').innerHTML =
+    '<h3 style="margin-top:1.2rem;color:var(--ink)">' + esc(body.config.siteName || body.id) + '</h3>' +
+    '<div class="tscroll"><table class="list"><thead><tr><th>Job</th><th>Kind</th><th>Status</th><th>When</th></tr></thead><tbody>' + jobsHtml + '</tbody></table></div>' +
+    '<details style="margin-top:0.8rem"><summary style="cursor:pointer;color:var(--muted);font-size:0.85rem">Config (' + Object.keys(body.config).length + ' slots, ' + body.configHistory.length + ' prior versions)</summary>' +
+    '<div class="codeblock"><pre>' + esc(JSON.stringify(body.config, null, 2)) + '</pre><button class="copybtn" type="button">Copy</button></div></details>' +
+    '<div style="display:flex;gap:0.6rem;margin-top:0.9rem;flex-wrap:wrap">' +
+    '<button class="ghost" data-siteact="export" data-id="' + esc(body.id) + '">Preview &amp; export</button>' +
+    '<button class="ghost" data-siteact="deploy" data-id="' + esc(body.id) + '">Deploy</button></div>' +
+    '<div id="siteActOut" style="margin-top:0.6rem"></div>';
+});
+
+$('#siteDetail').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-siteact]');
+  if (!btn) return;
+  const isDeploy = btn.dataset.siteact === 'deploy';
+  const { body } = await api('/v1/sites/' + btn.dataset.id + (isDeploy ? '/deploy' : '/export'), isDeploy ? { method: 'POST', body: {} } : {});
+  $('#siteActOut').innerHTML = '<div class="report" style="background:var(--warn-soft);color:var(--warn)">' + esc(body.error?.message || 'Unavailable.') + '</div>';
+});
+
+$('#assembleBtn').addEventListener('click', async () => {
+  const out = $('#assembleOut');
+  const templateId = $('#siteTemplateSel').value;
+  const siteName = $('#siteNameInput').value.trim();
+  if (!getApiKey()) { out.innerHTML = '<div class="report err">Save an API key first (top right).</div>'; return; }
+  if (!templateId || !siteName) { out.innerHTML = '<div class="report err">Pick a base template and give the site a name.</div>'; return; }
+  const config = { siteName };
+  const tagline = $('#siteTaglineInput').value.trim();
+  if (tagline) config.tagline = tagline;
+  out.innerHTML = '<div class="report ok">Assembling…</div>';
+  const { status, body } = await api('/v1/sites', { method: 'POST', body: { templateId, config } });
+  if (status !== 202) {
+    out.innerHTML = '<div class="report err">' + esc(body.error?.message || 'Assembly rejected (' + status + ').') + '</div>';
+    return;
+  }
+  for (let i = 0; i < 20; i += 1) {
+    await new Promise((r) => setTimeout(r, 500));
+    const job = await api('/v1/jobs/' + body.jobId);
+    if (job.status === 200 && (job.body.status === 'done' || job.body.status === 'failed')) {
+      const qa = job.body.result?.qa;
+      out.innerHTML = job.body.status === 'done'
+        ? '<div class="report ok">✓ Assembled. QA: ' + esc(qa?.status || 'recorded') + (qa?.status === 'skipped' ? ' (dry engine — the real battery lands with the rollout)' : '') + '</div>'
+        : '<div class="report err">Job failed: ' + esc((job.body.logs || []).slice(-1)[0] || 'see job log') + '</div>';
+      loadSites();
+      return;
+    }
+  }
+  out.innerHTML = '<div class="report ok">Still running — check Your sites below in a moment.</div>';
+  loadSites();
+});
+
+/* ══════════════ Connections ══════════════ */
+async function loadConnections() {
+  if (!getApiKey()) { $('#connNote').innerHTML = '<div class="report err">Save an API key first (top right).</div>'; return; }
+  const { status, body } = await api('/v1/connections');
+  if (status !== 200) {
+    $('#connNote').innerHTML = '<div class="report err">' + (status === 403 ? 'This key lacks the deploy scope — mint one with --scopes mappings,templates,sites,deploy.' : 'Could not load connections (' + status + ').') + '</div>';
+    return;
+  }
+  $('#connNote').innerHTML = '';
+  for (const card of document.querySelectorAll('#connGrid .card')) {
+    const c = body.connections[card.dataset.provider];
+    card.querySelector('[data-role="status"]').style.display = c.connected ? '' : 'none';
+    card.querySelector('[data-act="disconnect"]').style.display = c.connected ? '' : 'none';
+    card.querySelector('[data-role="state"]').textContent = c.connected
+      ? 'Connected · ends in ' + c.last4 + (c.owner ? ' · ' + c.owner : '') + ' · saved ' + (c.updatedAt || '').slice(0, 10)
+      : 'Not connected.';
+  }
+}
+
+$('#connGrid').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const card = btn.closest('.card');
+  const provider = card.dataset.provider;
+  if (btn.dataset.act === 'save') {
+    const token = card.querySelector('[data-role="token"]').value.trim();
+    const owner = card.querySelector('[data-role="owner"]')?.value.trim();
+    const { status, body } = await api('/v1/connections/' + provider, { method: 'PUT', body: { token, ...(owner ? { owner } : {}) } });
+    if (status === 200) {
+      card.querySelector('[data-role="token"]').value = '';
+      flash(btn, 'Saved ✓');
+      loadConnections();
+    } else {
+      $('#connNote').innerHTML = '<div class="report err">' + esc(body.error?.message || 'Save failed (' + status + ').') + '</div>';
+    }
+  }
+  if (btn.dataset.act === 'disconnect') {
+    if (!confirm('Disconnect ' + provider + '? Deploys will need it re-added.')) return;
+    await api('/v1/connections/' + provider, { method: 'DELETE' });
+    loadConnections();
+  }
+});
+
 /* ══════════════ API Reference ══════════════ */
 const REF = [
   { group: 'Getting oriented', items: [
@@ -699,11 +840,18 @@ const REF = [
     { m: 'POST', p: '/v1/sites', d: 'Assemble from explicit config, or mappingId+answers in one step. Returns an async job.',
       curl: `curl -X POST {BASE}/v1/sites \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"templateId":"d4-site-template","config":{"siteName":"Acme Fixture Works","modules":["d4-cms-core"]}}'` },
     { m: 'GET', p: '/v1/jobs/{id}', d: 'Job status + logs + the QA report.', curl: `curl {BASE}/v1/jobs/{jobId} -H "Authorization: Bearer {KEY}"` },
+    { m: 'GET', p: '/v1/sites', d: 'List your sites (yours alone), newest first.', curl: `curl {BASE}/v1/sites -H "Authorization: Bearer {KEY}"` },
     { m: 'GET', p: '/v1/sites/{id}', d: 'Site record: config, history, job summaries.', curl: `curl {BASE}/v1/sites/{siteId} -H "Authorization: Bearer {KEY}"` },
     { m: 'POST', p: '/v1/sites/{id}/change', d: 'Shallow config delta → re-assemble; history kept.',
       curl: `curl -X POST {BASE}/v1/sites/{siteId}/change \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"config":{"tagline":"A new line."}}'` },
     { m: 'POST', p: '/v1/sites/{id}/deploy', d: 'Deploy with your own hosting tokens. Honest 501 until the real engine lands.', curl: `curl -X POST {BASE}/v1/sites/{siteId}/deploy -H "Authorization: Bearer {KEY}" -d '{}'` },
     { m: 'GET', p: '/v1/sites/{id}/export', d: 'Export the assembled repo. Honest 501 until the real engine lands.', curl: `curl {BASE}/v1/sites/{siteId}/export -H "Authorization: Bearer {KEY}"` },
+  ]},
+  { group: 'Connections — your hosting, your site', items: [
+    { m: 'GET', p: '/v1/connections', d: 'Which providers are connected (masked — tokens are never returned).', curl: `curl {BASE}/v1/connections -H "Authorization: Bearer {KEY}"` },
+    { m: 'PUT', p: '/v1/connections/{provider}', d: 'Save your own vercel | turso | github token (encrypted at rest; deploys receive only the assembled site, never the engine).',
+      curl: `curl -X PUT {BASE}/v1/connections/vercel \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"token":"YOUR_VERCEL_TOKEN"}'` },
+    { m: 'DELETE', p: '/v1/connections/{provider}', d: 'Disconnect a provider.', curl: `curl -X DELETE {BASE}/v1/connections/vercel -H "Authorization: Bearer {KEY}"` },
   ]},
   { group: 'Account', items: [
     { m: 'GET', p: '/v1/usage', d: 'This key’s monthly counters (failed calls are never metered).', curl: `curl {BASE}/v1/usage -H "Authorization: Bearer {KEY}"` },

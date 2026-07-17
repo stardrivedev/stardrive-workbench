@@ -14,11 +14,18 @@ node scripts/make-key.mjs --name "me"
 node server.mjs [--port 4650]
 ```
 
-Then open **http://localhost:4650** — the Workbench: overview, your private
-template library with folder upload, the Template Studio (BYO-key chat that
-generates templates against the authoring rulebook), the full API reference
-with copy-ready curls, keys & usage, and the rulebook itself. Paste the
-minted key in the top-right box.
+Then open **http://localhost:4650**:
+
+- **/** — the public marketing site (`app/site/`): what Stardrive is, how it
+  works, pricing shape, FAQ, and a request-access form whose leads land in
+  `var/leads/` (public endpoint, per-IP throttled).
+- **/workbench/** — the customer console (`app/workbench/`): overview, your
+  private template library with folder upload, the Template Studio (BYO-key
+  chat against the authoring rulebook), **Sites** (assemble, watch jobs,
+  read QA reports), **Connections** (your own Vercel/Turso/GitHub tokens —
+  encrypted at rest, masked on read, used only at deploy time), the full
+  API reference with copy-ready curls, keys & usage, and the rulebook.
+  Paste the minted key in the top-right box.
 
 ```
 node test/e2e.mjs        # the full end-to-end suite (spawns its own servers)
