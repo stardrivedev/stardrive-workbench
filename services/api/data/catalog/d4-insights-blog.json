@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/deneb4admin/d4-site-builder/main/schema/manifest.schema.json",
+  "name": "d4-insights-blog",
+  "version": "1.0.0",
+  "kind": "feature",
+  "description": "Articles section: a public index at /insights and per-article pages, authored in markdown through an admin editor with cover image upload. Rendering uses the cms-core markdown renderer.",
+  "clientFacingSummary": "A blog or news section you update yourself: write posts in a simple editor and they appear on your site immediately.",
+  "keywords": ["blog", "articles", "news", "insights", "posts", "updates", "content marketing"],
+  "requires": { "d4-cms-core": ">=1.0.0" },
+  "provides": {
+    "routes": ["/insights", "/insights/[id]"],
+    "nav": [{ "label": "Insights", "href": "/insights" }],
+    "adminPanels": [
+      {
+        "id": "insights",
+        "label": "Articles",
+        "importPath": "@/modules/insights/admin/ArticlesEditor"
+      }
+    ],
+    "collections": ["articles"]
+  },
+  "env": [],
+  "npmDependencies": {},
+  "copy": [{ "from": "files", "to": "." }]
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://raw.githubusercontent.com/deneb4admin/d4-site-builder/main/schema/manifest.schema.json",
+  "name": "d4-careers-portal",
+  "version": "1.0.0",
+  "kind": "feature",
+  "description": "Careers page with job listings and an application form, plus an admin editor for managing postings. Applications are emailed via Resend when configured, and always stored in the applications collection.",
+  "clientFacingSummary": "A careers page where you post open positions yourself and candidates apply directly from your site.",
+  "keywords": ["careers", "jobs", "hiring", "open positions", "recruiting", "apply", "employment"],
+  "requires": { "d4-cms-core": ">=1.0.0" },
+  "provides": {
+    "routes": ["/careers"],
+    "nav": [{ "label": "Careers", "href": "/careers" }],
+    "adminPanels": [
+      {
+        "id": "careers",
+        "label": "Careers",
+        "importPath": "@/modules/careers/admin/CareersEditor"
+      }
+    ],
+    "collections": ["jobs", "applications"]
+  },
+  "env": [
+    {
+      "name": "RESEND_API_KEY",
+      "required": false,
+      "description": "Shared with the site template contact form. When set with CONTACT_TO_EMAIL, applications are also emailed."
+    },
+    {
+      "name": "CONTACT_TO_EMAIL",
+      "required": false,
+      "description": "Inbox that receives application notifications."
+    }
+  ],
+  "npmDependencies": {},
+  "copy": [{ "from": "files", "to": "." }]
+}

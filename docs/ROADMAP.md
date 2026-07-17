@@ -20,16 +20,33 @@ captured outputs, 21 generic engine tests, a worked example mapping, and a
 full authoring spec (the package README). Pure ESM, zero dependencies —
 runs server-side, in a CLI, or in a browser preview.
 
-## M2 — The Stardrive API (~8–14 sessions)
-`services/api` per `docs/api-design.md`:
-- API-key auth, versioned REST surface (`/v1`).
-- **First live endpoints are pure and cheap**: `POST /v1/mappings/validate`
-  and `POST /v1/intake/parse` (the M1 engine as a service).
-- Templates: the d4 catalog + import-and-validate for third-party templates
-  (manifest schema, theme tokens, contrast validator).
-- Sites: assemble (d4-site-builder as a worker job), QA battery, deploy with
-  licensee-supplied Vercel/Turso/GitHub tokens; job status + webhooks.
-- Usage metering per key (the billing meter).
+## M2 — The Stardrive API (~8–14 sessions; FOUNDATION SHIPPED 2026-07-16)
+`services/api` per `docs/api-design.md`.
+
+**Done (24-check E2E suite over real HTTP, zero runtime deps):**
+- API-key auth (hashed keys, timing-safe compare, scopes, revocation via
+  `make-key.mjs`), per-key token-bucket rate limiting (429 + Retry-After),
+  per-key monthly usage metering (`GET /v1/usage`; failures never metered).
+- The M1 engine live as a service: `POST /v1/mappings/validate`,
+  `POST /v1/intake/parse`, stored-mapping CRUD.
+- Templates: the six bundled d4 manifests (provenance-tracked, boot-time
+  self-validation) + `POST /v1/templates/validate` implementing the
+  manifest schema (licensee names free-form; `d4-` prefix first-party only).
+- Sites + jobs: assemble from explicit config OR parse-and-assemble
+  (`mappingId`+`answers`), async job store surviving restarts, the change
+  loop with config history — all against the **dry engine** (workspace
+  marker + QA recorded as `skipped`, never passed).
+- Honest 501s where work remains: template import, deploy, export.
+
+**Remaining for M2:**
+- The real engine executor: d4-site-builder + the verify battery in an
+  isolated per-job workspace (changes `lib/jobs.mjs`, not the API surface).
+  Requires an engine-repos packaging decision (vendored checkout vs. git
+  fetch at job time).
+- Deploy with licensee Vercel/Turso/GitHub tokens; export tarball.
+- Template import (git URL/tarball) + contrast validation on palettes.
+- Webhooks (`job.completed`, `job.failed`, `usage.threshold`).
+- Turso-backed store swap; container packaging; CORS for the Workbench.
 
 ## M3 — Sellable 1.0 (~6–12 sessions + owner tasks)
 - The Workbench: thin web dashboard over the API (template library, mapping

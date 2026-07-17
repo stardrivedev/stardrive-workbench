@@ -10,7 +10,8 @@ QA'd, themed, and deployed to the licensee's own hosting accounts. The same
 deterministic builder that runs Deneb4's studio, productized.
 
 Domain: **stardrive.dev** · Status: **pre-alpha** (field-mapping layer
-shipped and production-proven; API service not started)
+shipped and production-proven; API service foundation live behind a dry
+assembly engine — real engine executor is the next chunk)
 
 ## Why API-first (decided 2026-07-16)
 
@@ -79,7 +80,10 @@ content this service orchestrates. This repo is the product.
 - `packages/field-mapping/` — the declarative intake→config engine
   (**shipped**: pure ESM, zero deps, 21 unit tests; extracted from and
   regression-tested against Deneb4's production intake pipeline)
-- `services/api/` — the Stardrive API (not started; see `docs/api-design.md`)
+- `services/api/` — the Stardrive API (**foundation live**: keys/scopes/
+  rate-limit/metering, mapping + template + site/job endpoints, 24-check
+  E2E suite; assembly runs on the dry engine until the real executor is
+  wired — see its README)
 - `app/workbench/` — the thin web dashboard over the API (not started)
 
 ## Provenance

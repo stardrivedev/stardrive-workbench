@@ -1,0 +1,13 @@
+{
+  "name": "@stardrive/api",
+  "version": "0.1.0",
+  "description": "The Stardrive API (v1): mappings, templates, sites, jobs, usage. Zero runtime dependencies.",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node test/e2e.mjs"
+  },
+  "license": "SEE LICENSE IN ../../LICENSE.md",
+  "private": true
+}

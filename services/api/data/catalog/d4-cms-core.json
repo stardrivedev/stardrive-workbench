@@ -1,0 +1,69 @@
+{
+  "$schema": "https://raw.githubusercontent.com/deneb4admin/d4-site-builder/main/schema/manifest.schema.json",
+  "name": "d4-cms-core",
+  "version": "1.0.0",
+  "kind": "core",
+  "description": "Admin shell every content module plugs into: password login with optional TOTP 2FA, a dashboard that renders panels from the generated admin-panels registry, a libSQL-backed data store (src/lib/cms/data-store.ts, Turso in production / a local SQLite file in dev), a markdown renderer, and an authenticated image upload endpoint that stores files in Vercel Blob (falling back to public/uploads in dev).",
+  "clientFacingSummary": "A private admin area where you sign in and edit your own site content, protected by a password and optional two-factor authentication.",
+  "keywords": ["cms", "admin", "dashboard", "login", "2fa", "content management", "edit content"],
+  "requires": {},
+  "provides": {
+    "routes": ["/admin", "/admin/dashboard", "/admin/setup-2fa"],
+    "nav": [],
+    "adminPanels": [
+      {
+        "id": "inbox",
+        "label": "Inbox",
+        "importPath": "@/components/cms/InboxPanel"
+      }
+    ],
+    "collections": [],
+    "lib": [
+      "@/lib/cms/auth",
+      "@/lib/cms/totp",
+      "@/lib/cms/data-store",
+      "@/lib/cms/markdown",
+      "@/components/cms/ImageDropzone"
+    ]
+  },
+  "env": [
+    {
+      "name": "ADMIN_PASSWORD",
+      "required": true,
+      "description": "Password for the /admin login. Set a strong unique value per site; flag it rotate-before-handoff."
+    },
+    {
+      "name": "TOTP_SECRET",
+      "required": false,
+      "description": "Base32 TOTP secret enabling two-factor login. When unset, login is password-only and /admin/setup-2fa explains how to enable it."
+    },
+    {
+      "name": "TURSO_DATABASE_URL",
+      "required": false,
+      "description": "libsql:// URL of this client's Turso database. When unset, the CMS falls back to a local SQLite file under data/cms.db (dev only — not for production)."
+    },
+    {
+      "name": "TURSO_AUTH_TOKEN",
+      "required": false,
+      "description": "Auth token for TURSO_DATABASE_URL. Required whenever TURSO_DATABASE_URL is set."
+    },
+    {
+      "name": "BLOB_READ_WRITE_TOKEN",
+      "required": false,
+      "description": "Vercel Blob store token for uploaded images/files. When unset, uploads fall back to public/uploads on local disk (dev only — not for production)."
+    }
+  ],
+  "npmDependencies": {
+    "otplib": "^13.4.0",
+    "qrcode": "^1.5.4",
+    "@libsql/client": "^0.14.0",
+    "@vercel/blob": "^0.27.0"
+  },
+  "npmDevDependencies": {
+    "@types/qrcode": "^1.5.6"
+  },
+  "copy": [{ "from": "files", "to": "." }],
+  "postAssemble": {
+    "notes": "Content modules (careers, insights, catalog, gallery) import from @/lib/cms/* and register panels into src/config/admin-panels.generated.tsx, which the builder rewrites. This module must be selected whenever any of those modules are selected."
+  }
+}

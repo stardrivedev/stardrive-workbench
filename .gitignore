@@ -4,3 +4,6 @@ node_modules/
 dist/
 out/
 .DS_Store
+
+# Runtime state of the API service (keys, usage, jobs, workspaces) — never committed.
+services/api/var/
