@@ -161,6 +161,20 @@ section { padding: 5.5rem 0; border-top: 1px solid var(--line); }
 .price-card li::before { content: "✶"; position: absolute; left: 0; color: var(--accent); }
 .price-card li b { color: var(--ink); font-weight: 600; }
 
+/* Pricing tiers */
+.tiers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.1rem; }
+@media (max-width: 900px) { .tiers { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 520px) { .tiers { grid-template-columns: 1fr; } }
+.tier { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 1.5rem 1.3rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.tier.featured { border-color: var(--accent); box-shadow: 0 20px 50px -25px rgb(139 127 240 / 0.4); }
+.tpop { position: absolute; top: -0.7rem; left: 1.3rem; background: var(--accent); color: var(--accent-ink); font-family: var(--mono); font-size: 0.62rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; padding: 0.18rem 0.55rem; border-radius: 999px; }
+.tier h3 { font-size: 1.05rem; }
+.tier .tprice { font-size: 2rem; font-weight: 800; color: var(--ink); letter-spacing: -0.03em; }
+.tier .tprice small { font-size: 0.85rem; font-weight: 500; color: var(--muted); }
+.tier .trate { font-size: 0.72rem; color: var(--accent-strong); font-family: var(--mono); }
+.tier ul { list-style: none; margin: 0.6rem 0 0; padding: 0; display: grid; gap: 0.4rem; font-size: 0.87rem; }
+.tier li::before { content: "✶ "; color: var(--accent); }
+
 /* FAQ */
 .faq { max-width: 46rem; }
 .faq details { border-top: 1px solid var(--line); padding: 1.1rem 0; }

@@ -1099,20 +1099,75 @@ $('#testKeyBtn').addEventListener('click', async () => {
 });
 
 /* ══════════════ Billing ══════════════ */
+const fmtTokens = (n) => n >= 1e6 ? (n / 1e6).toFixed(n % 1e6 ? 1 : 0) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
+
 async function loadBilling() {
   const res = await fetch('/v1/billing');
   if (!res.ok) { $('#planName').textContent = 'log in to view'; return; }
   const b = await res.json();
-  $('#planName').textContent = b.planLabel + (b.plan === 'beta' ? ' (free)' : '');
-  $('#checkoutArea').innerHTML = b.checkoutConfigured
-    ? '<button class="primary" id="checkoutBtn" type="button">Upgrade plan</button>'
-    : '<div class="report" style="background:var(--code-bg);color:var(--muted)">Checkout isn\'t enabled yet. During the private beta everything is free while pricing is finalized from real usage. Stripe turns this on later — no action needed from you.</div>';
+  const q = b.quota;
+  $('#planName').textContent = b.planLabel + (b.plan === 'beta' ? ' · founding beta (free)' : '');
+
+  // Usage meter.
+  const pct = q.includedTokens ? Math.min(100, Math.round((q.usedTokens / q.includedTokens) * 100)) : 0;
+  $('#usageBar').innerHTML =
+    '<div class="meterlabel"><span>Template-generation tokens</span><span class="used">' + fmtTokens(q.usedTokens) + ' / ' + fmtTokens(q.includedTokens) + '</span></div>' +
+    '<div class="meter' + (q.over ? ' over' : '') + '"><span style="width:' + pct + '%"></span></div>' +
+    '<p style="font-size:0.78rem;color:var(--muted);margin:0.4rem 0 0">' +
+      (q.over ? 'Included tokens used up. ' + (q.overageActive ? 'Extra usage is on — you can keep generating.' : 'Turn on extra usage or upgrade to keep generating.')
+              : fmtTokens(q.remainingTokens) + ' tokens left this period.') +
+    (q.includedAssemblies != null ? ' · ' + q.usedAssemblies + ' / ' + q.includedAssemblies + ' assemblies' : ' · assemblies included') + '</p>';
+
+  // Overage toggle (only meaningful when the plan offers it).
+  $('#overageArea').innerHTML = q.overageOffered
+    ? '<label class="toggle"><input type="checkbox" id="overageToggle"' + (q.overageEnabled ? ' checked' : '') + '> Keep generating past my tokens (extra usage billed to my card at $' + q.overagePer1kUsd.toFixed(3) + '/1k)</label>' +
+      '<p id="overageNote" style="font-size:0.78rem;color:var(--muted);margin:0.4rem 0 0">' + (b.checkoutConfigured ? '' : 'Saved as a preference now; activates once a card is on file.') + '</p>'
+    : '<p style="font-size:0.8rem;color:var(--muted);margin:0">This plan has no extra-usage option — upgrade for overage and more tokens.</p>';
+  const tog = $('#overageToggle');
+  if (tog) tog.addEventListener('change', async () => {
+    const r = await fetch('/v1/billing/overage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: tog.checked }) });
+    const body = await r.json().catch(() => ({}));
+    $('#overageNote').textContent = body.note || '';
+  });
+
+  $('#checkoutArea').innerHTML = b.checkoutConfigured ? ''
+    : '<div class="report" style="background:var(--code-bg);color:var(--muted);margin-top:0.9rem">Checkout isn\'t live yet — founding beta is free. When Stripe is connected, the buttons below start real subscriptions and extra-usage billing.</div>';
+
+  // Plan grid.
+  $('#planGrid').innerHTML = b.plans.map((p) => {
+    const isNow = p.id === b.plan;
+    const rate = p.priceUsd > 0 ? '$' + p.effectivePer1kUsd.toFixed(4) + '/1k tokens' : 'free';
+    return '<div class="plan' + (isNow ? ' current' : '') + (p.popular ? ' popular' : '') + '">' +
+      (p.popular ? '<span class="pop">Popular</span>' : '') +
+      '<h3>' + esc(p.label) + '</h3>' +
+      '<div class="price">' + (p.priceUsd > 0 ? '$' + p.priceUsd + '<small>/mo</small>' : '$0') + '</div>' +
+      '<div class="rate">' + rate + (p.overagePer1kUsd != null ? ' · overage $' + p.overagePer1kUsd.toFixed(3) + '/1k' : '') + '</div>' +
+      '<ul>' +
+        '<li>' + fmtTokens(p.includedTokens) + ' tokens (~' + p.approxGenerations + ' templates)</li>' +
+        '<li>' + (p.includedAssemblies != null ? p.includedAssemblies + ' site assemblies' : 'Unlimited assemblies') + '</li>' +
+        '<li>' + (p.overagePer1kUsd != null ? 'Extra usage available' : 'Hard cap (no surprise charges)') + '</li>' +
+      '</ul>' +
+      '<div class="blurb">' + esc(p.blurb) + '</div>' +
+      (isNow ? '<div class="isnow">Your plan</div>'
+             : (p.priceUsd > 0 ? '<button class="primary" data-upgrade="' + p.id + '" type="button">Choose ' + esc(p.label) + '</button>' : '')) +
+      '</div>';
+  }).join('');
+
   const tbody = $('#usageTable tbody');
   const totals = Object.entries(b.usage?.totals || {}).sort();
   tbody.innerHTML = totals.length
     ? totals.map(([k, v]) => '<tr><td><code>' + esc(k) + '</code></td><td style="text-align:right;font-variant-numeric:tabular-nums">' + v + '</td></tr>').join('')
     : '<tr><td colspan="2" style="color:var(--muted)">No usage yet' + (b.usage?.period ? ' for ' + esc(b.usage.period) : '') + '.</td></tr>';
 }
+
+$('#planGrid').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-upgrade]');
+  if (!btn) return;
+  const r = await fetch('/v1/billing/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plan: btn.dataset.upgrade }) });
+  const body = await r.json().catch(() => ({}));
+  if (r.ok && body.url) { location.href = body.url; return; }
+  $('#checkoutArea').innerHTML = '<div class="report" style="background:var(--code-bg);color:var(--muted);margin-top:0.9rem">' + esc(body.error?.message || 'Checkout unavailable.') + '</div>';
+});
 
 /* ══════════════ Rulebook ══════════════ */
 $('#rulebookPre').textContent = RULEBOOK_PROMPT;

@@ -84,6 +84,17 @@ runs server-side, in a CLI, or in a browser preview.
   (`POST /v1/billing/checkout` → honest 501 until `STRIPE_SECRET_KEY` +
   `STRIPE_PRICE_<PLAN>` are set), so real pricing can be chosen from beta
   usage first, then activated with no code change.
+- **Pricing model SHIPPED 2026-07-18**: token-based tiers (Free / Starter
+  $39 / Studio $119 / Agency $349), the billable unit being Template Studio
+  generation tokens (site assembly is deterministic, included). Higher tiers
+  are cheaper per token; **opt-in extra usage** (`POST /v1/billing/overage`)
+  keeps generation going past the included tokens, billed to the card on
+  file at the tier's overage rate (also cheaper up the tiers, always above
+  the included effective rate). Studio generation is quota-gated
+  (`402 quota_exhausted`). Billing tab shows a token meter, the extra-usage
+  toggle, and a tier grid with upgrade buttons; the marketing site has the
+  public tier grid. Numbers are starting points to tune with real
+  model-cost data.
 - ~~Key issuance, rotation, scoping; rate limits~~ — **done** (self-service
   above; rate limits already live).
 - Docs polished for strangers; a worked example template + mapping.

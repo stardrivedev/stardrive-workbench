@@ -209,15 +209,38 @@ await check('keys: list, mint (secret shown once), rotate, revoke — all sessio
   assert.strictEqual(del.status, 200);
   assert.strictEqual((await call('GET', '/v1/templates', { key: rotated.body.secret })).status, 401, 'revoked key rejected');
 });
-await check('billing: plan + aggregated usage; checkout is an honest 501 until Stripe is configured', async () => {
+await check('billing: plan + token quota + a tier catalog with per-token discounts up the tiers', async () => {
   const b = await cookieCall('GET', '/v1/billing', { cookie: sessionCookie });
   assert.strictEqual(b.status, 200);
   assert.strictEqual(b.body.plan, 'beta');
   assert.strictEqual(b.body.checkoutConfigured, false);
-  assert.strictEqual(typeof b.body.usage.totals, 'object');
+  // Quota shape.
+  assert.strictEqual(b.body.quota.includedTokens > 0, true);
+  assert.strictEqual(b.body.quota.usedTokens, 0);
+  assert.strictEqual(b.body.quota.over, false);
+  // Public catalog: paid tiers get cheaper per token AND cheaper overage as they go up.
+  const paid = b.body.plans.filter((p) => p.priceUsd > 0);
+  assert.strictEqual(paid.length >= 3, true);
+  for (let i = 1; i < paid.length; i++) {
+    assert.strictEqual(paid[i].effectivePer1kUsd < paid[i - 1].effectivePer1kUsd, true, 'included rate descends up the tiers');
+    assert.strictEqual(paid[i].overagePer1kUsd < paid[i - 1].overagePer1kUsd, true, 'overage rate descends up the tiers');
+    // Overage always priced above the included effective rate (keep-working pays).
+    assert.strictEqual(paid[i].overagePer1kUsd > paid[i].effectivePer1kUsd, true, 'overage above included effective');
+  }
+});
+await check('billing: extra-usage toggle persists; checkout is an honest 501 until Stripe is configured', async () => {
+  const on = await cookieCall('POST', '/v1/billing/overage', { cookie: sessionCookie, body: { enabled: true } });
+  assert.strictEqual(on.status, 200);
+  assert.strictEqual(on.body.overageEnabled, true);
+  assert.strictEqual(on.body.active, false, 'not actually charging until Stripe/card');
+  const me = await cookieCall('GET', '/auth/me', { cookie: sessionCookie });
+  assert.strictEqual(me.body.account.overageEnabled, true);
+  await cookieCall('POST', '/v1/billing/overage', { cookie: sessionCookie, body: { enabled: false } });
   const co = await cookieCall('POST', '/v1/billing/checkout', { cookie: sessionCookie, body: { plan: 'studio' } });
   assert.strictEqual(co.status, 501);
   assert.strictEqual(co.body.error.code, 'billing_unconfigured');
+  // A non-purchasable plan is rejected clearly (once configured it would 422; dormant it 501s first — both honest).
+  assert.strictEqual((await cookieCall('POST', '/v1/billing/checkout', { cookie: sessionCookie, body: { plan: 'free' } })).status, 501);
 });
 
 // ── Mappings ─────────────────────────────────────────────────────────────

@@ -23,7 +23,8 @@ export function createAccounts(store) {
   const EMAILS = 'account-emails.json';
 
   const publicAccount = (a) => ({
-    id: a.id, email: a.email, company: a.company || null, plan: a.plan || 'beta', createdAt: a.createdAt,
+    id: a.id, email: a.email, company: a.company || null, plan: a.plan || 'beta',
+    overageEnabled: Boolean(a.overageEnabled), createdAt: a.createdAt,
   });
 
   function idForEmail(email) {
@@ -77,6 +78,14 @@ export function createAccounts(store) {
     return publicAccount(a);
   }
 
+  function setOverage(id, enabled) {
+    const a = store.readJson(acctRel(id));
+    if (!a) return null;
+    a.overageEnabled = Boolean(enabled);
+    store.writeJson(acctRel(id), a);
+    return publicAccount(a);
+  }
+
   // ── Sessions ──
   function createSession(accountId) {
     const token = crypto.randomBytes(32).toString('hex');
@@ -99,5 +108,5 @@ export function createAccounts(store) {
     if (token && /^[0-9a-f]{64}$/.test(token)) store.deleteJson(`sessions/${sha256(token)}.json`);
   }
 
-  return { signup, login, getAccount, setPlan, createSession, verifySession, destroySession };
+  return { signup, login, getAccount, setPlan, setOverage, createSession, verifySession, destroySession };
 }

@@ -61,11 +61,26 @@ Two auth layers, one account id threading both:
 
 | | |
 |---|---|
-| `GET /v1/billing` | Plan + this month's usage aggregated across the account's keys. |
-| `POST /v1/billing/checkout` | Stripe Checkout session. Honest `501` until `STRIPE_SECRET_KEY` (+ `STRIPE_PRICE_<PLAN>`) are set — pricing is finalized from real usage first, then the key lights this up with no code change. |
+| `GET /v1/billing` | Plan, token quota (used/included/remaining, over), the tier catalog, and this month's usage aggregated across the account's keys. |
+| `POST /v1/billing/overage` | Opt in/out of extra usage: keep generating past the included tokens, billed to the card on file at the plan's overage rate. Stored as a preference; actually charges once a card is on file. |
+| `POST /v1/billing/checkout` | Stripe Checkout subscription session for a paid plan. Honest `501` until `STRIPE_SECRET_KEY` (+ `STRIPE_PRICE_<PLAN>`) are set. |
 
-The meter that will price is **sites assembled** (already counted per key).
-Everything is free on the `beta` plan during the private beta.
+### Plans (starting numbers, tuned with beta data)
+
+The billable unit is a **token** (Template Studio generation; site assembly
+is deterministic and included). Higher tiers are cheaper per token, and
+overage is always priced above the included effective rate:
+
+| Plan | $/mo | Tokens (~templates) | Assemblies | Overage /1k |
+|---|---|---|---|---|
+| Free | 0 | 250k (~6) | 5 | — (hard cap) |
+| Starter | 39 | 2M (~50) | unlimited | $0.030 |
+| Studio | 119 | 8M (~200) | unlimited | $0.022 |
+| Agency | 349 | 30M (~750) | unlimited | $0.016 |
+
+Studio generation is gated on the token quota (`402 quota_exhausted` when
+out of tokens and extra usage is off). `beta` (free, hidden) is the default
+during the private beta.
 
 ## Endpoints
 

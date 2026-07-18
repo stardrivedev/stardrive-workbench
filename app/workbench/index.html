@@ -252,21 +252,26 @@
 
     <!-- ═══ Billing ═══ -->
     <section class="view" id="view-billing">
-      <p class="lede">Your plan and this month's usage. During the private beta everything is free while pricing is set from real usage — the meter that will matter is sites assembled. Checkout turns on when Stripe is connected.</p>
-      <div class="grid2">
-        <div class="card">
-          <h2>Plan</h2>
-          <div class="kvs" id="planKvs"><span class="k">Current</span><span class="v" id="planName">…</span></div>
-          <div id="checkoutArea" style="margin-top:0.9rem"></div>
-        </div>
-        <div class="card">
-          <h2>This month's usage</h2>
-          <div class="tscroll"><table class="list" id="usageTable">
-            <thead><tr><th>Metered action</th><th style="text-align:right">Count</th></tr></thead>
-            <tbody><tr><td colspan="2" style="color:var(--muted)">Loading…</td></tr></tbody>
-          </table></div>
-          <p style="font-size:0.8rem;color:var(--muted);margin:0.7rem 0 0">Usage is aggregated across all your keys. Failed calls are never counted.</p>
-        </div>
+      <p class="lede">Your plan, this month's token usage, and extra-usage settings. Template generation spends tokens; site assembly is included. Higher tiers cost less per token. Checkout turns on when Stripe is connected.</p>
+      <div class="card">
+        <h2>Current plan &amp; usage</h2>
+        <div class="kvs" id="planKvs"><span class="k">Plan</span><span class="v" id="planName">…</span></div>
+        <div id="usageBar" style="margin-top:1rem"></div>
+        <div id="overageArea" style="margin-top:1.1rem"></div>
+        <div id="checkoutArea" style="margin-top:0.9rem"></div>
+      </div>
+      <div class="card">
+        <h2>Plans</h2>
+        <p style="font-size:0.85rem;color:var(--muted);margin:0 0 1rem">Tokens are your monthly template-generation budget. Sites you assemble are included. Turn on extra usage to keep generating past your tokens — billed to your card at the plan's overage rate.</p>
+        <div id="planGrid" class="plangrid"></div>
+      </div>
+      <div class="card">
+        <h2>This month's metered activity</h2>
+        <div class="tscroll"><table class="list" id="usageTable">
+          <thead><tr><th>Metered action</th><th style="text-align:right">Count</th></tr></thead>
+          <tbody><tr><td colspan="2" style="color:var(--muted)">Loading…</td></tr></tbody>
+        </table></div>
+        <p style="font-size:0.8rem;color:var(--muted);margin:0.7rem 0 0">Aggregated across all your keys. Failed calls are never counted.</p>
       </div>
     </section>
 

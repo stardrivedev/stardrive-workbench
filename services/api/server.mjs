@@ -201,6 +201,24 @@ const ROUTES = [
     method: 'POST', pattern: '/v1/billing/checkout', scope: 'session', bodyLimit: 10_000,
     handler: async ({ account, body }) => ({ status: 200, body: await billing.createCheckout(account, body || {}) }),
   },
+  {
+    // Opt in/out of extra usage: keep generating past the included tokens,
+    // billed to the card on file at the plan's overage rate.
+    method: 'POST', pattern: '/v1/billing/overage', scope: 'session', bodyLimit: 10_000,
+    handler: ({ account, body }) => {
+      const updated = accounts.setOverage(account.id, Boolean(body?.enabled));
+      return {
+        status: 200,
+        body: {
+          overageEnabled: updated.overageEnabled,
+          active: updated.overageEnabled && billing.configured(),
+          note: billing.configured()
+            ? (updated.overageEnabled ? 'Extra usage is on — overage bills to your card on file.' : 'Extra usage is off — generation stops at your included tokens.')
+            : 'Saved. Extra-usage billing activates once a card is on file (Stripe checkout).',
+        },
+      };
+    },
+  },
 
   // Mappings — the M1 engine as a service.
   {
@@ -572,6 +590,10 @@ const ROUTES = [
     // this included feature can be priced.
     method: 'POST', pattern: '/workbench/chat', scope: 'any', bodyLimit: 2_000_000,
     handler: async ({ body, key }) => {
+      // Gate on the account's token quota before spending model budget.
+      const account = accounts.getAccount(key.account) || { id: key.account, plan: 'beta' };
+      const usage = billing.usageSummary(account, listKeys, auth.usageFor, store);
+      billing.checkStudioQuota(account, usage);
       const result = await relayChat({ system: body?.system, messages: body?.messages });
       auth.meter(key.id, 'studio.generations');
       if (result.tokens) auth.meter(key.id, 'studio.tokens', result.tokens);

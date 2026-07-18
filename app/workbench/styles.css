@@ -250,3 +250,26 @@ table.list tr:last-child td { border-bottom: 0; }
 .acct-email { font-size: 0.78rem; color: var(--body); word-break: break-all; display: block; }
 .keyreveal { background: var(--good-soft); color: var(--good); border-radius: 8px; padding: 0.85rem 1rem; margin-top: 0.9rem; font-size: 0.86rem; }
 .keyreveal code { background: var(--panel); color: var(--ink); display: block; margin-top: 0.4rem; padding: 0.5rem 0.6rem; word-break: break-all; border: 1px solid var(--line); }
+
+/* ── Billing ── */
+.meter { height: 0.7rem; border-radius: 999px; background: var(--code-bg); border: 1px solid var(--line); overflow: hidden; }
+.meter > span { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+.meter.over > span { background: var(--warn); }
+.meterlabel { display: flex; justify-content: space-between; font-size: 0.82rem; margin-bottom: 0.4rem; }
+.meterlabel .used { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.toggle { display: flex; align-items: center; gap: 0.6rem; font-size: 0.9rem; }
+.toggle input { width: 1.05rem; height: 1.05rem; accent-color: var(--accent); }
+.plangrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(12.5rem, 1fr)); gap: 1rem; }
+.plan { border: 1px solid var(--line); border-radius: 12px; padding: 1.2rem; display: flex; flex-direction: column; gap: 0.55rem; position: relative; }
+.plan.current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.plan.popular { border-color: var(--accent); }
+.plan .pop { position: absolute; top: -0.65rem; right: 0.9rem; background: var(--accent); color: var(--accent-ink); font-size: 0.62rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 0.15rem 0.5rem; border-radius: 999px; }
+.plan h3 { font-size: 1.05rem; }
+.plan .price { font-size: 1.7rem; font-weight: 800; color: var(--ink); }
+.plan .price small { font-size: 0.8rem; font-weight: 500; color: var(--muted); }
+.plan .rate { font-size: 0.76rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.plan ul { list-style: none; margin: 0.3rem 0 0; padding: 0; display: grid; gap: 0.35rem; font-size: 0.84rem; }
+.plan li::before { content: "✓ "; color: var(--good); }
+.plan .blurb { font-size: 0.8rem; color: var(--muted); }
+.plan button { margin-top: auto; }
+.plan .isnow { margin-top: auto; text-align: center; font-size: 0.82rem; color: var(--accent); font-weight: 600; padding: 0.5rem; }
