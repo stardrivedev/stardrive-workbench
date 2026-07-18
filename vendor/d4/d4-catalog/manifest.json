@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/deneb4admin/d4-site-builder/main/schema/manifest.schema.json",
+  "name": "d4-catalog",
+  "version": "1.0.0",
+  "kind": "feature",
+  "description": "Product or service catalog: a public /catalog page with category filtering, product cards with images and specification tables, and an admin editor for categories, products, and specs.",
+  "clientFacingSummary": "A products or services catalog you manage yourself: organize items into categories, add photos and spec sheets, and customers browse them on your site.",
+  "keywords": ["catalog", "products", "services", "specs", "categories", "product listing", "inventory", "equipment"],
+  "requires": { "d4-cms-core": ">=1.0.0" },
+  "provides": {
+    "routes": ["/catalog"],
+    "nav": [{ "label": "Catalog", "href": "/catalog" }],
+    "adminPanels": [
+      {
+        "id": "catalog",
+        "label": "Catalog",
+        "importPath": "@/modules/catalog/admin/CatalogEditor"
+      }
+    ],
+    "collections": ["products", "catalog-categories"]
+  },
+  "env": [],
+  "npmDependencies": {},
+  "copy": [{ "from": "files", "to": "." }]
+}

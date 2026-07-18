@@ -59,7 +59,8 @@ surface. Keys minted with `--account <id>` share one account (CI key beside
 a dashboard key); without it each new key gets its own fresh account.
 
 Environment: `PORT`, `STARDRIVE_VAR_DIR` (runtime state; default `./var`,
-never committed), `STARDRIVE_ENGINE` (`dry` default | `real` pending),
+never committed), `STARDRIVE_ENGINE` (`dry` default | `real` — real invokes
+the vendored d4 assembler in `vendor/d4`),
 `RATE_LIMIT_PER_MIN` (per key, default 120), `STARDRIVE_SECRET` (encryption
 key for stored hosting tokens; a `var/secret.key` is generated for dev if
 unset — production must set it), `STARDRIVE_SECURE_COOKIES=1` (adds `Secure`
@@ -86,19 +87,24 @@ until `STRIPE_SECRET_KEY` (+ `STRIPE_PRICE_<PLAN>` price ids) are set.
   `mappingId`+`answers` for parse-and-assemble in one step; base template
   must be `kind:"site"`), async job lifecycle (`GET /v1/jobs/{id}`), the
   change loop (`POST /v1/sites/{id}/change` — shallow delta, config history
-  kept), all against the **dry engine**: a workspace marker + a QA report
-  recorded as `skipped`, never as passed.
+  kept), asset compartments (`/v1/sites/{id}/assets…`), re-assemble.
+- **The real engine** (`STARDRIVE_ENGINE=real`): the vendored d4 assembler
+  (`vendor/d4`) runs in an isolated per-job workspace and produces a genuine
+  standalone Next.js site — base template + selected modules, per-client
+  config + theme baked in, uploaded assets slotted into place. Imported
+  customer templates are materialized directly. A real QA gate runs
+  (structural checks + WCAG contrast on the validated palettes); QA-red
+  fails the job — never a fake pass. `GET /v1/sites/{id}/export` streams the
+  assembled repo as a `.tar.gz` (the site ONLY — the engine is never
+  included). The `dry` engine remains for tooling-free testing (marker +
+  `skipped` QA).
 
-## Honest 501s (pending, by design)
+## Honest gaps (pending, by design)
 
-`POST /v1/templates` (import), `POST /v1/sites/{id}/deploy`, and
-`GET /v1/sites/{id}/export` return `501 not_implemented` with an
-explanation. They land together with the **real engine executor**: invoking
-d4-site-builder + the verify battery in an isolated per-job workspace. That
-is the next M2 chunk — it changes `lib/jobs.mjs`, not the API surface.
-
-## Not yet here (M2 remainder)
-
-Real engine executor (above) · webhooks (`job.completed` etc.) · Turso-backed
-store for keys/usage/jobs · deployment packaging (container) · CORS story for
-the browser Workbench (server-to-server only today).
+- `POST /v1/sites/{id}/deploy` → `501`: pushing an assembled site to the
+  customer's own Vercel/Turso/GitHub (their encrypted **connections**) is
+  the next integration. Export already gives them the repo today.
+- Full **browser QA** (headless build + axe/Playwright) is a heavier tier
+  on top of the structural gate — planned behind an opt-in flag.
+- Webhooks (`job.completed`, Stripe) · Turso-backed store · container
+  packaging · self-service billing activation (needs live Stripe keys).

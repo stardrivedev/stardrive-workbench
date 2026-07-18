@@ -38,14 +38,23 @@ runs server-side, in a CLI, or in a browser preview.
   marker + QA recorded as `skipped`, never passed).
 - Honest 501s where work remains: template import, deploy, export.
 
+**Real engine SHIPPED 2026-07-18** (packaging decision: **vendored, pinned** —
+`vendor/d4`, chosen over git-fetch for determinism, engine-invisibility, and
+hermetic offline builds):
+- `STARDRIVE_ENGINE=real` runs the vendored d4 assembler in an isolated
+  per-job workspace → a genuine standalone Next.js site (base + modules,
+  per-client config/theme baked in, uploaded assets slotted). Imported
+  customer templates are materialized directly.
+- Real QA gate: structural checks + WCAG contrast on the validated palettes;
+  QA-red fails the job, never a fake pass.
+- `GET /v1/sites/{id}/export` → real `.tar.gz` of the assembled repo (site
+  only; engine never included). Verified: standard `tar` unpacks a 59-file
+  Next.js project with the per-client name baked in.
+
 **Remaining for M2:**
-- The real engine executor: d4-site-builder + the verify battery in an
-  isolated per-job workspace (changes `lib/jobs.mjs`, not the API surface).
-  Requires an engine-repos packaging decision (vendored checkout vs. git
-  fetch at job time).
-- Deploy with licensee Vercel/Turso/GitHub tokens; export tarball.
-- Template import (git URL/tarball) + contrast validation on palettes.
-- Webhooks (`job.completed`, `job.failed`, `usage.threshold`).
+- Deploy with licensee Vercel/Turso/GitHub tokens (export already ships the repo).
+- Full browser QA tier (headless build + axe/Playwright) behind an opt-in flag.
+- Webhooks (`job.completed`, `job.failed`, `usage.threshold`, Stripe).
 - Turso-backed store swap; container packaging; CORS for the Workbench.
 
 ## M3 — Sellable 1.0 (~6–12 sessions + owner tasks)

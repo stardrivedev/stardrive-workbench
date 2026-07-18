@@ -479,11 +479,14 @@ await check('job lookups: bad id 400, unknown uuid 404', async () => {
   assert.strictEqual((await call('GET', '/v1/jobs/not-a-uuid', { key: fullKey })).status, 400);
   assert.strictEqual((await call('GET', '/v1/jobs/00000000-0000-4000-8000-000000000000', { key: fullKey })).status, 404);
 });
-await check('deploy and export are honest 501s', async () => {
+await check('deploy is an honest 501; export of a dry (unassembled) site is a clear 409', async () => {
   const dep = await call('POST', `/v1/sites/${siteId}/deploy`, { key: fullKey, body: {} });
   assert.strictEqual(dep.status, 501);
+  // This site was assembled by the DRY engine (marker only), so there is no
+  // real repo to export — an honest 409, not a fake archive.
   const exp = await call('GET', `/v1/sites/${siteId}/export`, { key: fullKey });
-  assert.strictEqual(exp.status, 501);
+  assert.strictEqual(exp.status, 409);
+  assert.strictEqual(exp.body.error.code, 'not_assembled');
 });
 await check('ACCOUNT ISOLATION: sites and jobs are invisible across accounts', async () => {
   const theirView = await call('GET', `/v1/sites/${siteId}`, { key: otherAccountKey });
@@ -678,6 +681,47 @@ await check('keys meter separately', async () => {
   const { body } = await call('GET', '/v1/usage', { key: mappingsOnlyKey });
   assert.strictEqual(body.counters['intake.parse'], 1);
   assert.strictEqual((body.counters['sites.assemble'] || 0), 0);
+});
+
+// ── Real engine (vendored d4 assembler) ──────────────────────────────────
+console.log('real engine:');
+await check('STARDRIVE_ENGINE=real assembles a genuine Next.js site, QA passes, export is a real tar.gz', async () => {
+  const PORT_D = 4654;
+  await startServer(PORT_D, { STARDRIVE_ENGINE: 'real' });
+  const base = `http://localhost:${PORT_D}`;
+  const mk = await call('POST', '/v1/sites', { key: fullKey, base, body: {
+    templateId: 'd4-site-template',
+    config: { siteName: 'Real Fab Co', tagline: 'We build.', contactEmail: 'hi@realfab.example', pairing: 'industrial-confidence', modules: ['d4-cms-core'] },
+  } });
+  assert.strictEqual(mk.status, 202);
+  const job = await waitForJob(fullKey, mk.body.jobId, 30000);
+  assert.strictEqual(job.status, 'done', 'real assembly completes');
+  assert.strictEqual(job.result.engine, 'real');
+  assert.strictEqual(job.result.qa.verdict, 'passed');
+  assert.strictEqual(job.result.qa.checks.some((c) => c.name.includes('contrast') && c.status === 'pass'), true);
+  assert.strictEqual(job.result.files > 10, true, 'a real site has many files');
+  assert.strictEqual(job.result.assembly.routes.includes('/'), true);
+  // The assembled site really exists on disk, with the per-client config baked in.
+  const ws = path.join(varDir, 'workspaces', mk.body.siteId);
+  assert.strictEqual(fs.existsSync(path.join(ws, 'package.json')), true);
+  assert.strictEqual(fs.readFileSync(path.join(ws, 'src/config/site.ts'), 'utf-8').includes('Real Fab Co'), true);
+  // Export → a real gzip stream (engine never included — it's a standalone site).
+  const exp = await fetch(`${base}/v1/sites/${mk.body.siteId}/export`, { headers: { Authorization: `Bearer ${fullKey}` } });
+  assert.strictEqual(exp.status, 200);
+  assert.strictEqual((exp.headers.get('content-type') || '').includes('gzip'), true);
+  const buf = Buffer.from(await exp.arrayBuffer());
+  assert.strictEqual(buf[0] === 0x1f && buf[1] === 0x8b, true, 'gzip magic bytes');
+  assert.strictEqual(buf.length > 1000, true, 'non-trivial archive');
+});
+await check('real engine: a bad module fails the job honestly (never a fake pass)', async () => {
+  const base = 'http://localhost:4654';
+  const mk = await call('POST', '/v1/sites', { key: fullKey, base, body: {
+    templateId: 'd4-site-template', config: { siteName: 'Broken Co', modules: ['d4-does-not-exist'] },
+  } });
+  assert.strictEqual(mk.status, 202);
+  const job = await waitForJob(fullKey, mk.body.jobId, 30000);
+  assert.strictEqual(job.status, 'failed');
+  assert.strictEqual((job.logs.at(-1)?.line || '').includes('Assembly failed'), true);
 });
 
 // ── Rate limiting (separate low-limit server) ────────────────────────────

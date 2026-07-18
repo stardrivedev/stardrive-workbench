@@ -857,8 +857,24 @@ $('#siteDetail').addEventListener('click', async (e) => {
     setTimeout(loadSites, 1500);
     return;
   }
-  const isDeploy = btn.dataset.siteact === 'deploy';
-  const { body } = await api('/v1/sites/' + btn.dataset.id + (isDeploy ? '/deploy' : '/export'), isDeploy ? { method: 'POST', body: {} } : {});
+  if (btn.dataset.siteact === 'export') {
+    // Real export streams a .tar.gz — fetch with auth and trigger a download.
+    const res = await fetch('/v1/sites/' + btn.dataset.id + '/export', { headers: { Authorization: 'Bearer ' + getApiKey() } });
+    if (res.ok) {
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = (res.headers.get('content-disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'site.tar.gz';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      $('#siteActOut').innerHTML = '<div class="report ok">Downloaded the assembled site — a standalone Next.js project (the engine is never included).</div>';
+    } else {
+      const body = await res.json().catch(() => ({}));
+      $('#siteActOut').innerHTML = '<div class="report" style="background:var(--warn-soft);color:var(--warn)">' + esc(body.error?.message || 'Export unavailable.') + '</div>';
+    }
+    return;
+  }
+  const { body } = await api('/v1/sites/' + btn.dataset.id + '/deploy', { method: 'POST', body: {} });
   $('#siteActOut').innerHTML = '<div class="report" style="background:var(--warn-soft);color:var(--warn)">' + esc(body.error?.message || 'Unavailable.') + '</div>';
 });
 

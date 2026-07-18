@@ -117,5 +117,20 @@ export function createAssets(store) {
     return out;
   }
 
-  return { slotsFor, state, add, find, remove, slotting };
+  /** Copy every uploaded asset into its target path inside an assembled site. */
+  function materialize(siteId, outDir) {
+    let count = 0;
+    for (const [slotId, items] of Object.entries(state(siteId))) {
+      for (const a of items) {
+        const dest = path.resolve(outDir, a.target);
+        if (!dest.startsWith(path.resolve(outDir) + path.sep)) continue; // guard
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(fileAbs(siteId, slotId, a.stored), dest);
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  return { slotsFor, state, add, find, remove, slotting, materialize };
 }

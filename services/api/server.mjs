@@ -25,6 +25,7 @@ import { relayChat, studioConfig } from './lib/chat-proxy.mjs';
 import { createStaticServer } from './lib/static.mjs';
 import { createConnections, PROVIDERS } from './lib/connections.mjs';
 import { createAssets, MAX_ASSET_BYTES } from './lib/assets.mjs';
+import { tarGzDir } from './lib/archive.mjs';
 import { runMapping, validateMapping } from '../../packages/field-mapping/index.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -35,6 +36,7 @@ const portArg = args.indexOf('--port');
 const PORT = Number(portArg >= 0 ? args[portArg + 1] : process.env.PORT) || 4650;
 const VAR_DIR = process.env.STARDRIVE_VAR_DIR || path.join(HERE, 'var');
 const ENGINE = process.env.STARDRIVE_ENGINE || 'dry';
+const ENGINE_DIR = path.join(HERE, '..', '..', 'vendor', 'd4'); // vendored d4 assembler + modules
 
 const SECURE_COOKIES = process.env.STARDRIVE_SECURE_COOKIES === '1' || process.env.NODE_ENV === 'production';
 
@@ -45,7 +47,17 @@ const billing = createBilling(accounts);
 const catalog = loadCatalog(); // throws at boot if the bundle is bad
 const imported = createImportedStore(store);
 const assets = createAssets(store);
-const jobs = createJobRunner(store, { engine: ENGINE, assets });
+
+/** For the real engine: resolve a template to { source, manifest, bundle? }. */
+function resolveTemplateForJob(account, name) {
+  const c = catalog.get(String(name));
+  if (c) return { source: 'bundled', manifest: c.manifest };
+  const imp = imported.get(account, String(name));
+  if (imp) return { source: 'imported', manifest: imp.manifest, bundle: imp.record.bundle };
+  return null;
+}
+
+const jobs = createJobRunner(store, { engine: ENGINE, assets, engineDir: ENGINE_DIR, resolveTemplate: resolveTemplateForJob });
 const connections = createConnections(store, VAR_DIR);
 
 function parseCookies(req) {
@@ -532,9 +544,20 @@ const ROUTES = [
   {
     method: 'GET', pattern: '/v1/sites/:id/export', scope: 'sites',
     handler: ({ params, key }) => {
-      loadSite(params.id, key.account);
-      throw httpError(501, 'not_implemented',
-        'Export lands with the assembly engine. Exports contain the assembled site repo only — a standalone Next.js project with zero Stardrive runtime dependency; the engine itself is never included.');
+      const s = loadSite(params.id, key.account);
+      const dir = store.path('workspaces', s.id);
+      if (!fs.existsSync(path.join(dir, 'package.json'))) {
+        throw httpError(409, 'not_assembled',
+          'This site has not been assembled by the real engine yet. Assemble it (with STARDRIVE_ENGINE=real) and try again.');
+      }
+      const slug = String(s.config.siteName || 'site').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'site';
+      // The assembled site repo ONLY — a standalone Next.js project, zero
+      // Stardrive runtime dependency; the engine itself is never included.
+      const buffer = tarGzDir(dir, slug);
+      return {
+        raw: true, status: 200, buffer,
+        headers: { 'Content-Type': 'application/gzip', 'Content-Disposition': `attachment; filename="${slug}.tar.gz"` },
+      };
     },
   },
 

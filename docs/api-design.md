@@ -106,8 +106,8 @@ during the private beta.
 |---|---|
 | `POST /v1/sites` | Body: `{ templateId, config }` or `{ templateId, mappingId, answers }` (parse + assemble in one step). Creates an async **job**. → `{ jobId, siteId }`. |
 | `GET /v1/jobs/{id}` | `queued → assembling → qa → done | failed`, with per-step logs and the QA report (routes render, links, console errors, axe incl. contrast, 375px overflow). QA-red never advances to deployable. |
-| `GET /v1/sites/{id}/export` | The assembled repo as a tarball (or push-to-their-GitHub via deploy). Always available — their site, their code. |
-| `POST /v1/sites/{id}/deploy` | Body: licensee credentials (Vercel token, Turso, GitHub) — passed per-call or stored encrypted per-licensee, their choice. → deploy job. |
+| `GET /v1/sites/{id}/export` | **Implemented.** The assembled repo as a `.tar.gz` — a standalone Next.js project, engine never included. `409` if the site hasn't been assembled by the real engine yet. |
+| `POST /v1/sites/{id}/deploy` | Pending (`501`). Will push the assembled site to the licensee's own Vercel/Turso/GitHub connections (stored encrypted). |
 | `POST /v1/sites/{id}/change` | A config delta: re-assemble applies only the delta, re-QA, ready to redeploy — the d4 change-loop doctrine (QA-rejected changes auto-revert). |
 
 ### Asset compartments (implemented)

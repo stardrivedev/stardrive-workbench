@@ -3,24 +3,47 @@
  * records, with pluggable executors per job kind.
  *
  * Engines:
- *   dry  (default) — assembles a workspace MARKER (d4.assembly.json with the
- *          resolved template/modules/config) and records a skipped-QA
- *          report. Exists so the whole API lifecycle is real and testable
- *          before the real engine is wired to this service.
- *   real — pending: will invoke d4-site-builder + the verify battery in an
- *          isolated per-job workspace (docs/api-design.md, implementation
- *          notes). Selecting it fails the job with a clear message until
- *          then — never silently pretending.
+ *   dry  — assembles a workspace MARKER (d4.assembly.json with the resolved
+ *          template/modules/config) and records a skipped-QA report. Kept so
+ *          the API lifecycle is testable with zero build tooling.
+ *   real — invokes the VENDORED d4 assembler (vendor/d4) in an isolated
+ *          per-job workspace, producing a real standalone Next.js site;
+ *          slots the account's uploaded assets into it; and runs a real
+ *          structural + WCAG-contrast QA gate (fast, no browser build).
+ *          Imported customer templates are materialized directly (they are
+ *          already complete sites). The output is exportable as a tar.gz —
+ *          assembled site only, the engine itself is never included.
  *
  * Job records survive restarts (var/jobs/); anything found queued/running
  * at boot is requeued.
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export function createJobRunner(store, { engine = 'dry', assets = null } = {}) {
+const BUILD_CONFIG_KEYS = ['siteName', 'tagline', 'description', 'contactEmail', 'phone', 'address', 'pairing', 'nav', 'announcement', 'quote', 'socialLinks', 'darkMode', 'themeDark', 'theme'];
+
+function countFiles(dir) {
+  let n = 0;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.isDirectory()) n += countFiles(path.join(dir, e.name));
+    else if (e.isFile()) n += 1;
+  }
+  return n;
+}
+
+function writeSafe(outDir, relPath, file) {
+  const dest = path.resolve(outDir, relPath);
+  if (!dest.startsWith(path.resolve(outDir) + path.sep)) throw new Error(`Unsafe path in bundle: ${relPath}`);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  const buf = file.contentBase64 != null ? Buffer.from(file.contentBase64, 'base64') : Buffer.from(String(file.content ?? ''), 'utf-8');
+  fs.writeFileSync(dest, buf);
+}
+
+export function createJobRunner(store, { engine = 'dry', assets = null, engineDir = null, resolveTemplate = null } = {}) {
   const queue = [];
   let running = false;
 
@@ -86,13 +109,98 @@ export function createJobRunner(store, { engine = 'dry', assets = null } = {}) {
   async function assemble(job) {
     const site = store.readJson(`sites/${job.siteId}.json`);
     if (!site) throw new Error(`Site ${job.siteId} not found.`);
+    if (job.engine === 'real') return assembleReal(job, site);
+    return assembleDry(job, site);
+  }
 
-    if (job.engine !== 'dry') {
-      throw new Error(
-        'The real assembly engine is not wired to this service yet (see docs/api-design.md, implementation notes). Run with STARDRIVE_ENGINE=dry.'
-      );
+  async function assembleReal(job, site) {
+    if (!engineDir || !fs.existsSync(path.join(engineDir, 'd4-site-builder', 'bin', 'assemble.mjs'))) {
+      throw new Error('The d4 engine is not available (vendor/d4 missing).');
+    }
+    const resolved = resolveTemplate && resolveTemplate(site.account, site.templateId);
+    if (!resolved) throw new Error(`Template "${site.templateId}" not found for this account.`);
+
+    const outDir = store.path('workspaces', job.siteId);
+    fs.rmSync(outDir, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(outDir), { recursive: true }); // parent only; the d4 assembler creates outDir itself
+
+    let assemblyRecord;
+    if (resolved.source === 'bundled') {
+      if (resolved.manifest.kind !== 'site') throw new Error(`"${site.templateId}" is a ${resolved.manifest.kind} module, not a base site template.`);
+      const modules = Array.isArray(site.config.modules) ? site.config.modules : [];
+      log(job, `Assembling "${site.config.siteName}" with the d4 engine (${modules.length} module(s))…`);
+      const buildCfg = { output: outDir, modules };
+      for (const k of BUILD_CONFIG_KEYS) if (site.config[k] !== undefined) buildCfg[k] = site.config[k];
+      const buildPath = store.path('workspaces', `${job.siteId}.build.json`);
+      fs.writeFileSync(buildPath, JSON.stringify(buildCfg, null, 2));
+      try {
+        const out = execFileSync(process.execPath, [
+          path.join(engineDir, 'd4-site-builder', 'bin', 'assemble.mjs'),
+          '--config', buildPath, '--modules-dir', engineDir,
+        ], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+        log(job, (out.trim().split('\n').find((l) => l.includes('Assembled')) || 'Assembled.').trim());
+      } catch (err) {
+        const msg = String(err.stderr || err.stdout || err.message || '').trim().split('\n').filter(Boolean).slice(-3).join(' ');
+        throw new Error(`Assembly failed: ${msg}`);
+      } finally {
+        fs.rmSync(buildPath, { force: true });
+      }
+      assemblyRecord = JSON.parse(fs.readFileSync(path.join(outDir, 'd4.assembly.json'), 'utf-8'));
+    } else {
+      log(job, `Materializing imported template "${site.templateId}" (${resolved.bundle.files.length} files)…`);
+      fs.mkdirSync(outDir, { recursive: true });
+      for (const f of resolved.bundle.files) writeSafe(outDir, f.path, f);
+      assemblyRecord = {
+        imported: true, template: site.templateId, siteName: site.config.siteName,
+        routes: Object.fromEntries((resolved.manifest.provides?.routes || []).map((r) => [r, site.templateId])),
+        assembledAt: new Date().toISOString(),
+      };
+      fs.writeFileSync(path.join(outDir, 'd4.assembly.json'), JSON.stringify(assemblyRecord, null, 2));
     }
 
+    const slotted = assets ? assets.materialize(job.siteId, outDir) : 0;
+    if (slotted) log(job, `Slotted ${slotted} uploaded asset(s) into the site.`);
+
+    // ── Real QA: structural + WCAG contrast (fast, no browser build) ──
+    const checks = [];
+    const has = (p) => fs.existsSync(path.join(outDir, p));
+    const add = (name, ok, detail) => checks.push({ name, status: ok ? 'pass' : 'fail', ...(detail ? { detail } : {}) });
+
+    add('assembled: package.json + src present', has('package.json') && has('src'));
+    if (resolved.source === 'bundled') {
+      let configApplied = false;
+      try { configApplied = fs.readFileSync(path.join(outDir, 'src/config/site.ts'), 'utf-8').includes(site.config.siteName); } catch { /* fails below */ }
+      add('per-client config written (site name in site.ts)', configApplied);
+      add('theme.css present', has('src/app/theme.css'));
+      let contrastOk = false; let detail;
+      try {
+        execFileSync(process.execPath, [path.join(engineDir, 'd4-site-builder', 'bin', 'validate-contrast.mjs')], { stdio: ['ignore', 'pipe', 'pipe'] });
+        contrastOk = true;
+      } catch (e) {
+        detail = String(e.stdout || '').split('\n').filter((l) => l.includes('FAIL')).slice(0, 2).join('; ') || undefined;
+      }
+      add('WCAG contrast (validated palettes)', contrastOk, detail);
+    }
+    add('routes declared', Object.keys(assemblyRecord.routes || {}).length > 0);
+
+    const passed = checks.every((c) => c.status === 'pass');
+    job.result = {
+      workspace: `workspaces/${job.siteId}`,
+      engine: 'real',
+      exportable: true,
+      files: countFiles(outDir),
+      assembly: {
+        imported: Boolean(assemblyRecord.imported),
+        modules: assemblyRecord.modules || {},
+        routes: Object.keys(assemblyRecord.routes || {}),
+      },
+      qa: { mode: 'structural', verdict: passed ? 'passed' : 'failed', checks },
+    };
+    log(job, `QA (structural): ${passed ? 'PASSED' : 'FAILED'} — ${checks.filter((c) => c.status === 'pass').length}/${checks.length} checks.`);
+    if (!passed) throw new Error('QA failed: ' + checks.filter((c) => c.status === 'fail').map((c) => c.name).join(', '));
+  }
+
+  async function assembleDry(job, site) {
     log(job, `Resolving template ${site.templateId}.`);
     await sleep(25);
     const modules = Array.isArray(site.config.modules) ? site.config.modules : [];

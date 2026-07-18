@@ -1,0 +1,34 @@
+/*
+ * Theme tokens. d4-site-builder rewrites this file when a theme, preset, or
+ * pairing is chosen in the build config. Values are space-separated RGB
+ * channels, consumed by tailwind.config.ts as rgb(var(--token) / alpha).
+ *
+ * --accent-contrast is the text color ON accent fills (buttons): white in
+ * light palettes, near-black ink in dark palettes where the accent itself
+ * becomes a light readable tint. The .dark block is only present when the
+ * palette source ships a contrast-validated dark variant; the theme toggle
+ * is gated on it (darkMode in src/config/design.generated.ts).
+ */
+:root {
+  color-scheme: light;
+  --accent: 67 56 202;         /* indigo 700 */
+  --accent-strong: 55 48 163;  /* indigo 800 */
+  --accent-contrast: 255 255 255;
+  --bg-base: 250 250 252;
+  --bg-surface: 255 255 255;
+  --text-heading: 17 24 39;
+  --text-body: 55 65 81;
+  --text-muted: 100 108 126;
+}
+
+.dark {
+  color-scheme: dark;
+  --accent: 159 153 255;
+  --accent-strong: 185 181 255;
+  --accent-contrast: 18 16 40;
+  --bg-base: 16 17 23;
+  --bg-surface: 24 25 33;
+  --text-heading: 238 239 245;
+  --text-body: 200 203 214;
+  --text-muted: 150 154 170;
+}

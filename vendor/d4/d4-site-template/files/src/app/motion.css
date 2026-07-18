@@ -1,0 +1,97 @@
+/*
+ * Motion signatures. The active signature is set as data-motion on <html>
+ * (from src/config/design.generated.ts). All motion is gated behind
+ * prefers-reduced-motion: no-preference; with reduce set, the site is
+ * fully static and nothing is ever hidden.
+ *
+ * Scroll-reveal classes (.d4-reveal / .d4-in) are added only by
+ * MotionLayer at runtime, so content is always visible without JS.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  /* Gentle page-load fade, shared by every signature. */
+  html[data-motion] body {
+    animation: d4-page-in 0.45s ease-out both;
+  }
+
+  /* ── Scroll reveal (reveal / reveal-fast / reveal-slow / playful-bounce /
+        ambient-drift; MotionLayer only activates it for those modes) ── */
+  .d4-reveal {
+    opacity: 0;
+    transform: translateY(14px);
+    transition:
+      opacity 0.6s ease,
+      transform 0.6s ease;
+  }
+  .d4-reveal.d4-in {
+    opacity: 1;
+    transform: none;
+  }
+  html[data-motion="reveal-fast"] .d4-reveal {
+    transition-duration: 0.35s;
+  }
+  html[data-motion="reveal-slow"] .d4-reveal {
+    transform: translateY(10px);
+    transition-duration: 1s;
+  }
+  html[data-motion="ambient-drift"] .d4-reveal {
+    transition-duration: 0.85s;
+  }
+  html[data-motion="playful-bounce"] .d4-reveal {
+    transform: translateY(18px) scale(0.98);
+    transition:
+      opacity 0.5s ease,
+      transform 0.55s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  /* ── Hover signatures ── */
+  html[data-motion^="hover-precision"] :is(a, button) {
+    transition:
+      color 0.12s ease-out,
+      background-color 0.12s ease-out,
+      border-color 0.12s ease-out,
+      box-shadow 0.12s ease-out,
+      transform 0.12s ease-out;
+  }
+  html[data-motion="hover-precision"] :is(a, button):hover {
+    transform: translateY(-1px);
+  }
+  html[data-motion="hover-precision-strong"] :is(a, button):hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 14px rgb(var(--text-heading) / 0.12);
+  }
+
+  html[data-motion="playful-bounce"] :is(a, button) {
+    transition:
+      color 0.15s ease-out,
+      background-color 0.15s ease-out,
+      border-color 0.15s ease-out,
+      transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  html[data-motion="playful-bounce"] :is(a, button):hover {
+    transform: scale(1.04);
+  }
+
+  /* ── Ambient drift: slow continuous motion on imagery in the lead
+        section. Content-safe: pure transform, no opacity change. ── */
+  html[data-motion="ambient-drift"] main section:first-of-type img {
+    animation: d4-drift 12s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes d4-page-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes d4-drift {
+  from {
+    transform: translateY(0) scale(1);
+  }
+  to {
+    transform: translateY(-6px) scale(1.015);
+  }
+}

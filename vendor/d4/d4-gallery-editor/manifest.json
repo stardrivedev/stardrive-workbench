@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/deneb4admin/d4-site-builder/main/schema/manifest.schema.json",
+  "name": "d4-gallery-editor",
+  "version": "1.0.0",
+  "kind": "feature",
+  "description": "Image galleries: named galleries managed through an admin editor (upload, reorder, alt text), a reusable <Gallery slug> component any page can embed, and a public /gallery page showing the main gallery.",
+  "clientFacingSummary": "Photo galleries you manage yourself: upload images, put them in order, and they appear on your site.",
+  "keywords": ["gallery", "images", "photos", "portfolio", "showcase", "work", "projects"],
+  "requires": { "d4-cms-core": ">=1.0.0" },
+  "provides": {
+    "routes": ["/gallery"],
+    "nav": [{ "label": "Gallery", "href": "/gallery" }],
+    "adminPanels": [
+      {
+        "id": "gallery",
+        "label": "Galleries",
+        "importPath": "@/modules/gallery/admin/GalleryEditor"
+      }
+    ],
+    "collections": ["galleries"],
+    "lib": ["@/modules/gallery/Gallery"]
+  },
+  "env": [],
+  "npmDependencies": {},
+  "copy": [{ "from": "files", "to": "." }]
+}
