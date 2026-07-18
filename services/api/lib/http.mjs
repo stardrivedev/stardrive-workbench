@@ -26,6 +26,25 @@ export function fail(res, status, code, message, extraHeaders = {}) {
   res.end(body);
 }
 
+/** Raw request body as a string — for signature-verified webhooks. */
+export function readRawBody(req, maxBytes = DEFAULT_MAX_BODY_BYTES) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > maxBytes) {
+        reject(Object.assign(new Error('Request body too large.'), { status: 413, code: 'body_too_large' }));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+    req.on('error', reject);
+  });
+}
+
 export function readBody(req, maxBytes = DEFAULT_MAX_BODY_BYTES) {
   return new Promise((resolve, reject) => {
     const chunks = [];

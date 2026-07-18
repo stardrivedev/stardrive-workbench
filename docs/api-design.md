@@ -64,6 +64,7 @@ Two auth layers, one account id threading both:
 | `GET /v1/billing` | Plan, token quota (used/included/remaining, over), the tier catalog, and this month's usage aggregated across the account's keys. |
 | `POST /v1/billing/overage` | Opt in/out of extra usage: keep generating past the included tokens, billed to the card on file at the plan's overage rate. Stored as a preference; actually charges once a card is on file. |
 | `POST /v1/billing/checkout` | Stripe Checkout subscription session for a paid plan. Honest `501` until `STRIPE_SECRET_KEY` (+ `STRIPE_PRICE_<PLAN>`) are set. |
+| `POST /webhooks/stripe` | Signature-verified Stripe webhook (raw-body). Flips the account's plan on `checkout.session.completed`, reverts to `free` on `customer.subscription.deleted`. Dormant `501` until `STRIPE_WEBHOOK_SECRET` is set. |
 
 ### Plans (starting numbers, tuned with beta data)
 
@@ -107,7 +108,7 @@ during the private beta.
 | `POST /v1/sites` | Body: `{ templateId, config }` or `{ templateId, mappingId, answers }` (parse + assemble in one step). Creates an async **job**. → `{ jobId, siteId }`. |
 | `GET /v1/jobs/{id}` | `queued → assembling → qa → done | failed`, with per-step logs and the QA report (routes render, links, console errors, axe incl. contrast, 375px overflow). QA-red never advances to deployable. |
 | `GET /v1/sites/{id}/export` | **Implemented.** The assembled repo as a `.tar.gz` — a standalone Next.js project, engine never included. `409` if the site hasn't been assembled by the real engine yet. |
-| `POST /v1/sites/{id}/deploy` | Pending (`501`). Will push the assembled site to the licensee's own Vercel/Turso/GitHub connections (stored encrypted). |
+| `POST /v1/sites/{id}/deploy` | **Implemented (GitHub).** Pushes the assembled site (only) to a repo the customer owns, using their connected GitHub token — link it to Vercel and it builds on push. `409` if not assembled, `422` if GitHub isn't connected. One-click Vercel/Turso provisioning is the next step. |
 | `POST /v1/sites/{id}/change` | A config delta: re-assemble applies only the delta, re-QA, ready to redeploy — the d4 change-loop doctrine (QA-rejected changes auto-revert). |
 
 ### Asset compartments (implemented)

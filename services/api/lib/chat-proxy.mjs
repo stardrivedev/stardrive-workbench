@@ -42,14 +42,26 @@ function tokensOf(usage) {
  * Input is only { system, messages } — no key ever comes from the caller.
  */
 export async function relayChat({ system, messages } = {}) {
+  // Validate input shape + enforce fair-use caps FIRST — an abusive request
+  // is rejected before we reveal config state or spend any model budget.
+  if (!Array.isArray(messages) || messages.length === 0 ||
+      !messages.every((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')) {
+    throw httpError(400, 'bad_request', 'messages must be a non-empty array of { role: "user"|"assistant", content }.');
+  }
+  const maxTurns = Number(process.env.STARDRIVE_LLM_MAX_TURNS) || 40;
+  const maxInputChars = Number(process.env.STARDRIVE_LLM_MAX_INPUT_CHARS) || 300_000; // ~75k tokens
+  if (messages.length > maxTurns) {
+    throw httpError(413, 'conversation_too_long', `This conversation is too long (${messages.length} turns; max ${maxTurns}). Start a fresh chat for a new template.`);
+  }
+  const inputChars = (system ? system.length : 0) + messages.reduce((n, m) => n + m.content.length, 0);
+  if (inputChars > maxInputChars) {
+    throw httpError(413, 'input_too_large', `This request is too large (${Math.round(inputChars / 1000)}k chars; max ${Math.round(maxInputChars / 1000)}k). Trim the conversation or start fresh.`);
+  }
+
   const key = process.env.STARDRIVE_LLM_KEY;
   if (!key) {
     throw httpError(501, 'studio_unconfigured',
       'The Template Studio is not enabled yet — its model is not configured. It turns on the moment the operator sets STARDRIVE_LLM_KEY; no key of yours is ever required.');
-  }
-  if (!Array.isArray(messages) || messages.length === 0 ||
-      !messages.every((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')) {
-    throw httpError(400, 'bad_request', 'messages must be a non-empty array of { role: "user"|"assistant", content }.');
   }
 
   const { provider, model } = studioConfig();

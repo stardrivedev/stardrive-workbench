@@ -99,12 +99,20 @@ until `STRIPE_SECRET_KEY` (+ `STRIPE_PRICE_<PLAN>` price ids) are set.
   included). The `dry` engine remains for tooling-free testing (marker +
   `skipped` QA).
 
+- **Deploy**: `POST /v1/sites/{id}/deploy` pushes the assembled site (only)
+  to a repo the customer owns via their connected **GitHub** token; link it
+  to Vercel and it builds on push. One-click Vercel/Turso provisioning is
+  the next integration.
+- **Billing**: signature-verified Stripe **webhook** (`POST /webhooks/stripe`)
+  flips plans on subscribe/cancel; checkout + webhook are dormant until the
+  Stripe keys are set. Token quotas + opt-in overage are enforced now.
+- **Email**: welcome + lead notifications via Resend, dormant until
+  `RESEND_API_KEY`. **Fair-use** caps per-generation input.
+
 ## Honest gaps (pending, by design)
 
-- `POST /v1/sites/{id}/deploy` → `501`: pushing an assembled site to the
-  customer's own Vercel/Turso/GitHub (their encrypted **connections**) is
-  the next integration. Export already gives them the repo today.
-- Full **browser QA** (headless build + axe/Playwright) is a heavier tier
-  on top of the structural gate — planned behind an opt-in flag.
-- Webhooks (`job.completed`, Stripe) · Turso-backed store · container
-  packaging · self-service billing activation (needs live Stripe keys).
+- One-click **Vercel/Turso** provisioning (deploy pushes to GitHub today).
+- Full **browser QA** (headless build + axe/Playwright) as a tier on top of
+  the structural gate, behind an opt-in flag.
+- Turso-backed store · container orchestration · live-key activation of
+  Studio/Stripe/email (the seams are built and tested dormant).

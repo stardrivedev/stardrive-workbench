@@ -1,0 +1,6 @@
+.git
+**/node_modules
+services/api/var
+**/.d4-cache
+*.log
+.DS_Store

@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { createServer, json, fail, readBody, matchRoute } from './lib/http.mjs';
+import { createServer, json, fail, readBody, readRawBody, matchRoute } from './lib/http.mjs';
 import { VarStore, assertSafeSlug } from './lib/store.mjs';
 import { createAuth, SCOPES } from './lib/auth.mjs';
 import { mintKey, listKeys, rotateKey, revokeKey } from './lib/keys.mjs';
@@ -26,6 +26,8 @@ import { createStaticServer } from './lib/static.mjs';
 import { createConnections, PROVIDERS } from './lib/connections.mjs';
 import { createAssets, MAX_ASSET_BYTES } from './lib/assets.mjs';
 import { tarGzDir } from './lib/archive.mjs';
+import { pushToGitHub } from './lib/deploy.mjs';
+import { createEmail } from './lib/email.mjs';
 import { runMapping, validateMapping } from '../../packages/field-mapping/index.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -59,6 +61,7 @@ function resolveTemplateForJob(account, name) {
 
 const jobs = createJobRunner(store, { engine: ENGINE, assets, engineDir: ENGINE_DIR, resolveTemplate: resolveTemplateForJob });
 const connections = createConnections(store, VAR_DIR);
+const email = createEmail();
 
 function parseCookies(req) {
   const out = {};
@@ -149,6 +152,7 @@ const ROUTES = [
       const account = accounts.signup(body || {});
       const { record, secret } = mintKey(store, { name: 'Default key', scopes: SCOPES, account: account.id });
       const token = accounts.createSession(account.id);
+      email.welcome(account); // fire-and-forget; no-op until email is configured
       return { status: 201, cookies: [sessionCookie(token)], body: { account, apiKey: { ...record, secret } } };
     },
   },
@@ -212,6 +216,13 @@ const ROUTES = [
   {
     method: 'POST', pattern: '/v1/billing/checkout', scope: 'session', bodyLimit: 10_000,
     handler: async ({ account, body }) => ({ status: 200, body: await billing.createCheckout(account, body || {}) }),
+  },
+  {
+    // Stripe subscription webhook (signature-verified). Flips the account's
+    // plan on subscribe, reverts on cancel. Public + raw-body (the signature
+    // is computed over the exact bytes). Dormant 501 until configured.
+    method: 'POST', pattern: '/webhooks/stripe', scope: 'public', rawBody: true, bodyLimit: 1_000_000,
+    handler: ({ rawBody, req }) => ({ status: 200, body: billing.handleWebhook(rawBody, req.headers['stripe-signature']) }),
   },
   {
     // Opt in/out of extra usage: keep generating past the included tokens,
@@ -532,13 +543,28 @@ const ROUTES = [
     },
   },
   {
-    method: 'POST', pattern: '/v1/sites/:id/deploy', scope: 'deploy',
-    handler: ({ params, key }) => {
-      loadSite(params.id, key.account);
+    method: 'POST', pattern: '/v1/sites/:id/deploy', scope: 'deploy', meter: 'sites.deploy',
+    handler: async ({ params, body, key }) => {
+      const s = loadSite(params.id, key.account);
+      const dir = store.path('workspaces', s.id);
+      if (!fs.existsSync(path.join(dir, 'package.json'))) {
+        throw httpError(409, 'not_assembled', 'Assemble the site with the real engine before deploying.');
+      }
       const conns = connections.get(key.account);
-      const ready = PROVIDERS.filter((p) => conns[p].connected);
-      throw httpError(501, 'not_implemented',
-        `Deploy lands with the assembly engine (staged rollout). It will use YOUR connections (${ready.length ? `connected: ${ready.join(', ')}` : 'none connected yet — see PUT /v1/connections/{provider}'}), deploy only the assembled site, and never ship any part of the engine.`);
+      if (!conns.github.connected) {
+        throw httpError(422, 'no_github', 'Connect a GitHub token in Connections to deploy — Stardrive pushes the assembled site (only) to a repo YOU own; link it to Vercel and it builds on push.');
+      }
+      if (!conns.github.owner) {
+        throw httpError(422, 'no_owner', 'Add your GitHub owner (username or org) to the GitHub connection so we know where to push.');
+      }
+      const token = connections.reveal(key.account, 'github');
+      const repo = String(body?.repo || s.config.siteName || 'site').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '') || 'site';
+      const result = await pushToGitHub({ token, owner: conns.github.owner, repo, dir, message: `Stardrive: ${s.config.siteName}` });
+      return {
+        status: 200,
+        body: { deployed: true, target: 'github', ...result,
+          note: 'Pushed the assembled site to your GitHub. Link the repo to Vercel (or your host) and it builds on push. One-click Vercel/Turso provisioning is the next step.' },
+      };
     },
   },
   {
@@ -632,18 +658,19 @@ const ROUTES = [
       const ip = String(req.socket?.remoteAddress || 'unknown');
       if (!leadThrottle(ip)) throw httpError(429, 'rate_limited', 'Too many requests from this address — try again in an hour.');
       const name = String(body?.name ?? '').trim();
-      const email = String(body?.email ?? '').trim();
+      const emailAddr = String(body?.email ?? '').trim();
       const company = String(body?.company ?? '').trim();
       const message = String(body?.message ?? '').trim();
       if (!name || name.length > 200) throw httpError(400, 'bad_request', 'name is required (max 200 chars).');
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 320) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailAddr) || emailAddr.length > 320) {
         throw httpError(400, 'bad_request', 'A valid email is required.');
       }
       if (company.length > 300 || message.length > 4000) {
         throw httpError(400, 'bad_request', 'company max 300 chars; message max 4000 chars.');
       }
-      const lead = { id: crypto.randomUUID(), name, email, company, message, at: new Date().toISOString() };
+      const lead = { id: crypto.randomUUID(), name, email: emailAddr, company, message, at: new Date().toISOString() };
       store.writeJson(`leads/${lead.id}.json`, lead);
+      email.leadNotify(lead); // fire-and-forget; no-op until email is configured
       return { status: 201, body: { ok: true, message: 'Request received — we reply to every one.' } };
     },
   },
@@ -700,8 +727,13 @@ const server = createServer(async (req, res) => {
     }
   }
 
-  const body = req.method === 'POST' || req.method === 'PUT' ? await readBody(req, route.bodyLimit) : undefined;
-  const out = await route.handler({ params, body, key, account, req });
+  let body;
+  let rawBody;
+  if (req.method === 'POST' || req.method === 'PUT') {
+    if (route.rawBody) rawBody = await readRawBody(req, route.bodyLimit);
+    else body = await readBody(req, route.bodyLimit);
+  }
+  const out = await route.handler({ params, body, rawBody, key, account, req });
   if (key) {
     auth.meter(key.id, 'requests');
     if (route.meter && out.status < 400) auth.meter(key.id, route.meter);

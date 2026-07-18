@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
+import crypto from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -138,8 +139,8 @@ await check('unknown route → 404', async () => {
 
 // ── Accounts, sessions, self-service keys, billing ───────────────────────
 console.log('accounts + sessions:');
-const cookieCall = async (method, pathname, { cookie, body } = {}) => {
-  const res = await fetch(BASE + pathname, {
+const cookieCall = async (method, pathname, { cookie, body, base = BASE } = {}) => {
+  const res = await fetch(base + pathname, {
     method,
     headers: { ...(cookie ? { Cookie: cookie } : {}), ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -227,6 +228,31 @@ await check('billing: plan + token quota + a tier catalog with per-token discoun
     // Overage always priced above the included effective rate (keep-working pays).
     assert.strictEqual(paid[i].overagePer1kUsd > paid[i].effectivePer1kUsd, true, 'overage above included effective');
   }
+});
+await check('billing webhook: dormant 501 without a secret; with one, a signed checkout.completed flips the plan', async () => {
+  // Dormant on the default server (no STRIPE_WEBHOOK_SECRET).
+  assert.strictEqual((await call('POST', '/webhooks/stripe', { body: {} })).status, 501);
+  // A dedicated server WITH the secret proves the signature check + plan flip.
+  const PORT_W = 4655;
+  const secret = 'whsec_e2e_test_secret';
+  await startServer(PORT_W, { STRIPE_WEBHOOK_SECRET: secret });
+  const wbase = `http://localhost:${PORT_W}`;
+  // A fresh account to flip.
+  const sres = await cookieCall('POST', '/auth/signup', { body: { email: `flip+${Date.now()}@example.com`, password: 'password123' } });
+  const acct = sres.body.account.id;
+  const wcookie = `sd_session=${sres.token}`;
+  const payload = JSON.stringify({ type: 'checkout.session.completed', data: { object: { client_reference_id: acct, metadata: { account: acct, plan: 'studio' } } } });
+  const t = Math.floor(Date.now() / 1000);
+  const sig = crypto.createHmac('sha256', secret).update(`${t}.${payload}`).digest('hex');
+  const good = await fetch(`${wbase}/webhooks/stripe`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'stripe-signature': `t=${t},v1=${sig}` }, body: payload });
+  assert.strictEqual(good.status, 200);
+  assert.strictEqual((await good.json()).action.includes('studio'), true);
+  // The account is now on the Studio plan.
+  const me = await cookieCall('GET', '/auth/me', { cookie: wcookie, base: wbase });
+  assert.strictEqual(me.body.account.plan, 'studio');
+  // A bad signature is rejected.
+  const bad = await fetch(`${wbase}/webhooks/stripe`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'stripe-signature': `t=${t},v1=deadbeef` }, body: payload });
+  assert.strictEqual(bad.status, 400);
 });
 await check('billing: extra-usage toggle persists; checkout is an honest 501 until Stripe is configured', async () => {
   const on = await cookieCall('POST', '/v1/billing/overage', { cookie: sessionCookie, body: { enabled: true } });
@@ -479,11 +505,11 @@ await check('job lookups: bad id 400, unknown uuid 404', async () => {
   assert.strictEqual((await call('GET', '/v1/jobs/not-a-uuid', { key: fullKey })).status, 400);
   assert.strictEqual((await call('GET', '/v1/jobs/00000000-0000-4000-8000-000000000000', { key: fullKey })).status, 404);
 });
-await check('deploy is an honest 501; export of a dry (unassembled) site is a clear 409', async () => {
+await check('deploy and export of a dry (unassembled) site are honest 409s, never fakes', async () => {
+  // This site was assembled by the DRY engine (marker only) — no real repo.
   const dep = await call('POST', `/v1/sites/${siteId}/deploy`, { key: fullKey, body: {} });
-  assert.strictEqual(dep.status, 501);
-  // This site was assembled by the DRY engine (marker only), so there is no
-  // real repo to export — an honest 409, not a fake archive.
+  assert.strictEqual(dep.status, 409);
+  assert.strictEqual(dep.body.error.code, 'not_assembled');
   const exp = await call('GET', `/v1/sites/${siteId}/export`, { key: fullKey });
   assert.strictEqual(exp.status, 409);
   assert.strictEqual(exp.body.error.code, 'not_assembled');
@@ -602,15 +628,17 @@ await check('connections: encrypted at rest — raw store never contains token p
   assert.strictEqual(raw.includes('ghp_e2etoken1234'), false);
   assert.strictEqual(raw.includes('"enc"'), true, 'ciphertext structure present');
 });
-await check('connections: unknown provider 422, bad token 400, delete works, deploy 501 names your connections', async () => {
+await check('connections: unknown provider 422, bad token 400, delete works', async () => {
   assert.strictEqual((await call('PUT', '/v1/connections/netlify', { key: fullKey, body: { token: 'x'.repeat(20) } })).status, 422);
   assert.strictEqual((await call('PUT', '/v1/connections/turso', { key: fullKey, body: { token: 'has spaces' } })).status, 400);
-  const dep = await call('POST', `/v1/sites/${siteId}/deploy`, { key: fullKey, body: {} });
-  assert.strictEqual(dep.status, 501);
-  assert.strictEqual(dep.body.error.message.includes('vercel'), true, '501 reflects connected providers');
-  assert.strictEqual(dep.body.error.message.includes('never ship any part of the engine'), true);
   assert.strictEqual((await call('DELETE', '/v1/connections/github', { key: fullKey })).status, 200);
   assert.strictEqual((await call('DELETE', '/v1/connections/github', { key: fullKey })).status, 404);
+});
+await check('deploy actuator: 409 before assembly, then clear 422 guidance until GitHub is connected', async () => {
+  // This (dry-assembled) site has no real repo to push.
+  const notAssembled = await call('POST', `/v1/sites/${siteId}/deploy`, { key: fullKey, body: {} });
+  assert.strictEqual(notAssembled.status, 409);
+  assert.strictEqual(notAssembled.body.error.code, 'not_assembled');
 });
 
 // ── Workbench: static pages + the BYO-key chat relay ────────────────────
@@ -662,6 +690,16 @@ await check('studio relay: needs a Stardrive key; dormant (501) until the operat
   assert.strictEqual(dormant.body.error.code, 'studio_unconfigured');
   assert.strictEqual(dormant.body.error.message.includes('no key of yours'), true);
 });
+await check('studio fair-use: an oversized request is capped (413) before any model spend', async () => {
+  const huge = 'x'.repeat(320_000);
+  const big = await call('POST', '/workbench/chat', { key: fullKey, body: { messages: [{ role: 'user', content: huge }] } });
+  assert.strictEqual(big.status, 413);
+  assert.strictEqual(big.body.error.code, 'input_too_large');
+  const manyTurns = { messages: Array.from({ length: 50 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: 'turn' })) };
+  const long = await call('POST', '/workbench/chat', { key: fullKey, body: manyTurns });
+  assert.strictEqual(long.status, 413);
+  assert.strictEqual(long.body.error.code, 'conversation_too_long');
+});
 
 // ── Usage metering ───────────────────────────────────────────────────────
 console.log('usage:');
@@ -712,6 +750,10 @@ await check('STARDRIVE_ENGINE=real assembles a genuine Next.js site, QA passes, 
   const buf = Buffer.from(await exp.arrayBuffer());
   assert.strictEqual(buf[0] === 0x1f && buf[1] === 0x8b, true, 'gzip magic bytes');
   assert.strictEqual(buf.length > 1000, true, 'non-trivial archive');
+  // Deploy of a real, assembled site with no GitHub connection → clear guidance.
+  const dep = await call('POST', `/v1/sites/${mk.body.siteId}/deploy`, { key: fullKey, base, body: {} });
+  assert.strictEqual(dep.status, 422);
+  assert.strictEqual(dep.body.error.code, 'no_github');
 });
 await check('real engine: a bad module fails the job honestly (never a fake pass)', async () => {
   const base = 'http://localhost:4654';

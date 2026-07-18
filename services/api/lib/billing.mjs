@@ -19,6 +19,8 @@
  * Numbers are sane, profitable starting points to be tuned with beta data
  * and the chosen generation model (STARDRIVE_LLM_MODEL drives real cost).
  */
+import crypto from 'node:crypto';
+
 const httpError = (status, code, message) => Object.assign(new Error(message), { status, code });
 
 // includedTokens sized so effective $/1k descends up the tiers; overagePer1kUsd
@@ -153,6 +155,10 @@ export function createBilling(accounts) {
       'line_items[0][quantity]': '1',
       client_reference_id: account.id,
       customer_email: account.email,
+      'metadata[account]': account.id,
+      'metadata[plan]': plan,
+      'subscription_data[metadata][account]': account.id,
+      'subscription_data[metadata][plan]': plan,
       success_url: successUrl || 'https://stardrive.dev/workbench/#/billing?checkout=success',
       cancel_url: cancelUrl || 'https://stardrive.dev/workbench/#/billing?checkout=cancel',
     });
@@ -166,5 +172,44 @@ export function createBilling(accounts) {
     return { url: data.url, id: data.id };
   }
 
-  return { configured, summary, usageSummary, quota, checkStudioQuota, createCheckout };
+  /** Verify a Stripe webhook signature (scheme: t=…,v1=… HMAC-SHA256). */
+  function verifySignature(rawBody, sigHeader, secret) {
+    const parts = Object.fromEntries(String(sigHeader || '').split(',').map((kv) => kv.split('=')));
+    if (!parts.t || !parts.v1) return false;
+    const expected = crypto.createHmac('sha256', secret).update(`${parts.t}.${rawBody}`).digest('hex');
+    const a = Buffer.from(expected);
+    const b = Buffer.from(parts.v1);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
+
+  /**
+   * Handle a Stripe webhook: flip the account's plan on subscribe, revert to
+   * free on cancel. Dormant (501) until STRIPE_WEBHOOK_SECRET is set.
+   */
+  function handleWebhook(rawBody, sigHeader) {
+    const secret = process.env.STRIPE_WEBHOOK_SECRET;
+    if (!secret) throw httpError(501, 'billing_unconfigured', 'Stripe webhooks are not enabled yet (STRIPE_WEBHOOK_SECRET unset).');
+    if (!verifySignature(rawBody, sigHeader, secret)) throw httpError(400, 'bad_signature', 'Invalid Stripe signature.');
+    let event;
+    try { event = JSON.parse(rawBody); } catch { throw httpError(400, 'bad_json', 'Webhook body is not JSON.'); }
+    const obj = event?.data?.object || {};
+    if (event.type === 'checkout.session.completed') {
+      const accountId = obj.client_reference_id || obj.metadata?.account;
+      const plan = obj.metadata?.plan;
+      if (accountId && plan && PLANS[plan] && accounts.setPlan(accountId, plan)) {
+        return { received: true, action: `plan set to ${plan}`, account: accountId };
+      }
+      return { received: true, action: 'ignored (missing account or plan)' };
+    }
+    if (event.type === 'customer.subscription.deleted') {
+      const accountId = obj.metadata?.account;
+      if (accountId && accounts.setPlan(accountId, 'free')) {
+        return { received: true, action: 'plan reverted to free', account: accountId };
+      }
+      return { received: true, action: 'ignored (no account metadata)' };
+    }
+    return { received: true, action: `ignored (${event.type})` };
+  }
+
+  return { configured, summary, usageSummary, quota, checkStudioQuota, createCheckout, handleWebhook };
 }
