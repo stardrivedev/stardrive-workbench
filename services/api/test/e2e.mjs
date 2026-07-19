@@ -727,9 +727,10 @@ await check('STARDRIVE_ENGINE=real assembles a genuine Next.js site, QA passes, 
   const PORT_D = 4654;
   await startServer(PORT_D, { STARDRIVE_ENGINE: 'real' });
   const base = `http://localhost:${PORT_D}`;
+  // Feature toggles map to modules: gallery + blog (each auto-pulls cms-core).
   const mk = await call('POST', '/v1/sites', { key: fullKey, base, body: {
     templateId: 'd4-site-template',
-    config: { siteName: 'Real Fab Co', tagline: 'We build.', contactEmail: 'hi@realfab.example', pairing: 'industrial-confidence', modules: ['d4-cms-core'] },
+    config: { siteName: 'Real Fab Co', tagline: 'We build.', contactEmail: 'hi@realfab.example', pairing: 'industrial-confidence', modules: ['d4-gallery-editor', 'd4-insights-blog'] },
   } });
   assert.strictEqual(mk.status, 202);
   const job = await waitForJob(fullKey, mk.body.jobId, 30000);
@@ -739,6 +740,10 @@ await check('STARDRIVE_ENGINE=real assembles a genuine Next.js site, QA passes, 
   assert.strictEqual(job.result.qa.checks.some((c) => c.name.includes('contrast') && c.status === 'pass'), true);
   assert.strictEqual(job.result.files > 10, true, 'a real site has many files');
   assert.strictEqual(job.result.assembly.routes.includes('/'), true);
+  // The selected feature-modules produced real routes, deps auto-resolved.
+  assert.strictEqual(job.result.assembly.routes.includes('/gallery'), true, 'gallery module route');
+  assert.strictEqual(job.result.assembly.routes.includes('/insights'), true, 'blog module route');
+  assert.strictEqual(Object.keys(job.result.assembly.modules).includes('d4-cms-core'), true, 'cms-core dependency auto-resolved');
   // The assembled site really exists on disk, with the per-client config baked in.
   const ws = path.join(varDir, 'workspaces', mk.body.siteId);
   assert.strictEqual(fs.existsSync(path.join(ws, 'package.json')), true);

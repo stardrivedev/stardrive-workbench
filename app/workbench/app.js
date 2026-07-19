@@ -630,12 +630,16 @@ function renderImportReport(el, status, body) {
 }
 
 /* ══════════════ Feature toggles → AI prompt ══════════════ */
+// `module` ties a feature to a real d4 engine module added at assembly time.
+// Features without `module` are template-design elements the AI builds in.
 const FEATURES = [
   { id: 'contact-form', label: 'Contact form', prompt: 'A working contact form on /contact posting to /api/contact.' },
   { id: 'quote', label: 'Quote request', prompt: 'A site-wide "request a quote" modal opened by header/CTA buttons (the d4:open-quote-modal event), posting to /api/contact with a topic select.' },
-  { id: 'gallery', label: 'Photo gallery', prompt: 'A photo gallery / portfolio grid page.' },
-  { id: 'blog', label: 'Blog / articles', prompt: 'A blog: an article listing page plus individual post pages.' },
-  { id: 'store', label: 'Online store', prompt: 'A product catalog / simple store: product cards with prices and a product detail page.' },
+  { id: 'gallery', label: 'Photo gallery', prompt: 'A photo gallery / portfolio grid page.', module: 'd4-gallery-editor' },
+  { id: 'blog', label: 'Blog / articles', prompt: 'A blog: an article listing page plus individual post pages.', module: 'd4-insights-blog' },
+  { id: 'store', label: 'Online store', prompt: 'A product catalog / simple store: product cards with prices and a product detail page.', module: 'd4-catalog' },
+  { id: 'careers', label: 'Careers / jobs', prompt: 'A careers page listing open roles with an apply flow.', module: 'd4-careers-portal' },
+  { id: 'cms', label: 'Editable content (admin)', prompt: 'An admin dashboard so the site owner can edit content without code.', module: 'd4-cms-core' },
   { id: 'booking', label: 'Booking', prompt: 'A booking / appointment request section where visitors request a time.' },
   { id: 'testimonials', label: 'Testimonials', prompt: 'A testimonials section with customer quotes.' },
   { id: 'faq', label: 'FAQ', prompt: 'An FAQ section with an accordion.' },
@@ -647,6 +651,11 @@ const FEATURES = [
   { id: 'map', label: 'Map / location', prompt: 'A location section with an address and a simple map placeholder.' },
   { id: 'social', label: 'Social links', prompt: 'Social media links in the footer.' },
 ];
+const FEATURE_BY_ID = Object.fromEntries(FEATURES.map((f) => [f.id, f]));
+/** Module-backed features enabled → the d4 module names to assemble with. */
+function selectedModules() {
+  return FEATURES.filter((f) => f.module && enabledFeatures.has(f.id)).map((f) => f.module);
+}
 const enabledFeatures = new Set(JSON.parse(localStorage.getItem('sd.features') || '["contact-form","dark-mode"]'));
 
 function renderFeatures() {
@@ -675,7 +684,10 @@ function featurePromptBlock() {
     + 'REQUESTED FEATURES (the customer toggled these ON — include ALL of them,\n'
     + 'and declare any new page routes they add in manifest.provides.routes)\n'
     + '=====================================================================\n'
-    + on.map((f) => `- ${f.label}: ${f.prompt}`).join('\n');
+    + on.map((f) => `- ${f.label}: ${f.prompt}`).join('\n')
+    + '\nBuild these into the template design at descriptive routes of your own '
+    + '(e.g. /portfolio, /work, /shop). Do NOT use the reserved routes /admin, '
+    + '/catalog, /careers, /insights, or /gallery — those belong to engine modules.';
 }
 document.getElementById('featureList')?.addEventListener('change', (e) => {
   const cb = e.target.closest('input[data-feature]');
@@ -830,14 +842,48 @@ $('#clearChatBtn').addEventListener('click', () => {
 });
 
 /* ══════════════ Sites ══════════════ */
+const templateSource = {}; // name -> 'bundled' | 'imported'
 async function loadSiteTemplateOptions() {
   const sel = $('#siteTemplateSel');
   if (!getApiKey()) return;
   const { status, body } = await api('/v1/templates');
   if (status !== 200) return;
   const bases = body.templates.filter((t) => t.kind === 'site');
+  for (const t of bases) templateSource[t.name] = t.source;
   sel.innerHTML = bases.map((t) => '<option value="' + esc(t.name) + '">' + esc(t.name) + ' (' + esc(t.source) + ')</option>').join('');
+  renderAssembleFeatures();
 }
+
+/** The module-backed features, checked by default from the Studio selection. */
+function renderAssembleFeatures() {
+  const root = $('#assembleFeatures');
+  if (!root) return;
+  const moduleFeatures = FEATURES.filter((f) => f.module);
+  root.innerHTML = moduleFeatures.map((f) => {
+    const on = enabledFeatures.has(f.id);
+    return '<label class="feature' + (on ? ' on' : '') + '"><input type="checkbox" ' + (on ? 'checked' : '') + ' data-assemblefeat="' + f.id + '"> ' + esc(f.label) + '</label>';
+  }).join('');
+  updateAssembleNote();
+}
+function updateAssembleNote() {
+  const base = $('#siteTemplateSel').value;
+  const src = templateSource[base];
+  const note = $('#assembleFeatureNote');
+  if (src === 'imported') {
+    note.innerHTML = 'This is one of your own templates — its features are already built into the design, so nothing extra is added here.';
+  } else {
+    const mods = [...document.querySelectorAll('#assembleFeatures input:checked')].map((c) => FEATURE_BY_ID[c.dataset.assemblefeat]?.label).filter(Boolean);
+    note.innerHTML = mods.length
+      ? 'Adds real engine features to this catalog template: <b>' + mods.map(esc).join('</b>, <b>') + '</b>.'
+      : 'No add-on features selected — the base template ships as-is.';
+  }
+}
+$('#assembleFeatures').addEventListener('change', (e) => {
+  const cb = e.target.closest('input[data-assemblefeat]');
+  if (cb) cb.closest('.feature').classList.toggle('on', cb.checked);
+  updateAssembleNote();
+});
+$('#siteTemplateSel').addEventListener('change', updateAssembleNote);
 
 async function loadSites() {
   const tbody = $('#sitesTable tbody');
@@ -981,6 +1027,13 @@ $('#assembleBtn').addEventListener('click', async () => {
   const config = { siteName };
   const tagline = $('#siteTaglineInput').value.trim();
   if (tagline) config.tagline = tagline;
+  // Feature toggles → real engine modules. Only bundled catalog templates
+  // support module assembly; imported templates have features baked in.
+  if (templateSource[templateId] !== 'imported') {
+    const mods = [...document.querySelectorAll('#assembleFeatures input:checked')]
+      .map((c) => FEATURE_BY_ID[c.dataset.assemblefeat]?.module).filter(Boolean);
+    if (mods.length) config.modules = mods;
+  }
   out.innerHTML = '<div class="report ok">Assembling…</div>';
   const { status, body } = await api('/v1/sites', { method: 'POST', body: { templateId, config } });
   if (status !== 202) {

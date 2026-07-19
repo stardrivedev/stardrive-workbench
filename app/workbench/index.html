@@ -190,7 +190,7 @@
 
     <!-- ═══ Sites ═══ -->
     <section class="view" id="view-sites">
-      <p class="lede">Assemble a site from any template, watch the job run, and read the QA report — so you always see what you're getting (or delivering to a client) before it ships. With the real engine, <b>Preview &amp; export</b> downloads the finished site as a standalone Next.js project. One-click deploy to your own hosting is the next step.</p>
+      <p class="lede"><b>Step 2 · Build a site.</b> Assemble a client's real Next.js site from a template. The features you picked in the Studio carry over here as engine modules — toggle any others you need. Watch the QA report, then <b>Preview &amp; export</b> the finished project or <b>Deploy</b> it to your own hosting.</p>
       <div class="card">
         <h2>Assemble a site</h2>
         <div class="grid2">
@@ -201,6 +201,11 @@
         </div>
         <div class="field"><label for="siteTaglineInput">Tagline (optional)</label>
           <input id="siteTaglineInput" placeholder="e.g. Custom fixtures, built to last"></div>
+        <div class="field">
+          <label>Features to include</label>
+          <div id="assembleFeatures" class="featurelist"></div>
+          <div id="assembleFeatureNote" style="font-size:0.78rem;color:var(--muted);margin-top:0.5rem"></div>
+        </div>
         <button class="primary" id="assembleBtn" type="button">Assemble</button>
         <div id="assembleOut"></div>
       </div>
