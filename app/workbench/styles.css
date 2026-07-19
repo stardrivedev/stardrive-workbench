@@ -83,6 +83,8 @@ code { font-family: var(--mono); font-size: 0.87em; background: var(--code-bg); 
 .nav-item:hover { background: var(--panel); }
 .nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .nav-item .glyph { width: 1.15rem; text-align: center; opacity: 0.85; }
+.nav-group { font-size: 0.66rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); padding: 0.9rem 0.65rem 0.3rem; font-weight: 700; }
+.nav-group:first-of-type { padding-top: 0.4rem; }
 .sidebar .spacer { flex: 1; }
 .sidebar .foot { padding: 0.6rem 0.65rem; font-size: 0.75rem; color: var(--muted); border-top: 1px solid var(--line); }
 .statusdot { display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--muted); margin-right: 0.4rem; }
@@ -176,8 +178,35 @@ table.list tr:last-child td { border-bottom: 0; }
 .report ul { margin: 0.4rem 0 0; padding-left: 1.2rem; }
 .report .warns { color: var(--warn); margin-top: 0.5rem; }
 
+/* ── Home journey ── */
+.journey { display: grid; gap: 1rem; }
+.jstep { display: grid; grid-template-columns: auto 1fr; gap: 1.1rem; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 1.3rem 1.4rem; align-items: start; }
+.jstep.done { border-color: var(--good); }
+.jnum { width: 2.1rem; height: 2.1rem; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 800; font-size: 1.05rem; display: grid; place-items: center; }
+.jstep.done .jnum { background: var(--good-soft); color: var(--good); }
+.jbody h3 { font-size: 1.12rem; margin-bottom: 0.3rem; }
+.jbody > p { font-size: 0.92rem; color: var(--body); margin: 0 0 0.7rem; max-width: 42rem; }
+.jstatus { font-size: 0.85rem; margin-bottom: 0.9rem; }
+.jstatus .ok { color: var(--good); font-weight: 600; }
+.jstatus .todo { color: var(--muted); }
+.jactions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.btnlink { display: inline-block; text-decoration: none; }
+a.primary.btnlink { background: var(--accent); color: var(--accent-ink); border-radius: 8px; font-weight: 600; font-size: 0.88rem; padding: 0.5rem 1.1rem; }
+a.primary.btnlink:hover { text-decoration: none; }
+a.ghost.btnlink { border: 1px solid var(--line); border-radius: 8px; color: var(--body); font-size: 0.82rem; padding: 0.45rem 0.9rem; }
+a.ghost.btnlink:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
+
+/* ── Studio features ── */
+.studio-side { display: flex; flex-direction: column; }
+.featurelist { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 0.8rem; }
+.feature { display: flex; align-items: center; gap: 0.45rem; font-size: 0.83rem; cursor: pointer; padding: 0.15rem 0; user-select: none; }
+.feature input { width: 1rem; height: 1rem; accent-color: var(--accent); flex-shrink: 0; }
+.feature.on { color: var(--ink); font-weight: 600; }
+.featuresummary { margin-top: 0.8rem; font-size: 0.78rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: 0.7rem; }
+.featuresummary b { color: var(--accent); }
+
 /* ── Studio chat ── */
-.studio { display: grid; grid-template-columns: 17rem 1fr; gap: 1.1rem; align-items: start; }
+.studio { display: grid; grid-template-columns: 19rem 1fr; gap: 1.1rem; align-items: start; }
 .chatpane { display: flex; flex-direction: column; min-height: 32rem; }
 .chatlog {
   flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;

@@ -347,16 +347,17 @@ $('#themeBtn').addEventListener('click', () => {
 
 /* ══════════════ Router ══════════════ */
 const TITLES = {
-  overview: 'Overview', templates: 'Templates', studio: 'Template Studio',
-  sites: 'Sites', connections: 'Connections',
-  reference: 'API Reference', keys: 'Keys & Usage', billing: 'Billing', rulebook: 'Rulebook',
+  home: 'Home', templates: 'My templates', studio: 'AI Studio',
+  sites: 'Sites', connections: 'Hosting',
+  reference: 'API reference', keys: 'API keys', billing: 'Plan & usage', rulebook: 'Rulebook',
 };
 function route() {
-  const view = (location.hash.replace('#/', '') || 'overview').split('?')[0];
-  const v = TITLES[view] ? view : 'overview';
+  const view = (location.hash.replace('#/', '') || 'home').split('?')[0];
+  const v = TITLES[view] ? view : 'home';
   document.querySelectorAll('.view').forEach((el) => el.classList.toggle('active', el.id === 'view-' + v));
   document.querySelectorAll('.nav-item').forEach((el) => el.classList.toggle('active', el.dataset.view === v));
   $('#viewTitle').textContent = TITLES[v];
+  if (v === 'home') loadHome();
   if (v === 'templates') loadTemplates();
   if (v === 'sites') { loadSites(); loadSiteTemplateOptions(); }
   if (v === 'connections') loadConnections();
@@ -364,6 +365,41 @@ function route() {
   if (v === 'billing') loadBilling();
 }
 window.addEventListener('hashchange', route);
+
+/* ══════════════ Home (guided journey) ══════════════ */
+async function loadHome() {
+  if (!getApiKey()) return;
+  // Step 1 — templates (imports beyond the shared catalog).
+  try {
+    const { body } = await api('/v1/templates');
+    const mine = (body.templates || []).filter((t) => t.source !== 'bundled').length;
+    const total = (body.templates || []).length;
+    setStep('jstep-1', 'homeTemplates', mine > 0,
+      mine > 0 ? `You have <span class="ok">${mine} of your own template${mine === 1 ? '' : 's'}</span> (plus ${total - mine} from the catalog).`
+               : `<span class="todo">No templates of your own yet — the ${total}-design catalog is ready to start from.</span>`);
+  } catch { /* not logged in / no key */ }
+  // Step 2 — sites.
+  try {
+    const { body } = await api('/v1/sites');
+    const n = (body.sites || []).length;
+    setStep('jstep-2', 'homeSites', n > 0,
+      n > 0 ? `<span class="ok">${n} site${n === 1 ? '' : 's'} built.</span>` : '<span class="todo">No sites built yet.</span>');
+  } catch { /* ignore */ }
+  // Step 3 — hosting.
+  try {
+    const { status, body } = await api('/v1/connections');
+    if (status === 200) {
+      const connected = Object.entries(body.connections).filter(([, c]) => c.connected).map(([p]) => p);
+      setStep('jstep-3', 'homeHosting', connected.length > 0,
+        connected.length ? `<span class="ok">Connected: ${connected.join(', ')}.</span>` : '<span class="todo">No hosting connected yet — you can still export finished sites.</span>');
+    }
+  } catch { /* ignore */ }
+}
+function setStep(stepId, statusId, done, html) {
+  const el = document.getElementById(statusId);
+  if (el) el.innerHTML = html;
+  document.getElementById(stepId)?.classList.toggle('done', done);
+}
 
 /* ══════════════ Auth gate ══════════════ */
 async function whoami() {
@@ -413,13 +449,9 @@ $('#authForm').addEventListener('submit', async (e) => {
     }
     showApp(body.account);
     renderMaskedKey();
+    // New customers land on the guided Home; returning users on their last view.
+    if (authMode === 'signup') location.hash = '#/home';
     route();
-    if (authMode === 'signup') {
-      location.hash = '#/keys';
-      setTimeout(() => {
-        $('#newKeyOut').innerHTML = '<div class="keyreveal">This is your first API key — it is shown once. It is already active in this console; copy it for your own scripts.<code>' + esc(body.apiKey.secret) + '</code></div>';
-      }, 50);
-    }
   } finally {
     $('#authSubmit').disabled = false;
   }
@@ -597,6 +629,64 @@ function renderImportReport(el, status, body) {
   }
 }
 
+/* ══════════════ Feature toggles → AI prompt ══════════════ */
+const FEATURES = [
+  { id: 'contact-form', label: 'Contact form', prompt: 'A working contact form on /contact posting to /api/contact.' },
+  { id: 'quote', label: 'Quote request', prompt: 'A site-wide "request a quote" modal opened by header/CTA buttons (the d4:open-quote-modal event), posting to /api/contact with a topic select.' },
+  { id: 'gallery', label: 'Photo gallery', prompt: 'A photo gallery / portfolio grid page.' },
+  { id: 'blog', label: 'Blog / articles', prompt: 'A blog: an article listing page plus individual post pages.' },
+  { id: 'store', label: 'Online store', prompt: 'A product catalog / simple store: product cards with prices and a product detail page.' },
+  { id: 'booking', label: 'Booking', prompt: 'A booking / appointment request section where visitors request a time.' },
+  { id: 'testimonials', label: 'Testimonials', prompt: 'A testimonials section with customer quotes.' },
+  { id: 'faq', label: 'FAQ', prompt: 'An FAQ section with an accordion.' },
+  { id: 'team', label: 'Team / about', prompt: 'A team/about section with member profiles.' },
+  { id: 'newsletter', label: 'Newsletter', prompt: 'A newsletter email-capture form.' },
+  { id: 'pricing', label: 'Pricing table', prompt: 'A pricing section with tiered plans.' },
+  { id: 'dark-mode', label: 'Dark mode', prompt: 'A visible light/dark theme toggle in the header (class-based, persisted).' },
+  { id: 'announcement', label: 'Announcement bar', prompt: 'An announcement bar above the header for notices/promotions.' },
+  { id: 'map', label: 'Map / location', prompt: 'A location section with an address and a simple map placeholder.' },
+  { id: 'social', label: 'Social links', prompt: 'Social media links in the footer.' },
+];
+const enabledFeatures = new Set(JSON.parse(localStorage.getItem('sd.features') || '["contact-form","dark-mode"]'));
+
+function renderFeatures() {
+  const root = $('#featureList');
+  if (!root) return;
+  root.innerHTML = '';
+  for (const f of FEATURES) {
+    const on = enabledFeatures.has(f.id);
+    const label = document.createElement('label');
+    label.className = 'feature' + (on ? ' on' : '');
+    label.innerHTML = '<input type="checkbox" ' + (on ? 'checked' : '') + ' data-feature="' + f.id + '"> ' + esc(f.label);
+    root.appendChild(label);
+  }
+  updateFeatureSummary();
+}
+function updateFeatureSummary() {
+  const on = FEATURES.filter((f) => enabledFeatures.has(f.id));
+  $('#featureSummary').innerHTML = on.length
+    ? 'Sent to the AI with every message: <b>' + on.map((f) => esc(f.label)).join('</b>, <b>') + '</b>.'
+    : 'No features selected. Toggle some above, or describe everything in your message.';
+}
+function featurePromptBlock() {
+  const on = FEATURES.filter((f) => enabledFeatures.has(f.id));
+  if (!on.length) return '';
+  return '\n\n=====================================================================\n'
+    + 'REQUESTED FEATURES (the customer toggled these ON — include ALL of them,\n'
+    + 'and declare any new page routes they add in manifest.provides.routes)\n'
+    + '=====================================================================\n'
+    + on.map((f) => `- ${f.label}: ${f.prompt}`).join('\n');
+}
+document.getElementById('featureList')?.addEventListener('change', (e) => {
+  const cb = e.target.closest('input[data-feature]');
+  if (!cb) return;
+  if (cb.checked) enabledFeatures.add(cb.dataset.feature); else enabledFeatures.delete(cb.dataset.feature);
+  localStorage.setItem('sd.features', JSON.stringify([...enabledFeatures]));
+  cb.closest('.feature').classList.toggle('on', cb.checked);
+  updateFeatureSummary();
+});
+renderFeatures();
+
 /* ══════════════ Template Studio ══════════════ */
 const chat = { messages: [] };
 let studioEnabled = false;
@@ -646,12 +736,16 @@ async function sendChat() {
   $('#chatText').value = '';
   chat.messages.push({ role: 'user', content: text });
   addMsg('user', text);
+  const activeFeatures = FEATURES.filter((f) => enabledFeatures.has(f.id));
+  if (activeFeatures.length && chat.messages.filter((m) => m.role === 'user').length === 1) {
+    addMsg('systemnote', 'Including your selected features: ' + activeFeatures.map((f) => f.label).join(', ') + '.');
+  }
   const pending = addMsg('systemnote', 'Generating… (long templates can take a few minutes)');
   $('#sendBtn').disabled = true;
   try {
     const { status, body } = await api('/workbench/chat', {
       method: 'POST',
-      body: { system: RULEBOOK_PROMPT + STUDIO_FORMAT, messages: chat.messages },
+      body: { system: RULEBOOK_PROMPT + STUDIO_FORMAT + featurePromptBlock(), messages: chat.messages },
     });
     pending.remove();
     if (status !== 200) {

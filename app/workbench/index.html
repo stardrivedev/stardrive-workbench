@@ -39,14 +39,22 @@
       <div class="logo">S</div>
       <div><span class="name">Stardrive</span><span class="tag">Workbench</span></div>
     </div>
-    <a class="nav-item" href="#/overview" data-view="overview"><span class="glyph">⌂</span> Overview</a>
-    <a class="nav-item" href="#/templates" data-view="templates"><span class="glyph">▦</span> Templates</a>
-    <a class="nav-item" href="#/studio" data-view="studio"><span class="glyph">✎</span> Template Studio</a>
+    <a class="nav-item" href="#/home" data-view="home"><span class="glyph">⌂</span> Home</a>
+
+    <div class="nav-group">Step 1 · Design a template</div>
+    <a class="nav-item" href="#/studio" data-view="studio"><span class="glyph">✦</span> AI Studio</a>
+    <a class="nav-item" href="#/templates" data-view="templates"><span class="glyph">▦</span> My templates</a>
+
+    <div class="nav-group">Step 2 · Build &amp; ship a site</div>
     <a class="nav-item" href="#/sites" data-view="sites"><span class="glyph">▤</span> Sites</a>
-    <a class="nav-item" href="#/connections" data-view="connections"><span class="glyph">⇄</span> Connections</a>
-    <a class="nav-item" href="#/reference" data-view="reference"><span class="glyph">⌘</span> API Reference</a>
-    <a class="nav-item" href="#/keys" data-view="keys"><span class="glyph">⚿</span> Keys &amp; Usage</a>
-    <a class="nav-item" href="#/billing" data-view="billing"><span class="glyph">$</span> Billing</a>
+
+    <div class="nav-group">Settings</div>
+    <a class="nav-item" href="#/connections" data-view="connections"><span class="glyph">⇄</span> Hosting</a>
+    <a class="nav-item" href="#/keys" data-view="keys"><span class="glyph">⚿</span> API keys</a>
+    <a class="nav-item" href="#/billing" data-view="billing"><span class="glyph">$</span> Plan &amp; usage</a>
+
+    <div class="nav-group">Developer</div>
+    <a class="nav-item" href="#/reference" data-view="reference"><span class="glyph">⌘</span> API reference</a>
     <a class="nav-item" href="#/rulebook" data-view="rulebook"><span class="glyph">§</span> Rulebook</a>
     <div class="spacer"></div>
     <div class="foot">
@@ -67,36 +75,59 @@
       </div>
     </div>
 
-    <!-- ═══ Overview ═══ -->
-    <section class="view" id="view-overview">
-      <p class="lede">The d4 site engine as a service: map your intake questionnaire, bring your own templates, assemble real Next.js sites, and deploy them to hosting you own. Your API key is your license; everything you upload stays private to your account.</p>
-      <div class="grid2">
-        <div class="card">
-          <h2>Get started</h2>
-          <ol class="steps">
-            <li><b>Mint a key</b> (operator machine, once):
-              <div class="codeblock"><pre>node scripts/make-key.mjs --name "my key"</pre><button class="copybtn" type="button">Copy</button></div></li>
-            <li><b>Paste it</b> in the API-key box above and press Save. Every panel here uses it; so can your own scripts.</li>
-            <li><b>Make a template.</b> Use the <a href="#/studio">Template Studio</a> to generate one by chatting with a model, or upload a folder you built against the <a href="#/rulebook">Rulebook</a> on the <a href="#/templates">Templates</a> page.</li>
-            <li><b>Assemble a site</b> from any template — see the <a href="#/reference">API Reference</a> for the two-call flow.</li>
-          </ol>
+    <!-- ═══ Home (guided) ═══ -->
+    <section class="view" id="view-home">
+      <p class="lede">Welcome — this is <b>your</b> console for building and shipping client websites with Stardrive. It goes in two steps: <b>design a template</b>, then <b>build a site</b> from it for each client. Everything you make is private to your account.</p>
+
+      <div class="journey">
+        <div class="jstep" id="jstep-1">
+          <div class="jnum">1</div>
+          <div class="jbody">
+            <h3>Design a template</h3>
+            <p>Generate one by chatting with AI (no model key needed), upload your own, or start from the shared catalog. This is the look — you reuse it across clients.</p>
+            <div class="jstatus" id="homeTemplates">…</div>
+            <div class="jactions">
+              <a class="primary btnlink" href="#/studio">Generate with AI</a>
+              <a class="ghost btnlink" href="#/templates">Browse my templates</a>
+            </div>
+          </div>
         </div>
-        <div class="card">
-          <h2>Service</h2>
-          <div class="kvs">
+        <div class="jstep" id="jstep-2">
+          <div class="jnum">2</div>
+          <div class="jbody">
+            <h3>Build a site</h3>
+            <p>Assemble a client's real Next.js site from a template: name it, add their logo and images, watch the QA report, and preview the finished result.</p>
+            <div class="jstatus" id="homeSites">…</div>
+            <div class="jactions">
+              <a class="primary btnlink" href="#/sites">Go to Sites</a>
+            </div>
+          </div>
+        </div>
+        <div class="jstep" id="jstep-3">
+          <div class="jnum">3</div>
+          <div class="jbody">
+            <h3>Ship it to your hosting</h3>
+            <p>Connect your own GitHub (and Vercel) once, then deploy any site to accounts <b>you</b> own — or export the finished project any time.</p>
+            <div class="jstatus" id="homeHosting">…</div>
+            <div class="jactions">
+              <a class="ghost btnlink" href="#/connections">Connect hosting</a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:1.4rem">
+        <details>
+          <summary style="cursor:pointer;color:var(--muted);font-size:0.88rem">Service status &amp; developer details</summary>
+          <div class="kvs" style="margin-top:0.9rem">
             <span class="k">Base URL</span><span class="v" id="baseUrl"></span>
             <span class="k">Status</span><span class="v" id="svcStatus">…</span>
             <span class="k">Version</span><span class="v" id="svcVersion">…</span>
             <span class="k">Assembly engine</span><span class="v" id="svcEngine">…</span>
           </div>
-          <h3>Try it</h3>
-          <div class="codeblock"><pre id="healthCurl"></pre><button class="copybtn" type="button">Copy</button></div>
-          <p style="font-size:0.82rem;color:var(--muted);margin:0.5rem 0 0">The dry assembly engine records QA as <em>skipped</em>, never passed — real assembly lands without any API change.</p>
-        </div>
-      </div>
-      <div class="card">
-        <h2>How privacy works here</h2>
-        <p style="margin:0">Three shelves of templates. The <b>bundled d4 catalog</b> is shared with every account. <b>Your imports</b> — uploaded here, generated in the Studio, or ported from your own studio tooling — belong to your account alone: no other licensee can list, read, build from, or collide with them. Keys minted with the same <code>--account</code> share one shelf, so your CI key and your dashboard key see the same library.</p>
+          <p style="font-size:0.82rem;color:var(--muted);margin:0.8rem 0 0">Prefer to drive Stardrive from your own scripts? Everything here is also a plain REST API — see <a href="#/reference">API reference</a>. Your API key is in <a href="#/keys">API keys</a>.</p>
+          <pre id="healthCurl" style="display:none"></pre>
+        </details>
       </div>
     </section>
 
@@ -122,29 +153,36 @@
       </div>
     </section>
 
-    <!-- ═══ Template Studio ═══ -->
+    <!-- ═══ AI Studio ═══ -->
     <section class="view" id="view-studio">
-      <p class="lede">Describe the template you want; the model builds it against the full authoring rulebook (applied automatically as the system prompt). When the files look right, import straight into your library — validation errors come back into the chat so you can ask for fixes.</p>
+      <p class="lede"><b>Step 1 · Design a template.</b> Pick the features your site needs, describe the look you want, and the AI builds a template to match — automatically following every rule so it always works. When it looks right, click <b>Add to my templates</b>; you'll build client sites from it in Step 2.</p>
       <div class="studio">
-        <div class="card">
-          <h2>Included</h2>
-          <p style="font-size:0.9rem;margin:0 0 0.8rem">Template generation is part of Stardrive — no model key to bring. Just describe what you want and chat until it's right.</p>
-          <div class="kvs"><span class="k">Model</span><span class="v" id="studioModel">…</span></div>
-          <div id="studioStatus" style="margin-top:0.9rem"></div>
-          <p style="font-size:0.75rem;color:var(--muted);margin:0.9rem 0 0">The full authoring rulebook is applied automatically as the system prompt, so whatever comes out passes the import gate.</p>
+        <div class="studio-side">
+          <div class="card" style="margin-bottom:1rem">
+            <h2>Features</h2>
+            <p style="font-size:0.82rem;color:var(--muted);margin:0 0 0.7rem">Toggle what this site should include. Your choices are sent to the AI with every message — no need to spell them out.</p>
+            <div id="featureList" class="featurelist"></div>
+            <div id="featureSummary" class="featuresummary"></div>
+          </div>
+          <div class="card">
+            <h3 style="margin:0 0 0.5rem">Model &amp; status</h3>
+            <p style="font-size:0.82rem;color:var(--muted);margin:0 0 0.6rem">Generation is included — no model key to bring.</p>
+            <div class="kvs"><span class="k">Model</span><span class="v" id="studioModel">…</span></div>
+            <div id="studioStatus" style="margin-top:0.7rem"></div>
+          </div>
         </div>
         <div class="chatpane">
           <div class="chatlog" id="chatlog">
-            <div class="msg systemnote">The rulebook is loaded. Describe the template you want — audience, mood, references. Ask for revisions until it's right, then import.</div>
+            <div class="msg systemnote">Toggle the features you need on the left, then describe the look and audience — for example, "a warm, editorial template for a family bakery." Ask for revisions until it's right, then add it to your templates.</div>
           </div>
           <div class="chatinput">
-            <textarea id="chatText" placeholder="e.g. A warm, editorial template for a family bakery: big imagery, soft corners, a menu-forward home page…"></textarea>
+            <textarea id="chatText" placeholder="Describe the look and who it's for… e.g. A warm, editorial template for a family bakery: big imagery, soft corners, a menu-forward home page."></textarea>
             <button class="primary" id="sendBtn" type="button">Send</button>
           </div>
           <div class="studio-actions">
-            <button class="ghost" id="importGenBtn" type="button">Import generated template</button>
-            <button class="ghost" id="downloadGenBtn" type="button">Download bundle.json</button>
-            <button class="ghost" id="clearChatBtn" type="button">Clear chat</button>
+            <button class="primary" id="importGenBtn" type="button">Add to my templates</button>
+            <button class="ghost" id="downloadGenBtn" type="button">Download files</button>
+            <button class="ghost" id="clearChatBtn" type="button">Start over</button>
           </div>
         </div>
       </div>
