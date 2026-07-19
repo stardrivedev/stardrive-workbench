@@ -113,6 +113,47 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
     return assembleDry(job, site);
   }
 
+  /** Write build.json, invoke the vendored assembler, return its record. */
+  function runAssembler(job, site, outDir, modulesDir, modules) {
+    const buildCfg = { output: outDir, modules };
+    for (const k of BUILD_CONFIG_KEYS) if (site.config[k] !== undefined) buildCfg[k] = site.config[k];
+    const buildPath = store.path('workspaces', `${job.siteId}.build.json`);
+    fs.writeFileSync(buildPath, JSON.stringify(buildCfg, null, 2));
+    try {
+      const out = execFileSync(process.execPath, [
+        path.join(engineDir, 'd4-site-builder', 'bin', 'assemble.mjs'),
+        '--config', buildPath, '--modules-dir', modulesDir,
+      ], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+      log(job, (out.trim().split('\n').find((l) => l.includes('Assembled')) || 'Assembled.').trim());
+    } catch (err) {
+      const msg = String(err.stderr || err.stdout || err.message || '').trim().split('\n').filter(Boolean).slice(-3).join(' ');
+      throw new Error(`Assembly failed: ${msg}`);
+    } finally {
+      fs.rmSync(buildPath, { force: true });
+    }
+    return JSON.parse(fs.readFileSync(path.join(outDir, 'd4.assembly.json'), 'utf-8'));
+  }
+
+  /**
+   * Stage a modules-dir where the customer's imported template stands in as
+   * the base `d4-site-template`, beside the real feature modules — so the
+   * SAME assembler layers d4 modules onto their own design (deps, route
+   * conflicts, per-client config all handled by the real engine).
+   */
+  function stageImportedBase(stagingDir, resolved) {
+    const baseDir = path.join(stagingDir, 'd4-site-template');
+    fs.mkdirSync(path.join(baseDir, 'files'), { recursive: true });
+    const manifest = { ...resolved.manifest, name: 'd4-site-template', kind: 'site', copy: [{ from: 'files', to: '.' }] };
+    fs.writeFileSync(path.join(baseDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+    for (const f of resolved.bundle.files) writeSafe(path.join(baseDir, 'files'), f.path, f);
+    for (const name of fs.readdirSync(engineDir)) {
+      if (name === 'd4-site-builder' || name === 'd4-site-template') continue;
+      if (fs.existsSync(path.join(engineDir, name, 'manifest.json'))) {
+        fs.cpSync(path.join(engineDir, name), path.join(stagingDir, name), { recursive: true });
+      }
+    }
+  }
+
   async function assembleReal(job, site) {
     if (!engineDir || !fs.existsSync(path.join(engineDir, 'd4-site-builder', 'bin', 'assemble.mjs'))) {
       throw new Error('The d4 engine is not available (vendor/d4 missing).');
@@ -122,32 +163,31 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
 
     const outDir = store.path('workspaces', job.siteId);
     fs.rmSync(outDir, { recursive: true, force: true });
-    fs.mkdirSync(path.dirname(outDir), { recursive: true }); // parent only; the d4 assembler creates outDir itself
+    fs.mkdirSync(path.dirname(outDir), { recursive: true }); // parent only; the assembler creates outDir itself
+
+    const modules = Array.isArray(site.config.modules) ? site.config.modules.filter((m) => m && m !== 'd4-site-template') : [];
 
     let assemblyRecord;
+    let viaAssembler = false;
     if (resolved.source === 'bundled') {
       if (resolved.manifest.kind !== 'site') throw new Error(`"${site.templateId}" is a ${resolved.manifest.kind} module, not a base site template.`);
-      const modules = Array.isArray(site.config.modules) ? site.config.modules : [];
       log(job, `Assembling "${site.config.siteName}" with the d4 engine (${modules.length} module(s))…`);
-      const buildCfg = { output: outDir, modules };
-      for (const k of BUILD_CONFIG_KEYS) if (site.config[k] !== undefined) buildCfg[k] = site.config[k];
-      const buildPath = store.path('workspaces', `${job.siteId}.build.json`);
-      fs.writeFileSync(buildPath, JSON.stringify(buildCfg, null, 2));
+      assemblyRecord = runAssembler(job, site, outDir, engineDir, modules);
+      viaAssembler = true;
+    } else if (modules.length) {
+      log(job, `Assembling your template "${site.templateId}" with ${modules.length} engine module(s) layered on…`);
+      const stagingDir = store.path('workspaces', `${job.siteId}.stage`);
+      fs.rmSync(stagingDir, { recursive: true, force: true });
+      stageImportedBase(stagingDir, resolved);
       try {
-        const out = execFileSync(process.execPath, [
-          path.join(engineDir, 'd4-site-builder', 'bin', 'assemble.mjs'),
-          '--config', buildPath, '--modules-dir', engineDir,
-        ], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-        log(job, (out.trim().split('\n').find((l) => l.includes('Assembled')) || 'Assembled.').trim());
-      } catch (err) {
-        const msg = String(err.stderr || err.stdout || err.message || '').trim().split('\n').filter(Boolean).slice(-3).join(' ');
-        throw new Error(`Assembly failed: ${msg}`);
+        assemblyRecord = runAssembler(job, site, outDir, stagingDir, modules);
       } finally {
-        fs.rmSync(buildPath, { force: true });
+        fs.rmSync(stagingDir, { recursive: true, force: true });
       }
-      assemblyRecord = JSON.parse(fs.readFileSync(path.join(outDir, 'd4.assembly.json'), 'utf-8'));
+      assemblyRecord.imported = true;
+      viaAssembler = true;
     } else {
-      log(job, `Materializing imported template "${site.templateId}" (${resolved.bundle.files.length} files)…`);
+      log(job, `Materializing your template "${site.templateId}" (${resolved.bundle.files.length} files)…`);
       fs.mkdirSync(outDir, { recursive: true });
       for (const f of resolved.bundle.files) writeSafe(outDir, f.path, f);
       assemblyRecord = {
@@ -167,7 +207,7 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
     const add = (name, ok, detail) => checks.push({ name, status: ok ? 'pass' : 'fail', ...(detail ? { detail } : {}) });
 
     add('assembled: package.json + src present', has('package.json') && has('src'));
-    if (resolved.source === 'bundled') {
+    if (viaAssembler) {
       let configApplied = false;
       try { configApplied = fs.readFileSync(path.join(outDir, 'src/config/site.ts'), 'utf-8').includes(site.config.siteName); } catch { /* fails below */ }
       add('per-client config written (site name in site.ts)', configApplied);

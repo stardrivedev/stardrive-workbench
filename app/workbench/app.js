@@ -854,25 +854,28 @@ async function loadSiteTemplateOptions() {
   renderAssembleFeatures();
 }
 
-/** The module-backed features, checked by default from the Studio selection. */
+/** Module-backed feature toggles. Catalog base: default from the Studio
+ *  selection (carry-over). Your own template: default OFF — its features are
+ *  already in the design, and modules are opt-in CMS-backed extras. */
 function renderAssembleFeatures() {
   const root = $('#assembleFeatures');
   if (!root) return;
-  const moduleFeatures = FEATURES.filter((f) => f.module);
-  root.innerHTML = moduleFeatures.map((f) => {
-    const on = enabledFeatures.has(f.id);
+  const src = templateSource[$('#siteTemplateSel').value];
+  root.innerHTML = FEATURES.filter((f) => f.module).map((f) => {
+    const on = src !== 'imported' && enabledFeatures.has(f.id);
     return '<label class="feature' + (on ? ' on' : '') + '"><input type="checkbox" ' + (on ? 'checked' : '') + ' data-assemblefeat="' + f.id + '"> ' + esc(f.label) + '</label>';
   }).join('');
   updateAssembleNote();
 }
 function updateAssembleNote() {
-  const base = $('#siteTemplateSel').value;
-  const src = templateSource[base];
+  const src = templateSource[$('#siteTemplateSel').value];
   const note = $('#assembleFeatureNote');
+  const mods = [...document.querySelectorAll('#assembleFeatures input:checked')].map((c) => FEATURE_BY_ID[c.dataset.assemblefeat]?.label).filter(Boolean);
   if (src === 'imported') {
-    note.innerHTML = 'This is one of your own templates — its features are already built into the design, so nothing extra is added here.';
+    note.innerHTML = mods.length
+      ? 'Layers CMS-backed engine modules onto your template: <b>' + mods.map(esc).join('</b>, <b>') + '</b>. Your template keeps whatever features the AI built into its design.'
+      : 'Your template ships with its built-in design. Optionally layer CMS-backed engine modules on top by ticking any above.';
   } else {
-    const mods = [...document.querySelectorAll('#assembleFeatures input:checked')].map((c) => FEATURE_BY_ID[c.dataset.assemblefeat]?.label).filter(Boolean);
     note.innerHTML = mods.length
       ? 'Adds real engine features to this catalog template: <b>' + mods.map(esc).join('</b>, <b>') + '</b>.'
       : 'No add-on features selected — the base template ships as-is.';
@@ -883,7 +886,7 @@ $('#assembleFeatures').addEventListener('change', (e) => {
   if (cb) cb.closest('.feature').classList.toggle('on', cb.checked);
   updateAssembleNote();
 });
-$('#siteTemplateSel').addEventListener('change', updateAssembleNote);
+$('#siteTemplateSel').addEventListener('change', renderAssembleFeatures);
 
 async function loadSites() {
   const tbody = $('#sitesTable tbody');
@@ -1027,13 +1030,11 @@ $('#assembleBtn').addEventListener('click', async () => {
   const config = { siteName };
   const tagline = $('#siteTaglineInput').value.trim();
   if (tagline) config.tagline = tagline;
-  // Feature toggles → real engine modules. Only bundled catalog templates
-  // support module assembly; imported templates have features baked in.
-  if (templateSource[templateId] !== 'imported') {
-    const mods = [...document.querySelectorAll('#assembleFeatures input:checked')]
-      .map((c) => FEATURE_BY_ID[c.dataset.assemblefeat]?.module).filter(Boolean);
-    if (mods.length) config.modules = mods;
-  }
+  // Feature toggles → real engine modules, layered onto the base at assembly
+  // (catalog templates AND your own imported templates alike).
+  const mods = [...document.querySelectorAll('#assembleFeatures input:checked')]
+    .map((c) => FEATURE_BY_ID[c.dataset.assemblefeat]?.module).filter(Boolean);
+  if (mods.length) config.modules = mods;
   out.innerHTML = '<div class="report ok">Assembling…</div>';
   const { status, body } = await api('/v1/sites', { method: 'POST', body: { templateId, config } });
   if (status !== 202) {

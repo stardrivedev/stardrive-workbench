@@ -770,6 +770,45 @@ await check('real engine: a bad module fails the job honestly (never a fake pass
   assert.strictEqual(job.status, 'failed');
   assert.strictEqual((job.logs.at(-1)?.line || '').includes('Assembly failed'), true);
 });
+await check("real engine: d4 modules layer onto a customer's OWN imported template", async () => {
+  const base = 'http://localhost:4654';
+  // A gate-clean, module-compatible customer base (has package.json, which the
+  // assembler needs to merge module deps into).
+  const ownTemplate = {
+    manifest: {
+      name: 'my-own-template', version: '1.0.0', kind: 'site',
+      description: 'Customer-authored base for the imported+modules test.',
+      provides: { routes: ['/', '/about', '/contact'], nav: [], adminPanels: [], collections: [] },
+      copy: [{ from: 'files', to: '.' }],
+    },
+    files: [
+      { path: 'package.json', content: JSON.stringify({ name: 'placeholder', version: '0.1.0', dependencies: {}, devDependencies: {} }, null, 2) },
+      ...REQUIRED_SITE_FILES.map((p) => ({
+        path: p,
+        content: p.endsWith('theme.css')
+          ? ':root { --accent: 67 56 202; --text-muted: 90 90 90; }\n.dark { --accent: 159 153 255; --text-muted: 170 170 170; }\n'
+          : `// ${p}\nexport {};\n`,
+      })),
+    ],
+  };
+  assert.strictEqual((await call('POST', '/v1/templates', { key: fullKey, base, body: ownTemplate })).status < 300, true, 'imported the customer template');
+  // Assemble it WITH the gallery + blog modules layered on (blog pulls cms-core).
+  const mk = await call('POST', '/v1/sites', { key: fullKey, base, body: {
+    templateId: 'my-own-template', config: { siteName: 'Imported Plus', modules: ['d4-gallery-editor', 'd4-insights-blog'] },
+  } });
+  assert.strictEqual(mk.status, 202);
+  const job = await waitForJob(fullKey, mk.body.jobId, 30000);
+  assert.strictEqual(job.status, 'done', 'imported + modules assembly completes');
+  assert.strictEqual(job.result.qa.verdict, 'passed');
+  assert.strictEqual(job.result.assembly.imported, true);
+  assert.strictEqual(job.result.assembly.routes.includes('/'), true, 'the customer base routes survive');
+  assert.strictEqual(job.result.assembly.routes.includes('/gallery'), true, 'gallery module layered on');
+  assert.strictEqual(job.result.assembly.routes.includes('/insights'), true, 'blog module layered on');
+  assert.strictEqual(Object.keys(job.result.assembly.modules).includes('d4-cms-core'), true, 'dependency auto-resolved');
+  // The customer's per-client name was written into their own base config.
+  const siteTs = fs.readFileSync(path.join(varDir, 'workspaces', mk.body.siteId, 'src/config/site.ts'), 'utf-8');
+  assert.strictEqual(siteTs.includes('Imported Plus'), true);
+});
 
 // ── Rate limiting (separate low-limit server) ────────────────────────────
 console.log('rate limiting:');

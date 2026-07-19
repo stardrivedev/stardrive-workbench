@@ -91,13 +91,16 @@ until `STRIPE_SECRET_KEY` (+ `STRIPE_PRICE_<PLAN>` price ids) are set.
 - **The real engine** (`STARDRIVE_ENGINE=real`): the vendored d4 assembler
   (`vendor/d4`) runs in an isolated per-job workspace and produces a genuine
   standalone Next.js site — base template + selected modules, per-client
-  config + theme baked in, uploaded assets slotted into place. Imported
-  customer templates are materialized directly. A real QA gate runs
-  (structural checks + WCAG contrast on the validated palettes); QA-red
-  fails the job — never a fake pass. `GET /v1/sites/{id}/export` streams the
-  assembled repo as a `.tar.gz` (the site ONLY — the engine is never
-  included). The `dry` engine remains for tooling-free testing (marker +
-  `skipped` QA).
+  config + theme baked in, uploaded assets slotted into place. Engine
+  **modules layer onto a customer's OWN imported template too**: it is staged
+  as the base beside the real modules and run through the same assembler, so
+  dependency resolution, route-conflict checks, and per-client config all
+  apply (an imported template with no modules is materialized directly). A
+  real QA gate runs (structural checks + WCAG contrast on the validated
+  palettes); QA-red fails the job — never a fake pass. `GET
+  /v1/sites/{id}/export` streams the assembled repo as a `.tar.gz` (the site
+  ONLY — the engine is never included). The `dry` engine remains for
+  tooling-free testing (marker + `skipped` QA).
 
 - **Deploy**: `POST /v1/sites/{id}/deploy` pushes the assembled site (only)
   to a repo the customer owns via their connected **GitHub** token; link it
