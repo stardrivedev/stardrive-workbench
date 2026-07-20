@@ -10,8 +10,8 @@
  *
  * Configuration (all optional except the key, which gates the feature):
  *   STARDRIVE_LLM_KEY        the provider secret (unset → Studio is dormant)
- *   STARDRIVE_LLM_PROVIDER   "anthropic" (default) | "openai"
- *   STARDRIVE_LLM_MODEL      model id (defaults per provider)
+ *   STARDRIVE_LLM_PROVIDER   "openai" (default; ChatGPT 5.6 Sol) | "anthropic"
+ *   STARDRIVE_LLM_MODEL      model id (defaults: gpt-5.6-sol / claude-sonnet-5)
  *   STARDRIVE_LLM_BASE_URL   override host (OpenAI-compatible endpoints)
  *   STARDRIVE_LLM_MAX_TOKENS integer cap (default 16000)
  */
@@ -19,11 +19,13 @@
 const TIMEOUT_MS = 300_000; // template generations are long
 const httpError = (status, code, message) => Object.assign(new Error(message), { status, code });
 
-const DEFAULT_MODEL = { anthropic: 'claude-sonnet-5', openai: 'gpt-4o' };
+const DEFAULT_MODEL = { anthropic: 'claude-sonnet-5', openai: 'gpt-5.6-sol' };
 
 /** Public, secret-free view of how the Studio is configured (for the UI). */
 export function studioConfig() {
-  const provider = process.env.STARDRIVE_LLM_PROVIDER === 'openai' ? 'openai' : 'anthropic';
+  // Operator decision (2026-07-20): OpenAI is the default provider; the
+  // Studio runs on ChatGPT 5.6 Sol unless env overrides.
+  const provider = process.env.STARDRIVE_LLM_PROVIDER === 'anthropic' ? 'anthropic' : 'openai';
   return {
     configured: Boolean(process.env.STARDRIVE_LLM_KEY),
     provider,
@@ -65,7 +67,9 @@ export async function relayChat({ system, messages } = {}) {
   }
 
   const { provider, model } = studioConfig();
-  const maxTokens = Number(process.env.STARDRIVE_LLM_MAX_TOKENS) || 16000;
+  // Templates are long, and reasoning models spend part of the budget
+  // thinking before writing — an undersized cap yields "no text" errors.
+  const maxTokens = Number(process.env.STARDRIVE_LLM_MAX_TOKENS) || 48000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
@@ -77,14 +81,21 @@ export async function relayChat({ system, messages } = {}) {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
         body: JSON.stringify({
           model,
-          max_tokens: maxTokens,
+          // Modern OpenAI models reject the legacy max_tokens parameter.
+          max_completion_tokens: maxTokens,
           messages: [...(system ? [{ role: 'system', content: system }] : []), ...messages],
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw httpError(502, 'provider_error', data?.error?.message || `Model provider returned ${res.status}.`);
-      const content = data?.choices?.[0]?.message?.content;
-      if (typeof content !== 'string') throw httpError(502, 'provider_error', 'Model response had no message content.');
+      const choice = data?.choices?.[0];
+      const content = choice?.message?.content;
+      if (typeof content !== 'string' || !content.length) {
+        const why = choice?.message?.refusal ? `refusal: ${choice.message.refusal}`
+          : choice?.finish_reason ? `finish_reason: ${choice.finish_reason} — if "length", raise STARDRIVE_LLM_MAX_TOKENS`
+          : 'no choices returned';
+        throw httpError(502, 'provider_error', `Model returned no text (${why}).`);
+      }
       return { content, model: data.model ?? model, tokens: tokensOf(data.usage) };
     }
 
@@ -99,7 +110,10 @@ export async function relayChat({ system, messages } = {}) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw httpError(502, 'provider_error', data?.error?.message || `Model provider returned ${res.status}.`);
     const content = (data?.content ?? []).filter((b) => b.type === 'text').map((b) => b.text).join('');
-    if (!content) throw httpError(502, 'provider_error', 'Model response had no text content.');
+    if (!content) {
+      const kinds = (data?.content ?? []).map((b) => b.type).join(',') || 'empty';
+      throw httpError(502, 'provider_error', `Model returned no text (stop: ${data?.stop_reason || '?'}; blocks: ${kinds}) — if "max_tokens", raise STARDRIVE_LLM_MAX_TOKENS.`);
+    }
     return { content, model: data.model ?? model, tokens: tokensOf(data.usage) };
   } catch (err) {
     if (err.name === 'AbortError') throw httpError(504, 'provider_timeout', 'The model took longer than 5 minutes.');
