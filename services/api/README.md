@@ -102,6 +102,17 @@ until `STRIPE_SECRET_KEY` (+ `STRIPE_PRICE_<PLAN>` price ids) are set.
   ONLY — the engine is never included). The `dry` engine remains for
   tooling-free testing (marker + `skipped` QA).
 
+- **The full QA tier** (`STARDRIVE_QA=full`, opt-in): on top of the
+  structural gate, each assembly runs `npm install` → `next build` (the real
+  compile gate — proving the template + module combination genuinely
+  builds) → serves the production build → checks every declared route →
+  axe accessibility (serious/critical fail) → 375px overflow → console
+  errors — and captures a screenshot served at
+  `GET /v1/sites/{id}/preview` (shown in the Workbench site detail).
+  QA-red still fails the job. Verified end-to-end through the API: 12/12
+  checks on a real assembled site. (War story: the default QA port was
+  4190, which the WHATWG fetch spec silently blocks — "bad port" — so the
+  prober now skips fetch-blocked ports.)
 - **Deploy**: `POST /v1/sites/{id}/deploy` pushes the assembled site (only)
   to a repo the customer owns via their connected **GitHub** token; link it
   to Vercel and it builds on push. One-click Vercel/Turso provisioning is

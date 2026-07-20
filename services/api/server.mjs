@@ -127,7 +127,14 @@ const ROUTES = [
     method: 'GET', pattern: '/v1/health', scope: 'public',
     handler: () => {
       const s = studioConfig();
-      return { status: 200, body: { ok: true, service: 'stardrive-api', version: VERSION, engine: ENGINE, studio: { enabled: s.configured, model: s.configured ? s.model : null } } };
+      return {
+        status: 200,
+        body: {
+          ok: true, service: 'stardrive-api', version: VERSION, engine: ENGINE,
+          qa: ENGINE === 'real' ? (process.env.STARDRIVE_QA === 'full' ? 'full' : 'structural') : 'dry',
+          studio: { enabled: s.configured, model: s.configured ? s.model : null },
+        },
+      };
     },
   },
   {
@@ -565,6 +572,18 @@ const ROUTES = [
         body: { deployed: true, target: 'github', ...result,
           note: 'Pushed the assembled site to your GitHub. Link the repo to Vercel (or your host) and it builds on push. One-click Vercel/Turso provisioning is the next step.' },
       };
+    },
+  },
+  {
+    // The visual preview screenshot captured by the full QA tier.
+    method: 'GET', pattern: '/v1/sites/:id/preview', scope: 'sites',
+    handler: ({ params, key }) => {
+      const s = loadSite(params.id, key.account);
+      const abs = store.path('workspaces', s.id, '.stardrive-preview.png');
+      if (!fs.existsSync(abs)) {
+        throw httpError(404, 'no_preview', 'No preview yet — previews are captured by the full QA tier (STARDRIVE_QA=full) during assembly.');
+      }
+      return { raw: true, status: 200, headers: { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' }, buffer: fsReadFile(abs) };
     },
   },
   {

@@ -21,14 +21,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { runFullQA, PREVIEW_FILE } from './qa-full.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const BUILD_CONFIG_KEYS = ['siteName', 'tagline', 'description', 'contactEmail', 'phone', 'address', 'pairing', 'nav', 'announcement', 'quote', 'socialLinks', 'darkMode', 'themeDark', 'theme'];
 
+const COUNT_SKIP = new Set(['node_modules', '.next', PREVIEW_FILE]);
 function countFiles(dir) {
   let n = 0;
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (COUNT_SKIP.has(e.name)) continue;
     if (e.isDirectory()) n += countFiles(path.join(dir, e.name));
     else if (e.isFile()) n += 1;
   }
@@ -223,20 +226,42 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
     }
     add('routes declared', Object.keys(assemblyRecord.routes || {}).length > 0);
 
+    const fileCount = countFiles(outDir); // before full QA installs node_modules
+    let structuralPassed = checks.every((c) => c.status === 'pass');
+    let qaMode = 'structural';
+    let hasPreview = false;
+
+    // Opt-in full tier: install → next build (the real compile gate) → serve →
+    // routes → axe/overflow/console + a screenshot for the visual preview.
+    if (structuralPassed && process.env.STARDRIVE_QA === 'full') {
+      qaMode = 'full';
+      log(job, 'QA (full): install → build → serve → browser checks. This takes a few minutes…');
+      const full = await runFullQA({
+        dir: outDir,
+        routes: Object.keys(assemblyRecord.routes || {}),
+        port: Number(process.env.STARDRIVE_QA_PORT) || 4290,
+        log: (m) => log(job, m),
+        timeout: Number(process.env.STARDRIVE_QA_TIMEOUT) || 300_000,
+      });
+      checks.push(...full.checks);
+      hasPreview = Boolean(full.preview);
+    }
+
     const passed = checks.every((c) => c.status === 'pass');
     job.result = {
       workspace: `workspaces/${job.siteId}`,
       engine: 'real',
       exportable: true,
-      files: countFiles(outDir),
+      files: fileCount,
+      preview: hasPreview,
       assembly: {
         imported: Boolean(assemblyRecord.imported),
         modules: assemblyRecord.modules || {},
         routes: Object.keys(assemblyRecord.routes || {}),
       },
-      qa: { mode: 'structural', verdict: passed ? 'passed' : 'failed', checks },
+      qa: { mode: qaMode, verdict: passed ? 'passed' : 'failed', checks },
     };
-    log(job, `QA (structural): ${passed ? 'PASSED' : 'FAILED'} — ${checks.filter((c) => c.status === 'pass').length}/${checks.length} checks.`);
+    log(job, `QA (${qaMode}): ${passed ? 'PASSED' : 'FAILED'} — ${checks.filter((c) => c.status === 'pass').length}/${checks.length} checks.`);
     if (!passed) throw new Error('QA failed: ' + checks.filter((c) => c.status === 'fail').map((c) => c.name).join(', '));
   }
 

@@ -113,11 +113,12 @@ const goodManifest = JSON.parse(fs.readFileSync(path.join(API_DIR, 'data', 'cata
 
 // ── Public + auth ────────────────────────────────────────────────────────
 console.log('public + auth:');
-await check('GET /v1/health is public and reports the engine', async () => {
+await check('GET /v1/health is public and reports the engine + QA tier', async () => {
   const { status, body } = await call('GET', '/v1/health');
   assert.strictEqual(status, 200);
   assert.strictEqual(body.ok, true);
   assert.strictEqual(body.engine, 'dry');
+  assert.strictEqual(body.qa, 'dry');
 });
 await check('GET /v1 lists the surface', async () => {
   const { status, body } = await call('GET', '/v1');
@@ -733,6 +734,7 @@ await check('STARDRIVE_ENGINE=real assembles a genuine Next.js site, QA passes, 
     config: { siteName: 'Real Fab Co', tagline: 'We build.', contactEmail: 'hi@realfab.example', pairing: 'industrial-confidence', modules: ['d4-gallery-editor', 'd4-insights-blog'] },
   } });
   assert.strictEqual(mk.status, 202);
+  assert.strictEqual((await call('GET', '/v1/health', { base })).body.qa, 'structural', 'real engine defaults to structural QA');
   const job = await waitForJob(fullKey, mk.body.jobId, 30000);
   assert.strictEqual(job.status, 'done', 'real assembly completes');
   assert.strictEqual(job.result.engine, 'real');

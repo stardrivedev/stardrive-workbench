@@ -31,6 +31,7 @@ Everything works dormant; each env var lights up a capability with no code chang
 | Secure session cookies | `STARDRIVE_SECURE_COOKIES=1` | Set behind HTTPS. |
 | Template Studio (model) | `STARDRIVE_LLM_KEY` (+ `STARDRIVE_LLM_PROVIDER`, `STARDRIVE_LLM_MODEL`) | Operator's own key; customers never bring one. |
 | Fair-use caps | `STARDRIVE_LLM_MAX_TURNS` (40), `STARDRIVE_LLM_MAX_INPUT_CHARS` (300k) | Defaults are sane; tune per model. |
+| **Full QA tier** | `STARDRIVE_QA=full` (+ optional `STARDRIVE_QA_PORT` 4290, `STARDRIVE_QA_TIMEOUT` 300000, `STARDRIVE_PLAYWRIGHT`, `STARDRIVE_AXE`) | Per assembly: npm install → `next build` (the real compile gate) → serve → every route → axe accessibility → 375px overflow → console errors → a screenshot served at `GET /v1/sites/{id}/preview`. Adds ~3–5 min per build; needs npm (+ Playwright for the browser sub-checks, which skip honestly when absent). Default (`structural`) stays fast. |
 | Billing checkout | `STRIPE_SECRET_KEY`, `STRIPE_PRICE_STARTER|STUDIO|AGENCY` | Subscription price ids per plan. |
 | Billing webhook | `STRIPE_WEBHOOK_SECRET` | Point Stripe at `POST /webhooks/stripe`; flips plans on subscribe/cancel. |
 | Email | `RESEND_API_KEY`, `STARDRIVE_EMAIL_FROM`, `STARDRIVE_LEADS_TO` | Signup welcome + access-request notifications. |

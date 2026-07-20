@@ -925,19 +925,46 @@ $('#sitesTable').addEventListener('click', async (e) => {
     '<tr><td><code>' + esc(j.id.slice(0, 8)) + '</code></td><td>' + esc(j.kind) + '</td><td>' + esc(j.status) + '</td><td style="color:var(--muted)">' + esc((j.finishedAt || j.createdAt || '').slice(0, 19).replace('T', ' ')) + '</td></tr>').join('');
   $('#siteDetail').innerHTML =
     '<h3 style="margin-top:1.2rem;color:var(--ink)">' + esc(body.config.siteName || body.id) + '</h3>' +
+    '<div id="sitePreview"></div>' +
     '<div class="tscroll"><table class="list"><thead><tr><th>Job</th><th>Kind</th><th>Status</th><th>When</th></tr></thead><tbody>' + jobsHtml + '</tbody></table></div>' +
+    '<div id="siteQa"></div>' +
     '<details style="margin-top:0.8rem"><summary style="cursor:pointer;color:var(--muted);font-size:0.85rem">Config (' + Object.keys(body.config).length + ' slots, ' + body.configHistory.length + ' prior versions)</summary>' +
     '<div class="codeblock"><pre>' + esc(JSON.stringify(body.config, null, 2)) + '</pre><button class="copybtn" type="button">Copy</button></div></details>' +
     '<div style="display:flex;gap:0.6rem;margin-top:0.9rem;flex-wrap:wrap">' +
     '<button class="ghost" data-siteact="reassemble" data-id="' + esc(body.id) + '">Re-assemble</button>' +
-    '<button class="ghost" data-siteact="export" data-id="' + esc(body.id) + '">Preview &amp; export</button>' +
+    '<button class="ghost" data-siteact="export" data-id="' + esc(body.id) + '">Download site (.tar.gz)</button>' +
     '<button class="ghost" data-siteact="deploy" data-id="' + esc(body.id) + '">Deploy</button></div>' +
     '<div id="siteActOut" style="margin-top:0.6rem"></div>' +
     '<h3 style="margin-top:1.4rem;color:var(--ink)">Assets</h3>' +
     '<p style="font-size:0.85rem;color:var(--muted);margin:0.3rem 0 0.8rem">Upload into the right compartment and each file is slotted into its exact place on the site at the next assembly — no paths to think about.</p>' +
     '<div id="siteAssets" data-id="' + esc(body.id) + '" class="grid2"></div>';
   loadSiteAssets(body.id);
+  loadSitePreviewAndQa(body);
 });
+
+/** Visual preview (full-QA screenshot) + the latest job's QA report. */
+async function loadSitePreviewAndQa(site) {
+  // Preview image, if the full QA tier captured one.
+  try {
+    const res = await fetch('/v1/sites/' + site.id + '/preview', { headers: { Authorization: 'Bearer ' + getApiKey() } });
+    if (res.ok) {
+      const url = URL.createObjectURL(await res.blob());
+      $('#sitePreview').innerHTML =
+        '<div style="margin:0.6rem 0 0.9rem"><img src="' + url + '" alt="Site preview" style="max-width:100%;border:1px solid var(--line);border-radius:10px"><div style="font-size:0.75rem;color:var(--muted);margin-top:0.3rem">Live preview from the QA run — this is the real assembled site.</div></div>';
+    }
+  } catch { /* no preview — fine */ }
+  // QA report of the most recent finished job.
+  const last = [...(site.jobs || [])].reverse().find((j) => j.status === 'done' || j.status === 'failed');
+  if (!last) return;
+  const { status, body } = await api('/v1/jobs/' + last.id);
+  const qa = status === 200 ? body.result?.qa : null;
+  if (!qa?.checks?.length) return;
+  $('#siteQa').innerHTML =
+    '<details style="margin-top:0.8rem"' + (qa.verdict !== 'passed' ? ' open' : '') + '><summary style="cursor:pointer;font-size:0.85rem;color:' + (qa.verdict === 'passed' ? 'var(--good)' : 'var(--warn)') + '">QA (' + esc(qa.mode) + '): ' + esc(qa.verdict) + ' — ' + qa.checks.filter((c) => c.status === 'pass').length + '/' + qa.checks.length + ' checks</summary>' +
+    '<ul style="list-style:none;margin:0.5rem 0 0;padding:0;display:grid;gap:0.25rem;font-size:0.82rem">' +
+    qa.checks.map((c) => '<li>' + (c.status === 'pass' ? '<span style="color:var(--good)">✓</span> ' : '<span style="color:var(--bad)">✗</span> ') + esc(c.name) + (c.detail ? ' <span style="color:var(--muted)">— ' + esc(c.detail) + '</span>' : '') + '</li>').join('') +
+    '</ul></details>';
+}
 
 async function loadSiteAssets(siteId) {
   const root = $('#siteAssets');

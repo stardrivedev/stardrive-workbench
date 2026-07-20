@@ -42,8 +42,13 @@ function header(name, size, mtime, type = '0') {
   return buf;
 }
 
+// Build artifacts and QA leftovers never ship in an export — the archive is
+// the clean site repo, exactly what a developer would commit.
+const SKIP = new Set(['node_modules', '.next', '.git', '.stardrive-preview.png']);
+
 function walk(dir, base, out) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    if (SKIP.has(entry.name)) continue;
     const abs = path.join(dir, entry.name);
     const rel = base ? `${base}/${entry.name}` : entry.name;
     if (entry.isDirectory()) walk(abs, rel, out);
