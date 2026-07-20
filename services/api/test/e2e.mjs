@@ -561,7 +561,7 @@ await check('asset compartments: upload → slotted target, wrong type/full slot
   assert.strictEqual((after.body.assets.gallery || []).length, 2);
 });
 await check('re-assemble records the slotting in the workspace marker', async () => {
-  const re = await call('POST', `/v1/sites/${siteId}/assemble`, { key: fullKey, body: {} });
+  const re = await call('POST', `/v1/sites/${siteId}/assemble`, { key: fullKey, body: { force: true } });
   assert.strictEqual(re.status, 202);
   await waitForJob(fullKey, re.body.jobId);
   const marker = JSON.parse(fs.readFileSync(path.join(varDir, 'workspaces', siteId, 'd4.assembly.json'), 'utf-8'));
@@ -573,7 +573,7 @@ await check('re-assemble records the slotting in the workspace marker', async ()
   const state = await call('GET', `/v1/sites/${siteId}/assets`, { key: fullKey });
   const g1 = state.body.assets.gallery[0].id;
   assert.strictEqual((await call('DELETE', `/v1/sites/${siteId}/assets/gallery/${g1}`, { key: fullKey })).status, 200);
-  const re2 = await call('POST', `/v1/sites/${siteId}/assemble`, { key: fullKey, body: {} });
+  const re2 = await call('POST', `/v1/sites/${siteId}/assemble`, { key: fullKey, body: { force: true } });
   await waitForJob(fullKey, re2.body.jobId);
   const marker2 = JSON.parse(fs.readFileSync(path.join(varDir, 'workspaces', siteId, 'd4.assembly.json'), 'utf-8'));
   assert.strictEqual(marker2.assets.gallery.length, 1);
@@ -658,7 +658,7 @@ await check('create-first flow: assemble:false creates without building; photos 
   const up = await call('POST', `/v1/sites/${made.body.siteId}/assets/logo`, { key: fullKey, body: { filename: 'first.png', contentBase64: png.toString('base64') } });
   assert.strictEqual(up.status, 201);
   // …then the first build includes it (dry: recorded in the marker).
-  const built = await call('POST', `/v1/sites/${made.body.siteId}/assemble`, { key: fullKey, body: {} });
+  const built = await call('POST', `/v1/sites/${made.body.siteId}/assemble`, { key: fullKey, body: { force: true } });
   assert.strictEqual(built.status, 202);
   await waitForJob(fullKey, built.body.jobId);
   const marker = JSON.parse(fs.readFileSync(path.join(varDir, 'workspaces', made.body.siteId, 'd4.assembly.json'), 'utf-8'));

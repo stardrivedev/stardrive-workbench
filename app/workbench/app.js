@@ -944,8 +944,9 @@ async function openSiteDetail(siteId) {
     '<tr><td><code>' + esc(j.id.slice(0, 8)) + '</code></td><td>' + esc(j.kind) + '</td><td>' + esc(j.status) + '</td><td style="color:var(--muted)">' + esc((j.finishedAt || j.createdAt || '').slice(0, 19).replace('T', ' ')) + '</td></tr>').join('');
   $('#siteDetail').innerHTML =
     '<h3 style="margin-top:1.2rem;color:var(--ink)">' + esc(body.config.siteName || body.id) + '</h3>' +
-    (built ? '' : '<p style="font-size:0.88rem;color:var(--muted);margin:0.3rem 0 0.6rem">Not built yet — <b style="color:var(--ink)">add the client\'s photos below first</b>, then press Build so the first preview shows their real images.</p>') +
+    (built ? '' : '<p style="font-size:0.88rem;color:var(--muted);margin:0.3rem 0 0.6rem">Not built yet — <b style="color:var(--ink)">answer the essentials below and add the client\'s photos</b>, then press Build. The site ships finished, no placeholders.</p>') +
     '<div id="sitePreview"></div>' +
+    '<div id="siteContent" data-id="' + esc(body.id) + '"></div>' +
     (jobsHtml ? '<div class="tscroll"><table class="list"><thead><tr><th>Job</th><th>Kind</th><th>Status</th><th>When</th></tr></thead><tbody>' + jobsHtml + '</tbody></table></div>' : '') +
     '<div id="siteQa"></div>' +
     '<details style="margin-top:0.8rem"><summary style="cursor:pointer;color:var(--muted);font-size:0.85rem">Config (' + Object.keys(body.config).length + ' slots, ' + body.configHistory.length + ' prior versions)</summary>' +
@@ -962,14 +963,129 @@ async function openSiteDetail(siteId) {
     '<p style="font-size:0.85rem;color:var(--muted);margin:0.3rem 0 0.8rem">Drop each file into the right compartment and it lands in its exact place on the site — no paths to think about. Photos added after a build appear when you rebuild.</p>' +
     '<div id="siteAssets" data-id="' + esc(body.id) + '" class="grid2"></div>';
   loadSiteAssets(body.id);
+  loadSiteContent(body.id);
   loadSitePreviewAndQa(body);
+}
+
+/* ══════════════ Content intake (DFY: facts in → AI writes the site) ══════════════ */
+const FACT_SEP = /\s+[—–-]\s+|\s*[|]\s*/; // "Name — Role" / "A | B" splitters
+
+function parseFact(kind, raw) {
+  const text = raw || '';
+  const lines = text.split('\n').map((s) => s.trim()).filter(Boolean);
+  switch (kind) {
+    case 'list': case 'topics': return lines;
+    case 'people': return lines.map((l) => { const [name, role] = l.split(FACT_SEP); return { name: (name || '').trim(), role: (role || '').trim() }; });
+    case 'roles': return lines.map((l) => { const [title, ...rest] = l.split(FACT_SEP); return { title: (title || '').trim(), summary: rest.join(' — ').trim() }; });
+    case 'products': return lines.map((l) => { const [name, price, ...rest] = l.split(FACT_SEP); return { name: (name || '').trim(), price: (price || '').trim(), note: rest.join(' — ').trim() }; });
+    default: return text.trim();
+  }
+}
+
+function serializeFact(kind, val) {
+  if (val == null) return '';
+  switch (kind) {
+    case 'list': case 'topics': return Array.isArray(val) ? val.join('\n') : '';
+    case 'people': return Array.isArray(val) ? val.map((p) => [p.name, p.role].filter(Boolean).join(' — ')).join('\n') : '';
+    case 'roles': return Array.isArray(val) ? val.map((r) => [r.title, r.summary].filter(Boolean).join(' — ')).join('\n') : '';
+    case 'products': return Array.isArray(val) ? val.map((p) => [p.name, p.price, p.note].filter(Boolean).join(' — ')).join('\n') : '';
+    default: return String(val);
+  }
+}
+
+function factInput(f, val) {
+  const req = f.required ? ' <span style="color:var(--bad)">*</span>' : '';
+  const help = f.help ? '<p style="font-size:0.76rem;color:var(--muted);margin:0.15rem 0 0.35rem">' + esc(f.help) + '</p>' : '';
+  if (f.kind === 'photos') {
+    return '<div class="field"><label>' + esc(f.label) + req + '</label>' + help + '<div style="font-size:0.8rem;color:var(--muted)">Add these in the <b>Gallery</b> compartment below.</div></div>';
+  }
+  const v = esc(serializeFact(f.kind, val));
+  const multiline = ['facts', 'list', 'topics', 'people', 'roles', 'products'].includes(f.kind);
+  const ph = f.kind === 'people' ? 'One per line:  Name — Role'
+    : f.kind === 'roles' ? 'One per line:  Title — one-line summary'
+    : f.kind === 'products' ? 'One per line:  Name — Price — note'
+    : (f.kind === 'list' || f.kind === 'topics') ? 'One per line'
+    : f.kind === 'facts' ? 'Notes are fine — the AI turns them into polished copy' : '';
+  const control = multiline
+    ? '<textarea data-fact="' + f.id + '" data-kind="' + f.kind + '" rows="' + (f.kind === 'facts' ? 4 : 3) + '" placeholder="' + esc(ph) + '" style="width:100%;font-size:0.85rem">' + v + '</textarea>'
+    : '<input data-fact="' + f.id + '" data-kind="' + f.kind + '" type="' + (f.kind === 'email' ? 'email' : f.kind === 'tel' ? 'tel' : 'text') + '" value="' + v + '" style="width:100%">';
+  return '<div class="field"><label>' + esc(f.label) + req + '</label>' + help + control + '</div>';
+}
+
+function readyBadge(r) {
+  if (r.ready) return '<div class="report ok">✓ All essentials answered — this will build a finished, shippable site.</div>';
+  return '<div class="report" style="background:var(--warn-soft);color:var(--warn)">' + r.answeredCount + ' of ' + r.requiredCount +
+    ' essentials answered. Still needed: <b>' + r.missing.map((m) => esc(m.label)).join(', ') + '</b></div>';
+}
+
+async function loadSiteContent(siteId) {
+  const root = $('#siteContent');
+  if (!root) return;
+  const { status, body } = await api('/v1/sites/' + siteId + '/content');
+  if (status !== 200) { root.innerHTML = ''; return; }
+  const byGroup = {};
+  for (const f of body.fields) (byGroup[f.group] = byGroup[f.group] || []).push(f);
+  let html = '<h3 style="margin-top:1.4rem;color:var(--ink)">Tell us about the business</h3>' +
+    '<p style="font-size:0.85rem;color:var(--muted);margin:0.3rem 0 0.7rem">Answer the essentials (<span style="color:var(--bad)">*</span>) and the AI writes finished copy for every page — no placeholders, nothing left blank. Optional fields add more when you have them.</p>' +
+    '<div id="contentReady">' + readyBadge(body.readiness) + '</div>';
+  for (const [g, fields] of Object.entries(byGroup)) {
+    html += '<div class="card" style="margin-top:0.6rem"><h3 style="margin-top:0">' + esc(body.groups[g] || g) + '</h3>' +
+      fields.map((f) => factInput(f, body.facts[f.id])).join('') + '</div>';
+  }
+  html += '<div style="display:flex;gap:0.6rem;margin-top:0.7rem;flex-wrap:wrap;align-items:center">' +
+    '<button class="primary" data-contentact="generate" data-id="' + esc(siteId) + '">✍ Write the copy with AI</button>' +
+    '<span style="font-size:0.8rem;color:var(--muted)">Preview the words before you build.</span></div>' +
+    '<div id="copyPreview" style="margin-top:0.6rem"></div>';
+  root.innerHTML = html;
+  if (body.copy) renderCopyPreview(body.copy, 'saved');
+}
+
+let contentSaveTimer = null;
+async function saveSiteContent() {
+  const siteId = $('#siteContent')?.dataset.id;
+  if (!siteId) return;
+  const facts = {};
+  document.querySelectorAll('#siteContent [data-fact]').forEach((el) => {
+    facts[el.dataset.fact] = parseFact(el.dataset.kind, el.value);
+  });
+  const { status, body } = await api('/v1/sites/' + siteId + '/content', { method: 'PATCH', body: { facts } });
+  if (status === 200 && $('#contentReady')) $('#contentReady').innerHTML = readyBadge(body.readiness);
+}
+
+async function generateSiteCopy(siteId) {
+  const box = $('#copyPreview');
+  box.innerHTML = '<div class="report ok">Writing your copy… the AI is drafting every page from your answers.</div>';
+  const { status, body } = await api('/v1/sites/' + siteId + '/content/generate', { method: 'POST' });
+  if (status !== 200) { box.innerHTML = '<div class="report err">' + esc(body.error?.message || 'Could not write the copy.') + '</div>'; return; }
+  renderCopyPreview(body.copy, body.source);
+}
+
+function renderCopyPreview(copy, source) {
+  const box = $('#copyPreview');
+  if (!box) return;
+  const P = (t) => '<p style="margin:0.2rem 0;font-size:0.86rem">' + esc(t) + '</p>';
+  const sec = (title, inner) => inner ? '<div style="margin-top:0.55rem"><div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted)">' + esc(title) + '</div>' + inner + '</div>' : '';
+  let html = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem"><h3 style="margin:0">The copy the AI wrote</h3>' +
+    '<span style="font-size:0.72rem;color:var(--muted)">' + (source === 'ai' ? 'written by AI' : source === 'saved' ? 'saved draft' : 'auto-composed') + '</span></div>';
+  html += sec('Tagline', P(copy.tagline));
+  html += sec('Description', P(copy.description));
+  if (copy.services?.length) html += sec('Services', '<ul style="margin:0.2rem 0;padding-left:1.1rem;font-size:0.84rem">' + copy.services.map((s) => '<li><b>' + esc(s.name) + '</b>' + (s.description ? ' — ' + esc(s.description) : '') + '</li>').join('') + '</ul>');
+  if (copy.about?.paragraphs?.length) html += sec('About', copy.about.paragraphs.map(P).join(''));
+  if (copy.faq?.length) html += sec('FAQ', copy.faq.map((f) => '<p style="margin:0.3rem 0;font-size:0.84rem"><b>' + esc(f.question) + '</b><br>' + esc(f.answer) + '</p>').join(''));
+  if (copy.careers?.roles?.length) html += sec('Roles', '<ul style="margin:0.2rem 0;padding-left:1.1rem;font-size:0.84rem">' + copy.careers.roles.map((r) => '<li><b>' + esc(r.title) + '</b>' + (r.summary ? ' — ' + esc(r.summary) : '') + '</li>').join('') + '</ul>');
+  html += '<p style="font-size:0.78rem;color:var(--muted);margin-top:0.5rem">This lands on the site when you build. Change any answer above and write it again to update.</p></div>';
+  box.innerHTML = html;
 }
 
 /** Build (assemble + QA) with visible progress, then refresh the detail. */
 async function buildSite(siteId) {
   const out = $('#siteActOut');
   const { status, body } = await api('/v1/sites/' + siteId + '/assemble', { method: 'POST', body: {} });
-  if (status !== 202) { out.innerHTML = '<div class="report err">' + esc(body.error?.message || 'Build failed to start (' + status + ').') + '</div>'; return; }
+  if (status !== 202) {
+    out.innerHTML = '<div class="report err">' + esc(body.error?.message || 'Build failed to start (' + status + ').') + '</div>';
+    if (body.error?.code === 'content_incomplete') $('#siteContent')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return;
+  }
   const started = Date.now();
   out.innerHTML = '<div class="report ok">Building… full checks take a few minutes.</div>';
   for (;;) {
@@ -1124,12 +1240,24 @@ $('#view-sites').addEventListener('change', async (e) => {
   loadSiteAssets(siteId);
 });
 
+// Debounced auto-save of the content intake as the operator types.
+$('#siteDetail').addEventListener('input', (e) => {
+  if (!e.target.matches('[data-fact]')) return;
+  clearTimeout(contentSaveTimer);
+  contentSaveTimer = setTimeout(saveSiteContent, 700);
+});
+
 $('#siteDetail').addEventListener('click', async (e) => {
   const del = e.target.closest('button[data-assetdel]');
   if (del) {
     const siteId = $('#siteAssets').dataset.id;
     await api('/v1/sites/' + siteId + '/assets/' + del.dataset.slot + '/' + del.dataset.assetdel, { method: 'DELETE' });
     loadSiteAssets(siteId);
+    return;
+  }
+  const cbtn = e.target.closest('button[data-contentact]');
+  if (cbtn) {
+    if (cbtn.dataset.contentact === 'generate') generateSiteCopy(cbtn.dataset.id);
     return;
   }
   const btn = e.target.closest('button[data-siteact]');

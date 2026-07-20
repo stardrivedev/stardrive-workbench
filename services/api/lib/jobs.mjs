@@ -171,6 +171,22 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
 
     const modules = Array.isArray(site.config.modules) ? site.config.modules.filter((m) => m && m !== 'd4-site-template') : [];
 
+    // Fill the config-driven identity/contact fields from the intake facts and
+    // the AI-written copy, so the engine writes REAL values into site.ts rather
+    // than its placeholder defaults. Only fills what the config left blank —
+    // an explicit config value always wins.
+    const facts = site.content || {};
+    const pack = site.copy || null;
+    // Whether this build carries the customer's intake (workbench builds are
+    // gated to require it; headless create+assemble may skip it).
+    const hasIntake = Boolean((typeof facts.whatYouDo === 'string' && facts.whatYouDo.trim()) || pack);
+    const fill = (k, v) => { if ((site.config[k] === undefined || site.config[k] === '') && typeof v === 'string' && v.trim()) site.config[k] = v.trim(); };
+    fill('tagline', pack?.tagline || facts.whatYouDo);
+    fill('description', pack?.description);
+    fill('contactEmail', facts.contactEmail);
+    fill('phone', facts.phone);
+    fill('address', facts.address);
+
     let assemblyRecord;
     let viaAssembler = false;
     if (resolved.source === 'bundled') {
@@ -242,9 +258,17 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
 
     add('assembled: package.json + src present', has('package.json') && has('src'));
     if (viaAssembler) {
-      let configApplied = false;
-      try { configApplied = fs.readFileSync(path.join(outDir, 'src/config/site.ts'), 'utf-8').includes(site.config.siteName); } catch { /* fails below */ }
-      add('per-client config written (site name in site.ts)', configApplied);
+      let siteTs = '';
+      try { siteTs = fs.readFileSync(path.join(outDir, 'src/config/site.ts'), 'utf-8'); } catch { /* fails below */ }
+      add('per-client config written (site name in site.ts)', siteTs.includes(site.config.siteName));
+      // No-placeholder gate: once the customer has done the intake, the
+      // engine's filler defaults must be gone (they are — required facts are
+      // gated + filled). Skipped for headless content-free assemblies.
+      if (hasIntake) {
+        const PLACEHOLDERS = ['Replace this with', 'A clear, direct statement of what this business does', 'two or three sentences about the business'];
+        const leftover = PLACEHOLDERS.filter((ph) => siteTs.includes(ph));
+        add('no placeholder copy in the site config', leftover.length === 0, leftover[0]);
+      }
       add('theme.css present', has('src/app/theme.css'));
       let contrastOk = false; let detail;
       try {

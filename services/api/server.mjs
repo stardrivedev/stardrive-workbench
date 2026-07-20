@@ -26,6 +26,8 @@ import { createStaticServer } from './lib/static.mjs';
 import { createConnections, PROVIDERS } from './lib/connections.mjs';
 import { createAssets, MAX_ASSET_BYTES } from './lib/assets.mjs';
 import { createLivePreview } from './lib/live-preview.mjs';
+import { requirementsFor, readiness, validateFacts, GROUP_LABELS } from './lib/content.mjs';
+import { generateCopy } from './lib/copy-gen.mjs';
 import { tarGzDir } from './lib/archive.mjs';
 import { pushToGitHub } from './lib/deploy.mjs';
 import { createEmail } from './lib/email.mjs';
@@ -102,6 +104,18 @@ function loadSite(id, account) {
     throw httpError(404, 'not_found', `Site ${id} not found.`);
   }
   return site;
+}
+
+/** Compartment ids that currently hold at least one upload (for readiness). */
+function filledAssetSlots(siteId) {
+  const state = assets.state(siteId) || {};
+  return Object.keys(state).filter((slot) => (state[slot] || []).length > 0);
+}
+
+/** Readiness for a site given its facts, modules, and uploaded assets. */
+function siteReadiness(site) {
+  const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
+  return readiness(site.content || {}, modules, { assetSlots: filledAssetSlots(site.id) });
 }
 
 function resolveMappingBody(body, key) {
@@ -414,6 +428,8 @@ const ROUTES = [
         templateId: body.templateId,
         config,
         parse,
+        content: {}, // the customer's factual intake (see lib/content.mjs)
+        copy: null,  // the finished copy pack the AI writes from those facts
         configHistory: [],
         jobs: [],
         createdAt: new Date().toISOString(),
@@ -547,10 +563,74 @@ const ROUTES = [
     },
   },
   {
-    // Re-run assembly with the current config + latest assets.
-    method: 'POST', pattern: '/v1/sites/:id/assemble', scope: 'sites', meter: 'sites.assemble',
+    // The intake: the exact fields this site must/should answer (gated by its
+    // chosen feature pages), the current answers, and how ready it is to ship.
+    method: 'GET', pattern: '/v1/sites/:id/content', scope: 'sites',
     handler: ({ params, key }) => {
       const site = loadSite(params.id, key.account);
+      const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
+      return {
+        status: 200,
+        body: {
+          groups: GROUP_LABELS,
+          fields: requirementsFor(modules),
+          facts: site.content || {},
+          copy: site.copy || null,
+          readiness: siteReadiness(site),
+        },
+      };
+    },
+  },
+  {
+    // Save the factual answers (merged). The AI writes the copy from these.
+    method: 'PATCH', pattern: '/v1/sites/:id/content', scope: 'sites', meter: 'sites.change',
+    handler: ({ params, body, key }) => {
+      const site = loadSite(params.id, key.account);
+      if (!body || typeof body !== 'object' || Array.isArray(body.facts) || typeof body.facts !== 'object') {
+        throw httpError(400, 'bad_request', 'Send { facts: { ...fieldId: value } }.');
+      }
+      const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
+      const merged = { ...(site.content || {}), ...body.facts };
+      const v = validateFacts(merged, modules);
+      if (!v.ok) throw httpError(422, 'invalid_facts', v.errors.join(' '));
+      site.content = merged;
+      site.copy = null; // facts changed — the written copy is now stale
+      site.updatedAt = new Date().toISOString();
+      store.writeJson(`sites/${site.id}.json`, site);
+      return { status: 200, body: { saved: true, readiness: siteReadiness(site) } };
+    },
+  },
+  {
+    // Write the finished copy from the facts (AI when configured, else a
+    // deterministic real-sentence fallback). Stored on the site for the build.
+    method: 'POST', pattern: '/v1/sites/:id/content/generate', scope: 'sites', meter: 'studio.generations',
+    handler: async ({ params, key }) => {
+      const site = loadSite(params.id, key.account);
+      const ready = siteReadiness(site);
+      if (!ready.ready) {
+        throw httpError(422, 'content_incomplete', `Answer the required questions first — still missing: ${ready.missing.map((m) => m.label).join(', ')}.`);
+      }
+      const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
+      const result = await generateCopy({ siteName: site.config.siteName, facts: site.content || {}, modules });
+      site.copy = result.pack;
+      site.updatedAt = new Date().toISOString();
+      store.writeJson(`sites/${site.id}.json`, site);
+      if (result.tokens) { try { auth.meter(key.id, 'studio.tokens', result.tokens); } catch { /* metering best-effort */ } }
+      return { status: 200, body: { copy: result.pack, source: result.source } };
+    },
+  },
+  {
+    // Re-run assembly with the current config + latest assets. GATED: a site
+    // that has not answered its required content cannot build (pass force:true
+    // to bypass for headless/programmatic callers).
+    method: 'POST', pattern: '/v1/sites/:id/assemble', scope: 'sites', meter: 'sites.assemble',
+    handler: ({ params, body, key }) => {
+      const site = loadSite(params.id, key.account);
+      const ready = siteReadiness(site);
+      if (!ready.ready && body?.force !== true) {
+        throw httpError(422, 'content_incomplete',
+          `This site is not ready to ship — answer the required questions first (missing: ${ready.missing.map((m) => m.label).join(', ')}). The build is deliberately gated so nothing goes out half-finished.`);
+      }
       const job = jobs.enqueue('assemble', site.id, key.account);
       site.jobs.push(job.id);
       site.updatedAt = new Date().toISOString();
@@ -799,7 +879,7 @@ const server = createServer(async (req, res) => {
 
   let body;
   let rawBody;
-  if (req.method === 'POST' || req.method === 'PUT') {
+  if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
     if (route.rawBody) rawBody = await readRawBody(req, route.bodyLimit);
     else body = await readBody(req, route.bodyLimit);
   }
