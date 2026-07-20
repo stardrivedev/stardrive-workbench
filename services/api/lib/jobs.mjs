@@ -22,6 +22,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { runFullQA, PREVIEW_FILE } from './qa-full.mjs';
+import { injectAssetDisplay } from './asset-injector.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -215,6 +216,24 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
     fs.mkdirSync(path.join(outDir, 'src', 'config'), { recursive: true });
     fs.writeFileSync(path.join(outDir, 'src', 'config', 'assets.generated.ts'),
       `/**\n * GENERATED FILE. Written by Stardrive at assembly from the customer's\n * uploaded asset compartments. Do not edit; edits are overwritten.\n * Keys are compartment ids; values are public URL paths.\n */\nexport const siteAssets: Record<string, string[]> = ${JSON.stringify(publicMap, null, 2)};\n`);
+
+    // GUARANTEE the uploads actually SHOW. Templates that consume siteAssets
+    // themselves (the catalog) are left alone; templates that ignore it (the
+    // Studio's generated designs) get a deterministic showcase + header logo so
+    // the customer never assembles a site that hides the photos they uploaded.
+    if (Object.keys(publicMap).length) {
+      try {
+        const inj = injectAssetDisplay({ outDir });
+        if (inj.injected) {
+          const parts = [inj.logo && 'logo in the header', inj.showcase && 'a home-page gallery'].filter(Boolean);
+          log(job, `Ensured your uploaded photos display (${parts.join(' + ')}).`);
+        } else if (inj.reason === 'template displays uploads itself') {
+          log(job, 'Template displays the uploads in its own design — nothing to add.');
+        }
+      } catch (e) {
+        log(job, `Note: could not auto-place uploads (${e.message}); the template must reference siteAssets.`);
+      }
+    }
 
     // ── Real QA: structural + WCAG contrast (fast, no browser build) ──
     const checks = [];

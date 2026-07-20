@@ -952,9 +952,11 @@ async function openSiteDetail(siteId) {
     '<div class="codeblock"><pre>' + esc(JSON.stringify(body.config, null, 2)) + '</pre><button class="copybtn" type="button">Copy</button></div></details>' +
     '<div style="display:flex;gap:0.6rem;margin-top:0.9rem;flex-wrap:wrap;align-items:center">' +
     '<button class="primary" data-siteact="build" data-id="' + esc(body.id) + '">' + (built ? 'Rebuild site' : 'Build site') + '</button>' +
-    (built ? '<button class="ghost" data-siteact="export" data-id="' + esc(body.id) + '">Download site (.tar.gz)</button>' +
+    (built ? '<button class="primary" data-siteact="live" data-id="' + esc(body.id) + '">▶ Open live preview</button>' +
+             '<button class="ghost" data-siteact="export" data-id="' + esc(body.id) + '">Download site (.tar.gz)</button>' +
              '<button class="ghost" data-siteact="deploy" data-id="' + esc(body.id) + '">Deploy…</button>' : '') +
     '</div>' +
+    '<div id="livePreview" style="margin-top:0.6rem"></div>' +
     '<div id="siteActOut" style="margin-top:0.6rem"></div>' +
     '<h3 style="margin-top:1.4rem;color:var(--ink)">' + (built ? 'Assets' : 'Add the client\'s photos') + '</h3>' +
     '<p style="font-size:0.85rem;color:var(--muted);margin:0.3rem 0 0.8rem">Drop each file into the right compartment and it lands in its exact place on the site — no paths to think about. Photos added after a build appear when you rebuild.</p>' +
@@ -991,6 +993,36 @@ async function buildSite(siteId) {
     const mins = Math.round((Date.now() - started) / 6000) / 10;
     out.innerHTML = '<div class="report ok">Building (' + mins + ' min): ' + esc(last.slice(0, 120)) + '</div>';
   }
+}
+
+/** Start (or reuse) a clickable live preview and embed it. `reopenTab` also
+ *  pops it in a new browser tab. Runs `next start` on the operator's machine. */
+async function openLivePreview(siteId, reopenTab) {
+  const box = $('#livePreview');
+  if (!reopenTab) box.innerHTML = '<div class="report ok">Starting a live preview server on your machine… the first start takes a few seconds.</div>';
+  const { status, body } = await api('/v1/sites/' + siteId + '/preview/live', { method: 'POST' });
+  if (status !== 200) {
+    box.innerHTML = '<div class="report err">' + esc(body.error?.message || 'Could not start the live preview.') + '</div>';
+    return;
+  }
+  const url = body.url;
+  window.open(url, '_blank', 'noopener');
+  box.innerHTML =
+    '<div class="card" style="margin-top:0.4rem">' +
+    '<div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;margin-bottom:0.5rem">' +
+    '<span style="color:var(--good);font-weight:600">● Live at <a href="' + esc(url) + '" target="_blank" rel="noopener"><code>' + esc(url) + '</code></a></span>' +
+    '<button class="ghost" data-siteact="live-open" data-id="' + esc(siteId) + '">Open in new tab</button>' +
+    '<button class="ghost danger" data-siteact="live-stop" data-id="' + esc(siteId) + '">Stop preview</button>' +
+    '</div>' +
+    '<p style="font-size:0.8rem;color:var(--muted);margin:0 0 0.5rem">Click through the whole site — every page, with the client\'s real photos. It runs locally and stops on its own after 30 minutes idle.</p>' +
+    '<iframe src="' + esc(url) + '" title="Live preview" style="width:100%;height:70vh;border:1px solid var(--line);border-radius:10px;background:#fff"></iframe>' +
+    '</div>';
+}
+
+async function stopLivePreview(siteId) {
+  await api('/v1/sites/' + siteId + '/preview/live', { method: 'DELETE' });
+  const box = $('#livePreview');
+  if (box) box.innerHTML = '<div class="report">Live preview stopped.</div>';
 }
 
 /** Per-site deploy form: each client site can ship to its own account. */
@@ -1033,7 +1065,7 @@ async function loadSitePreviewAndQa(site) {
     if (res.ok) {
       const url = URL.createObjectURL(await res.blob());
       $('#sitePreview').innerHTML =
-        '<div style="margin:0.6rem 0 0.9rem"><img src="' + url + '" alt="Site preview" style="max-width:100%;border:1px solid var(--line);border-radius:10px"><div style="font-size:0.75rem;color:var(--muted);margin-top:0.3rem">Live preview from the QA run — this is the real assembled site.</div></div>';
+        '<div style="margin:0.6rem 0 0.9rem"><img src="' + url + '" alt="Site preview" style="max-width:100%;border:1px solid var(--line);border-radius:10px"><div style="font-size:0.75rem;color:var(--muted);margin-top:0.3rem">Home-page snapshot from the last build. Press <b style="color:var(--ink)">Open live preview</b> to click through the whole site.</div></div>';
     }
   } catch { /* no preview — fine */ }
   // QA report of the most recent finished job.
@@ -1103,6 +1135,9 @@ $('#siteDetail').addEventListener('click', async (e) => {
   const btn = e.target.closest('button[data-siteact]');
   if (!btn) return;
   if (btn.dataset.siteact === 'build') { buildSite(btn.dataset.id); return; }
+  if (btn.dataset.siteact === 'live') { openLivePreview(btn.dataset.id); return; }
+  if (btn.dataset.siteact === 'live-stop') { stopLivePreview(btn.dataset.id); return; }
+  if (btn.dataset.siteact === 'live-open') { openLivePreview(btn.dataset.id, true); return; }
   if (btn.dataset.siteact === 'deploy') { showDeployForm(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'deploy-go') { deployNow(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'export') {

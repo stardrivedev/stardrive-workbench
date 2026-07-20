@@ -25,6 +25,7 @@ import { relayChat, studioConfig } from './lib/chat-proxy.mjs';
 import { createStaticServer } from './lib/static.mjs';
 import { createConnections, PROVIDERS } from './lib/connections.mjs';
 import { createAssets, MAX_ASSET_BYTES } from './lib/assets.mjs';
+import { createLivePreview } from './lib/live-preview.mjs';
 import { tarGzDir } from './lib/archive.mjs';
 import { pushToGitHub } from './lib/deploy.mjs';
 import { createEmail } from './lib/email.mjs';
@@ -62,6 +63,7 @@ function resolveTemplateForJob(account, name) {
 const jobs = createJobRunner(store, { engine: ENGINE, assets, engineDir: ENGINE_DIR, resolveTemplate: resolveTemplateForJob });
 const connections = createConnections(store, VAR_DIR);
 const email = createEmail();
+const livePreview = createLivePreview(); // per-site `next start` on localhost
 
 function parseCookies(req) {
   const out = {};
@@ -610,6 +612,32 @@ const ROUTES = [
     },
   },
   {
+    // Start (or reuse) a clickable live preview: `next start` on a localhost
+    // port, so the operator can navigate the REAL assembled site. Local-only.
+    method: 'POST', pattern: '/v1/sites/:id/preview/live', scope: 'sites',
+    handler: async ({ params, key }) => {
+      const s = loadSite(params.id, key.account);
+      const info = await livePreview.start(s.id, store.path('workspaces', s.id));
+      return { status: 200, body: { status: 'running', ...info } };
+    },
+  },
+  {
+    // Is a live preview running for this site? (returns null url if not).
+    method: 'GET', pattern: '/v1/sites/:id/preview/live', scope: 'sites',
+    handler: ({ params, key }) => {
+      const s = loadSite(params.id, key.account);
+      const info = livePreview.status(s.id);
+      return { status: 200, body: info ? { status: 'running', ...info } : { status: 'stopped' } };
+    },
+  },
+  {
+    method: 'DELETE', pattern: '/v1/sites/:id/preview/live', scope: 'sites',
+    handler: ({ params, key }) => {
+      const s = loadSite(params.id, key.account);
+      return { status: 200, body: { status: livePreview.stop(s.id) ? 'stopped' : 'stopped' } };
+    },
+  },
+  {
     method: 'GET', pattern: '/v1/sites/:id/export', scope: 'sites',
     handler: ({ params, key }) => {
       const s = loadSite(params.id, key.account);
@@ -791,3 +819,9 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`[stardrive-api] v${VERSION} listening on http://localhost:${PORT} (engine: ${ENGINE}, var: ${VAR_DIR})`);
 });
+
+// Don't leave orphaned `next start` preview servers behind on shutdown.
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => { try { livePreview.stopAll(); } finally { process.exit(0); } });
+}
+process.on('exit', () => livePreview.stopAll());
