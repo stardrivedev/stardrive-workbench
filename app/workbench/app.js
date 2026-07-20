@@ -972,7 +972,10 @@ async function buildSite(siteId) {
   out.innerHTML = '<div class="report ok">Building… full checks take a few minutes.</div>';
   for (;;) {
     await new Promise((r) => setTimeout(r, 5000));
-    const j = await api('/v1/jobs/' + body.jobId);
+    let j;
+    // The heavy build steps briefly block the server — ride through
+    // dropped polls instead of silently stopping.
+    try { j = await api('/v1/jobs/' + body.jobId); } catch { continue; }
     if (j.status !== 200) continue;
     if (j.body.status === 'done' || j.body.status === 'failed') {
       openSiteDetail(siteId);

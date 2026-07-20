@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import type { NavItem } from "@/types";
+import { siteAssets } from "@/config/assets.generated";
 import { siteConfig, baseNav, tailNav, quoteConfig } from "@/config/site";
 import { moduleNav } from "@/config/nav.generated";
 import { darkMode } from "@/config/design.generated";
@@ -77,8 +78,12 @@ export default function Header() {
           <Link
             href="/"
             onClick={() => setOpenGroup(null)}
-            className="flex-shrink-0 text-lg font-semibold tracking-tight text-heading"
+            className="flex flex-shrink-0 items-center gap-2.5 text-lg font-semibold tracking-tight text-heading"
           >
+            {siteAssets.logo?.[0] ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={siteAssets.logo[0]} alt="" className="h-8 w-auto" />
+            ) : null}
             {siteConfig.name}
           </Link>
 

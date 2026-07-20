@@ -84,7 +84,8 @@ export function createAssets(store) {
       stored,
       bytes: buffer.length,
       type: MIME[ext] ?? 'application/octet-stream',
-      target: slotDef.target + safeName,
+      // Favicon must land at Next's icon.<ext> convention to take effect.
+      target: slotDef.id === 'favicon' ? `src/app/icon.${ext}` : slotDef.target + safeName,
       uploadedAt: new Date().toISOString(),
     };
     index[slotDef.id] = [...existing, meta];

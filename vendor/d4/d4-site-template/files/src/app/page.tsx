@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { siteConfig, faq, logoWall } from "@/config/site";
+import { siteAssets } from "@/config/assets.generated";
 import FaqAccordion from "@/components/ui/FaqAccordion";
 import LogoMarquee from "@/components/ui/LogoMarquee";
 
@@ -48,6 +49,19 @@ export default function HomePage() {
           </div>
         </div>
       </section>
+
+      {siteAssets.hero?.[0] && (
+        <section aria-label="Featured imagery" className="border-t border-heading/10">
+          <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={siteAssets.hero[0]}
+              alt=""
+              className="max-h-[420px] w-full rounded-2xl border border-heading/10 object-cover"
+            />
+          </div>
+        </section>
+      )}
 
       {logoWall.items.length > 0 && (
         <LogoMarquee title={logoWall.title} items={logoWall.items} />
