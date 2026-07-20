@@ -635,11 +635,34 @@ await check('connections: unknown provider 422, bad token 400, delete works', as
   assert.strictEqual((await call('DELETE', '/v1/connections/github', { key: fullKey })).status, 200);
   assert.strictEqual((await call('DELETE', '/v1/connections/github', { key: fullKey })).status, 404);
 });
-await check('deploy actuator: 409 before assembly, then clear 422 guidance until GitHub is connected', async () => {
+await check('deploy actuator: 409 before assembly; per-site targets endpoint works', async () => {
   // This (dry-assembled) site has no real repo to push.
   const notAssembled = await call('POST', `/v1/sites/${siteId}/deploy`, { key: fullKey, body: {} });
   assert.strictEqual(notAssembled.status, 409);
   assert.strictEqual(notAssembled.body.error.code, 'not_assembled');
+  // Per-site deploy target: none saved yet; account default reflected.
+  const tgt = await call('GET', `/v1/sites/${siteId}/deploy-target`, { key: fullKey });
+  assert.strictEqual(tgt.status, 200);
+  assert.strictEqual(tgt.body.site, null);
+});
+await check('create-first flow: assemble:false creates without building; photos then build', async () => {
+  const made = await call('POST', '/v1/sites', { key: fullKey, body: {
+    templateId: 'd4-site-template', config: { siteName: 'Photos First Co' }, assemble: false,
+  } });
+  assert.strictEqual(made.status, 201);
+  assert.strictEqual(made.body.status, 'created');
+  const detail = await call('GET', `/v1/sites/${made.body.siteId}`, { key: fullKey });
+  assert.strictEqual(detail.body.jobs.length, 0, 'no build yet');
+  // Upload a photo BEFORE the first build…
+  const png = Buffer.from('89504e470d0a1a0a', 'hex');
+  const up = await call('POST', `/v1/sites/${made.body.siteId}/assets/logo`, { key: fullKey, body: { filename: 'first.png', contentBase64: png.toString('base64') } });
+  assert.strictEqual(up.status, 201);
+  // …then the first build includes it (dry: recorded in the marker).
+  const built = await call('POST', `/v1/sites/${made.body.siteId}/assemble`, { key: fullKey, body: {} });
+  assert.strictEqual(built.status, 202);
+  await waitForJob(fullKey, built.body.jobId);
+  const marker = JSON.parse(fs.readFileSync(path.join(varDir, 'workspaces', made.body.siteId, 'd4.assembly.json'), 'utf-8'));
+  assert.strictEqual(marker.assets.logo.length, 1, 'first build already carries the photo');
 });
 
 // ── Workbench: static pages + the BYO-key chat relay ────────────────────
@@ -757,10 +780,14 @@ await check('STARDRIVE_ENGINE=real assembles a genuine Next.js site, QA passes, 
   const buf = Buffer.from(await exp.arrayBuffer());
   assert.strictEqual(buf[0] === 0x1f && buf[1] === 0x8b, true, 'gzip magic bytes');
   assert.strictEqual(buf.length > 1000, true, 'non-trivial archive');
-  // Deploy of a real, assembled site with no GitHub connection → clear guidance.
+  // Deploy of a real, assembled site with no target anywhere → clear guidance.
   const dep = await call('POST', `/v1/sites/${mk.body.siteId}/deploy`, { key: fullKey, base, body: {} });
   assert.strictEqual(dep.status, 422);
-  assert.strictEqual(dep.body.error.code, 'no_github');
+  assert.strictEqual(dep.body.error.code, 'no_target');
+  assert.strictEqual(dep.body.error.message.includes('different account'), true);
+  // The generated asset map exists in the assembled site (empty here).
+  const gen = fs.readFileSync(path.join(varDir, 'workspaces', mk.body.siteId, 'src/config/assets.generated.ts'), 'utf-8');
+  assert.strictEqual(gen.includes('siteAssets'), true);
 });
 await check('real engine: a bad module fails the job honestly (never a fake pass)', async () => {
   const base = 'http://localhost:4654';

@@ -417,6 +417,13 @@ const ROUTES = [
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
+      // assemble:false creates the site WITHOUT building, so the customer can
+      // upload assets first and the very first build (and preview) includes
+      // their photos. POST /v1/sites/{id}/assemble builds when they're ready.
+      if (body.assemble === false) {
+        store.writeJson(`sites/${site.id}.json`, site);
+        return { status: 201, body: { siteId: site.id, status: 'created' } };
+      }
       const job = jobs.enqueue('assemble', site.id, key.account);
       site.jobs.push(job.id);
       store.writeJson(`sites/${site.id}.json`, site);
@@ -555,23 +562,39 @@ const ROUTES = [
       const s = loadSite(params.id, key.account);
       const dir = store.path('workspaces', s.id);
       if (!fs.existsSync(path.join(dir, 'package.json'))) {
-        throw httpError(409, 'not_assembled', 'Assemble the site with the real engine before deploying.');
+        throw httpError(409, 'not_assembled', 'Build the site before deploying.');
       }
-      const conns = connections.get(key.account);
-      if (!conns.github.connected) {
-        throw httpError(422, 'no_github', 'Connect a GitHub token in Connections to deploy — Stardrive pushes the assembled site (only) to a repo YOU own; link it to Vercel and it builds on push.');
+      // Per-client targets: each site can ship to its OWN GitHub account.
+      // Resolution: this request's fields > this site's saved target > the
+      // account default from Connections. Sending token/owner/repo with
+      // save:true stores them (encrypted) as this site's target.
+      const siteTarget = connections.getSiteTarget(s.id);
+      const acct = connections.get(key.account).github;
+      const owner = String(body?.owner || siteTarget?.owner || acct.owner || '').trim();
+      const token = (typeof body?.token === 'string' && body.token.trim())
+        || connections.revealSiteToken(s.id)
+        || (acct.connected ? connections.reveal(key.account, 'github') : null);
+      if (!token || !owner) {
+        throw httpError(422, 'no_target', 'Tell us where to deploy: a GitHub owner and token — either right here for this site, or once in Hosting as your default. Each site can go to a different account.');
       }
-      if (!conns.github.owner) {
-        throw httpError(422, 'no_owner', 'Add your GitHub owner (username or org) to the GitHub connection so we know where to push.');
-      }
-      const token = connections.reveal(key.account, 'github');
-      const repo = String(body?.repo || s.config.siteName || 'site').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '') || 'site';
-      const result = await pushToGitHub({ token, owner: conns.github.owner, repo, dir, message: `Stardrive: ${s.config.siteName}` });
+      if (!/^[a-zA-Z0-9-]{1,80}$/.test(owner)) throw httpError(400, 'bad_request', 'owner must be a GitHub username/org slug.');
+      const repo = String(body?.repo || siteTarget?.repo || s.config.siteName || 'site').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '') || 'site';
+      if (body?.save) connections.setSiteTarget(s.id, { token: body?.token?.trim() || undefined, owner, repo });
+      const result = await pushToGitHub({ token, owner, repo, dir, message: `Stardrive: ${s.config.siteName}` });
       return {
         status: 200,
         body: { deployed: true, target: 'github', ...result,
-          note: 'Pushed the assembled site to your GitHub. Link the repo to Vercel (or your host) and it builds on push. One-click Vercel/Turso provisioning is the next step.' },
+          note: 'Pushed the site to GitHub. Link the repo to Vercel (or your host) and it builds on every push.' },
       };
+    },
+  },
+  {
+    // The site's saved deploy target (masked) — for prefilling the form.
+    method: 'GET', pattern: '/v1/sites/:id/deploy-target', scope: 'deploy',
+    handler: ({ params, key }) => {
+      const s = loadSite(params.id, key.account);
+      const acct = connections.get(key.account).github;
+      return { status: 200, body: { site: connections.getSiteTarget(s.id), accountDefault: acct.connected ? { owner: acct.owner, last4: acct.last4 } : null } };
     },
   },
   {

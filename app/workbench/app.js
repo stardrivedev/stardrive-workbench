@@ -179,6 +179,21 @@ files/src/config/admin-panels.generated.tsx
 files/src/app/theme.css   (section 4)
 files/src/app/layout.tsx  (section 6)
 
+files/src/config/assets.generated.ts
+  export const siteAssets: Record<string, string[]> = {};
+  THE CUSTOMER'S UPLOADED PHOTOS. At assembly the engine rewrites this file
+  with public URL paths keyed by compartment id: logo, hero, about,
+  gallery, team, misc (plus any assetSlots you declare). Your template
+  MUST consume it with graceful fallbacks so real uploads appear:
+  - hero: use siteAssets.hero?.[0] as the hero image when present; your
+    designed hero (gradients/shapes/type) is the fallback.
+  - logo: render <img src={siteAssets.logo[0]}> in the header when
+    present; the styled text logo is the fallback.
+  - gallery/portfolio page: render siteAssets.gallery images when
+    present; your placeholder grid is the fallback.
+  - about/team: same pattern where your design has imagery.
+  Ship the file with an empty {} default so the template runs standalone.
+
 =====================================================================
 6. REQUIRED ROUTES AND BEHAVIORS (MUST)
 =====================================================================
@@ -916,31 +931,96 @@ async function loadSites() {
   }
 }
 
-$('#sitesTable').addEventListener('click', async (e) => {
+$('#sitesTable').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-site]');
-  if (!btn) return;
-  const { status, body } = await api('/v1/sites/' + btn.dataset.site);
+  if (btn) openSiteDetail(btn.dataset.site);
+});
+
+async function openSiteDetail(siteId) {
+  const { status, body } = await api('/v1/sites/' + siteId);
   if (status !== 200) return;
+  const built = body.jobs.some((j) => j.status === 'done');
   const jobsHtml = body.jobs.map((j) =>
     '<tr><td><code>' + esc(j.id.slice(0, 8)) + '</code></td><td>' + esc(j.kind) + '</td><td>' + esc(j.status) + '</td><td style="color:var(--muted)">' + esc((j.finishedAt || j.createdAt || '').slice(0, 19).replace('T', ' ')) + '</td></tr>').join('');
   $('#siteDetail').innerHTML =
     '<h3 style="margin-top:1.2rem;color:var(--ink)">' + esc(body.config.siteName || body.id) + '</h3>' +
+    (built ? '' : '<p style="font-size:0.88rem;color:var(--muted);margin:0.3rem 0 0.6rem">Not built yet — <b style="color:var(--ink)">add the client\'s photos below first</b>, then press Build so the first preview shows their real images.</p>') +
     '<div id="sitePreview"></div>' +
-    '<div class="tscroll"><table class="list"><thead><tr><th>Job</th><th>Kind</th><th>Status</th><th>When</th></tr></thead><tbody>' + jobsHtml + '</tbody></table></div>' +
+    (jobsHtml ? '<div class="tscroll"><table class="list"><thead><tr><th>Job</th><th>Kind</th><th>Status</th><th>When</th></tr></thead><tbody>' + jobsHtml + '</tbody></table></div>' : '') +
     '<div id="siteQa"></div>' +
     '<details style="margin-top:0.8rem"><summary style="cursor:pointer;color:var(--muted);font-size:0.85rem">Config (' + Object.keys(body.config).length + ' slots, ' + body.configHistory.length + ' prior versions)</summary>' +
     '<div class="codeblock"><pre>' + esc(JSON.stringify(body.config, null, 2)) + '</pre><button class="copybtn" type="button">Copy</button></div></details>' +
-    '<div style="display:flex;gap:0.6rem;margin-top:0.9rem;flex-wrap:wrap">' +
-    '<button class="ghost" data-siteact="reassemble" data-id="' + esc(body.id) + '">Re-assemble</button>' +
-    '<button class="ghost" data-siteact="export" data-id="' + esc(body.id) + '">Download site (.tar.gz)</button>' +
-    '<button class="ghost" data-siteact="deploy" data-id="' + esc(body.id) + '">Deploy</button></div>' +
+    '<div style="display:flex;gap:0.6rem;margin-top:0.9rem;flex-wrap:wrap;align-items:center">' +
+    '<button class="primary" data-siteact="build" data-id="' + esc(body.id) + '">' + (built ? 'Rebuild site' : 'Build site') + '</button>' +
+    (built ? '<button class="ghost" data-siteact="export" data-id="' + esc(body.id) + '">Download site (.tar.gz)</button>' +
+             '<button class="ghost" data-siteact="deploy" data-id="' + esc(body.id) + '">Deploy…</button>' : '') +
+    '</div>' +
     '<div id="siteActOut" style="margin-top:0.6rem"></div>' +
-    '<h3 style="margin-top:1.4rem;color:var(--ink)">Assets</h3>' +
-    '<p style="font-size:0.85rem;color:var(--muted);margin:0.3rem 0 0.8rem">Upload into the right compartment and each file is slotted into its exact place on the site at the next assembly — no paths to think about.</p>' +
+    '<h3 style="margin-top:1.4rem;color:var(--ink)">' + (built ? 'Assets' : 'Add the client\'s photos') + '</h3>' +
+    '<p style="font-size:0.85rem;color:var(--muted);margin:0.3rem 0 0.8rem">Drop each file into the right compartment and it lands in its exact place on the site — no paths to think about. Photos added after a build appear when you rebuild.</p>' +
     '<div id="siteAssets" data-id="' + esc(body.id) + '" class="grid2"></div>';
   loadSiteAssets(body.id);
   loadSitePreviewAndQa(body);
-});
+}
+
+/** Build (assemble + QA) with visible progress, then refresh the detail. */
+async function buildSite(siteId) {
+  const out = $('#siteActOut');
+  const { status, body } = await api('/v1/sites/' + siteId + '/assemble', { method: 'POST', body: {} });
+  if (status !== 202) { out.innerHTML = '<div class="report err">' + esc(body.error?.message || 'Build failed to start (' + status + ').') + '</div>'; return; }
+  const started = Date.now();
+  out.innerHTML = '<div class="report ok">Building… full checks take a few minutes.</div>';
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const j = await api('/v1/jobs/' + body.jobId);
+    if (j.status !== 200) continue;
+    if (j.body.status === 'done' || j.body.status === 'failed') {
+      openSiteDetail(siteId);
+      loadSites();
+      setTimeout(() => {
+        $('#siteActOut').innerHTML = j.body.status === 'done'
+          ? '<div class="report ok">✓ Built and checked — the preview above is the real site' + (j.body.result?.preview ? ', photos included' : '') + '.</div>'
+          : '<div class="report err">Build failed: ' + esc(j.body.logs?.at(-1)?.line || 'see jobs') + '</div>';
+      }, 400);
+      return;
+    }
+    const last = j.body.logs?.at(-1)?.line || 'working…';
+    const mins = Math.round((Date.now() - started) / 6000) / 10;
+    out.innerHTML = '<div class="report ok">Building (' + mins + ' min): ' + esc(last.slice(0, 120)) + '</div>';
+  }
+}
+
+/** Per-site deploy form: each client site can ship to its own account. */
+async function showDeployForm(siteId) {
+  const out = $('#siteActOut');
+  const { body } = await api('/v1/sites/' + siteId + '/deploy-target');
+  const st = body?.site; const def = body?.accountDefault;
+  out.innerHTML =
+    '<div class="card" style="margin-top:0.6rem"><h3 style="margin:0 0 0.5rem">Deploy this site to GitHub</h3>' +
+    '<p style="font-size:0.8rem;color:var(--muted);margin:0 0 0.8rem">Every site can go to a different account — perfect for per-client hosting. ' +
+    (st?.connected ? 'This site has its own saved target (token ····' + esc(st.last4 || '') + ').' : def ? 'Blank fields fall back to your Hosting default (' + esc(def.owner || 'no owner') + ', ····' + esc(def.last4) + ').' : 'No default saved — fill these in (or set a default once in Hosting).') + '</p>' +
+    '<div class="grid2">' +
+    '<div class="field"><label>GitHub owner (user or org)</label><input id="depOwner" class="mono" value="' + esc(st?.owner || def?.owner || '') + '" spellcheck="false"></div>' +
+    '<div class="field"><label>Repository name</label><input id="depRepo" class="mono" value="' + esc(st?.repo || '') + '" placeholder="defaults to the site name" spellcheck="false"></div>' +
+    '</div>' +
+    '<div class="field"><label>GitHub token for THIS site (leave blank to use the saved/default one)</label><input id="depToken" class="mono" type="password" autocomplete="off"></div>' +
+    '<label class="checkline" style="margin-bottom:0.8rem"><input type="checkbox" id="depSave" checked> Remember as this site\'s deploy target</label>' +
+    '<div><button class="primary" data-siteact="deploy-go" data-id="' + esc(siteId) + '">Deploy now</button></div>' +
+    '<div id="deployOut" style="margin-top:0.6rem"></div></div>';
+}
+
+async function deployNow(siteId) {
+  const out = $('#deployOut') || $('#siteActOut');
+  const payload = { save: $('#depSave')?.checked };
+  const owner = $('#depOwner')?.value.trim(); if (owner) payload.owner = owner;
+  const repo = $('#depRepo')?.value.trim(); if (repo) payload.repo = repo;
+  const token = $('#depToken')?.value.trim(); if (token) payload.token = token;
+  out.innerHTML = '<div class="report ok">Deploying — pushing the site to GitHub…</div>';
+  const { status, body } = await api('/v1/sites/' + siteId + '/deploy', { method: 'POST', body: payload });
+  out.innerHTML = status === 200
+    ? '<div class="report ok">✓ Deployed to <a href="' + esc(body.url) + '" target="_blank" rel="noopener">' + esc(body.repo) + '</a> (' + body.files + ' files' + (body.createdRepo ? ', repo created' : '') + '). ' + esc(body.note) + '</div>'
+    : '<div class="report err">' + esc(body.error?.message || 'Deploy failed (' + status + ').') + '</div>';
+}
 
 /** Visual preview (full-QA screenshot) + the latest job's QA report. */
 async function loadSitePreviewAndQa(site) {
@@ -1019,14 +1099,9 @@ $('#siteDetail').addEventListener('click', async (e) => {
   }
   const btn = e.target.closest('button[data-siteact]');
   if (!btn) return;
-  if (btn.dataset.siteact === 'reassemble') {
-    const { status, body } = await api('/v1/sites/' + btn.dataset.id + '/assemble', { method: 'POST', body: {} });
-    $('#siteActOut').innerHTML = status === 202
-      ? '<div class="report ok">Re-assembling with the current config and assets (job ' + esc(body.jobId.slice(0, 8)) + '…).</div>'
-      : '<div class="report err">' + esc(body.error?.message || 'Failed (' + status + ').') + '</div>';
-    setTimeout(loadSites, 1500);
-    return;
-  }
+  if (btn.dataset.siteact === 'build') { buildSite(btn.dataset.id); return; }
+  if (btn.dataset.siteact === 'deploy') { showDeployForm(btn.dataset.id); return; }
+  if (btn.dataset.siteact === 'deploy-go') { deployNow(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'export') {
     // Real export streams a .tar.gz — fetch with auth and trigger a download.
     const res = await fetch('/v1/sites/' + btn.dataset.id + '/export', { headers: { Authorization: 'Bearer ' + getApiKey() } });
@@ -1044,8 +1119,6 @@ $('#siteDetail').addEventListener('click', async (e) => {
     }
     return;
   }
-  const { body } = await api('/v1/sites/' + btn.dataset.id + '/deploy', { method: 'POST', body: {} });
-  $('#siteActOut').innerHTML = '<div class="report" style="background:var(--warn-soft);color:var(--warn)">' + esc(body.error?.message || 'Unavailable.') + '</div>';
 });
 
 $('#assembleBtn').addEventListener('click', async () => {
@@ -1062,26 +1135,18 @@ $('#assembleBtn').addEventListener('click', async () => {
   const mods = [...document.querySelectorAll('#assembleFeatures input:checked')]
     .map((c) => FEATURE_BY_ID[c.dataset.assemblefeat]?.module).filter(Boolean);
   if (mods.length) config.modules = mods;
-  out.innerHTML = '<div class="report ok">Assembling…</div>';
-  const { status, body } = await api('/v1/sites', { method: 'POST', body: { templateId, config } });
-  if (status !== 202) {
-    out.innerHTML = '<div class="report err">' + esc(body.error?.message || 'Assembly rejected (' + status + ').') + '</div>';
+  // Create WITHOUT building: photos go in first so the first build's
+  // preview shows the client's real images.
+  const { status, body } = await api('/v1/sites', { method: 'POST', body: { templateId, config, assemble: false } });
+  if (status !== 201) {
+    out.innerHTML = '<div class="report err">' + esc(body.error?.message || 'Could not create the site (' + status + ').') + '</div>';
     return;
   }
-  for (let i = 0; i < 20; i += 1) {
-    await new Promise((r) => setTimeout(r, 500));
-    const job = await api('/v1/jobs/' + body.jobId);
-    if (job.status === 200 && (job.body.status === 'done' || job.body.status === 'failed')) {
-      const qa = job.body.result?.qa;
-      out.innerHTML = job.body.status === 'done'
-        ? '<div class="report ok">✓ Assembled. QA: ' + esc(qa?.verdict || 'recorded') + (qa?.verdict === 'skipped' ? ' (dry engine — the real battery lands with the rollout)' : '') + '</div>'
-        : '<div class="report err">Job failed: ' + esc((job.body.logs || []).slice(-1)[0]?.line || 'see job log') + '</div>';
-      loadSites();
-      return;
-    }
-  }
-  out.innerHTML = '<div class="report ok">Still running — check Your sites below in a moment.</div>';
+  out.innerHTML = '<div class="report ok">✓ Created — now add the client\'s photos below, then press <b>Build site</b>.</div>';
+  $('#siteNameInput').value = ''; $('#siteTaglineInput').value = '';
   loadSites();
+  openSiteDetail(body.siteId);
+  setTimeout(() => $('#siteDetail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
 });
 
 /* ══════════════ Connections ══════════════ */

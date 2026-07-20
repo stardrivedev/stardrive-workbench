@@ -33,7 +33,10 @@ function loadSecret(varDir) {
 
 export function createConnections(store, varDir) {
   const key = crypto.scryptSync(loadSecret(varDir), 'stardrive-connections-v1', 32);
-  const rel = (account) => `connections/${account}.json`;
+  // Account-level defaults, plus per-SITE overrides — an agency often ships
+  // each client to a different account, so the site scope wins when present.
+  const rel = (scope) => `connections/${scope}.json`;
+  const siteScope = (siteId) => `site-${siteId}`;
 
   function encrypt(plain) {
     const iv = crypto.randomBytes(12);
@@ -90,5 +93,29 @@ export function createConnections(store, varDir) {
     return true;
   }
 
-  return { set, get, reveal, remove };
+  /** Store an encrypted per-site github target { token?, owner, repo? }. */
+  function setSiteTarget(siteId, { token, owner, repo }) {
+    const record = store.readJson(rel(siteScope(siteId)), {});
+    record.github = {
+      ...(token ? { enc: encrypt(token), last4: token.slice(-4) } : record.github?.enc ? { enc: record.github.enc, last4: record.github.last4 } : {}),
+      ...(owner ? { owner } : record.github?.owner ? { owner: record.github.owner } : {}),
+      ...(repo ? { repo } : record.github?.repo ? { repo: record.github.repo } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    store.writeJson(rel(siteScope(siteId)), record);
+    return getSiteTarget(siteId);
+  }
+
+  /** Masked per-site target (never token material). */
+  function getSiteTarget(siteId) {
+    const g = store.readJson(rel(siteScope(siteId)), {}).github;
+    return g ? { connected: Boolean(g.enc), last4: g.last4 ?? null, owner: g.owner ?? null, repo: g.repo ?? null, updatedAt: g.updatedAt } : null;
+  }
+
+  function revealSiteToken(siteId) {
+    const g = store.readJson(rel(siteScope(siteId)), {}).github;
+    return g?.enc ? decrypt(g.enc) : null;
+  }
+
+  return { set, get, reveal, remove, setSiteTarget, getSiteTarget, revealSiteToken };
 }

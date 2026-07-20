@@ -204,6 +204,18 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
     const slotted = assets ? assets.materialize(job.siteId, outDir) : 0;
     if (slotted) log(job, `Slotted ${slotted} uploaded asset(s) into the site.`);
 
+    // Generated asset map, so the TEMPLATE can actually SHOW the uploads
+    // (rulebook: consume with graceful fallbacks). Public URL paths only.
+    const slotting = assets ? assets.slotting(job.siteId) : {};
+    const publicMap = {};
+    for (const [slot, items] of Object.entries(slotting)) {
+      const urls = items.map((a) => a.target).filter((t) => t.startsWith('public/')).map((t) => t.slice('public'.length));
+      if (urls.length) publicMap[slot] = urls;
+    }
+    fs.mkdirSync(path.join(outDir, 'src', 'config'), { recursive: true });
+    fs.writeFileSync(path.join(outDir, 'src', 'config', 'assets.generated.ts'),
+      `/**\n * GENERATED FILE. Written by Stardrive at assembly from the customer's\n * uploaded asset compartments. Do not edit; edits are overwritten.\n * Keys are compartment ids; values are public URL paths.\n */\nexport const siteAssets: Record<string, string[]> = ${JSON.stringify(publicMap, null, 2)};\n`);
+
     // ── Real QA: structural + WCAG contrast (fast, no browser build) ──
     const checks = [];
     const has = (p) => fs.existsSync(path.join(outDir, p));

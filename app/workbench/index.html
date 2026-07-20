@@ -190,9 +190,9 @@
 
     <!-- ═══ Sites ═══ -->
     <section class="view" id="view-sites">
-      <p class="lede"><b>Step 2 · Build a site.</b> Assemble a client's real Next.js site from a template. The features you picked in the Studio carry over here as engine modules — toggle any others you need. Watch the QA report, then <b>Preview &amp; export</b> the finished project or <b>Deploy</b> it to your own hosting.</p>
+      <p class="lede"><b>Step 2 · Build a site.</b> Three little steps, in order: <b>create</b> the site, <b>add the client's photos</b>, then <b>build</b> — so the very first preview shows their real images. Each site can deploy to a different account, so you can ship every client to their own hosting.</p>
       <div class="card">
-        <h2>Assemble a site</h2>
+        <h2>Create a site</h2>
         <div class="grid2">
           <div class="field"><label for="siteTemplateSel">Base template</label>
             <select id="siteTemplateSel"><option value="">Save an API key to load templates…</option></select></div>
@@ -206,7 +206,8 @@
           <div id="assembleFeatures" class="featurelist"></div>
           <div id="assembleFeatureNote" style="font-size:0.78rem;color:var(--muted);margin-top:0.5rem"></div>
         </div>
-        <button class="primary" id="assembleBtn" type="button">Assemble</button>
+        <button class="primary" id="assembleBtn" type="button">Create site</button>
+        <p style="font-size:0.78rem;color:var(--muted);margin:0.5rem 0 0">Creating is instant — you'll add photos and build on the next screen.</p>
         <div id="assembleOut"></div>
       </div>
       <div class="card">
