@@ -1,3 +1,4 @@
+import { siteAssets } from "@/config/assets.generated";
 import type { Metadata } from "next";
 import Gallery from "@/modules/gallery/Gallery";
 
@@ -12,6 +13,15 @@ export default function GalleryPage() {
       <div className="mt-10">
         <Gallery slug="main" />
       </div>
+    
+      {siteAssets.gallery?.length ? (
+        <div className="mx-auto mt-10 grid max-w-6xl gap-4 px-4 sm:grid-cols-2 lg:grid-cols-3 sm:px-6">
+          {siteAssets.gallery.map((src) => (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img key={src} src={src} alt="" className="h-64 w-full rounded-xl border border-heading/10 object-cover" />
+          ))}
+        </div>
+      ) : null}
     </section>
   );
 }

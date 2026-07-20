@@ -1,3 +1,4 @@
+import { siteAssets } from "@/config/assets.generated";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { siteConfig } from "@/config/site";
@@ -22,6 +23,24 @@ export default function AboutPage() {
           and grounded in facts they supplied.
         </p>
       </div>
+
+      {siteAssets.about?.length ? (
+        <div className="mt-16 grid gap-4 sm:grid-cols-2">
+          {siteAssets.about.map((src) => (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img key={src} src={src} alt="" className="max-h-80 w-full rounded-xl border border-heading/10 object-cover" />
+          ))}
+        </div>
+      ) : null}
+      {siteAssets.team?.length ? (
+        <div className="mt-10 flex flex-wrap gap-4">
+          {siteAssets.team.map((src) => (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img key={src} src={src} alt="" className="h-28 w-28 rounded-full border border-heading/10 object-cover" />
+          ))}
+        </div>
+      ) : null}
+
       <div className="mt-16 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-heading/10 bg-surface p-7">
         <p className="font-medium text-heading">Want to work with us?</p>
         <Link
