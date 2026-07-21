@@ -194,6 +194,38 @@ files/src/config/assets.generated.ts
   - about/team: same pattern where your design has imagery.
   Ship the file with an empty {} default so the template runs standalone.
 
+files/src/config/content.generated.ts
+  export const siteContent: SiteContent = { ... };
+  THE FINISHED COPY for this site, written from the owner's answers. At
+  assembly the engine REWRITES this file with the real copy. This is how a
+  site ships DONE, not DIY: your pages MUST render body copy from siteContent
+  and NEVER hardcode client-specific text or leave "sample"/"Replace this"
+  placeholders. The build FAILS if any filler phrase survives on any page.
+  Shape (all fields always present; render only what is non-empty, hide the
+  rest — no empty headings):
+    tagline; description
+    home: { heroHeadline, heroSubhead, ctaLabel, introHeading, introBody }
+    about: { heading, paragraphs: string[], mission }
+    services: { name, description }[]
+    contact: { heading, intro }
+    faq: { question, answer }[]
+    team: { name, role, bio }[]
+    careers: { heading, intro, roles: { title, summary }[] } | null
+    store: { heading, intro, products: { name, price, description }[] } | null
+    blog: { heading, intro, posts: { title, excerpt, body }[] } | null
+  Rules:
+  - Home "what we offer" section: map siteContent.services to cards; use
+    home.introHeading/introBody for the intro. No invented sample services.
+  - About page: render siteContent.about.paragraphs (fallback
+    siteConfig.description) and about.mission. No "Replace this" placeholder.
+  - Portfolio/lookbook/gallery page: show siteAssets.gallery photos; never
+    ship "sample stories" or "image placeholder" filler.
+  - Careers → siteContent.careers.roles; store → siteContent.store.products;
+    blog → siteContent.blog.posts. Each section hidden when null/empty.
+  - FAQ → siteContent.faq (or the config faq). Never dummy Q&A.
+  Ship an interface + a default (empty strings / [] / null) so it compiles
+  standalone; the engine fills the real copy at assembly.
+
 =====================================================================
 6. REQUIRED ROUTES AND BEHAVIORS (MUST)
 =====================================================================

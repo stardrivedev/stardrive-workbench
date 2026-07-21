@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { siteConfig, faq, logoWall } from "@/config/site";
 import { siteAssets } from "@/config/assets.generated";
+import { siteContent } from "@/config/content.generated";
 import FaqAccordion from "@/components/ui/FaqAccordion";
 import LogoMarquee from "@/components/ui/LogoMarquee";
 
@@ -67,35 +68,31 @@ export default function HomePage() {
         <LogoMarquee title={logoWall.title} items={logoWall.items} />
       )}
 
-      <section className="border-t border-heading/10 bg-surface">
-        <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6">
-          <div className="grid gap-6 sm:grid-cols-3">
-            {[
-              {
-                title: "What we do",
-                body: "Summarize the core service or product in plain language a first-time visitor understands immediately.",
-              },
-              {
-                title: "Who we serve",
-                body: "Name the customers this business exists for and the problem it takes off their plate.",
-              },
-              {
-                title: "Why it works",
-                body: "State the proof: years in business, results delivered, or the approach that sets this business apart.",
-              },
-            ].map((card) => (
-              <div
-                key={card.title}
-                className="rounded-xl border border-heading/10 bg-base p-7 transition-colors hover:border-accent/40"
-              >
-                <span aria-hidden className="block h-1.5 w-10 rounded-full bg-accent/80" />
-                <h2 className="mt-5 text-lg font-semibold">{card.title}</h2>
-                <p className="mt-2.5 text-sm leading-6 text-muted">{card.body}</p>
-              </div>
-            ))}
+      {siteContent.services.length > 0 && (
+        <section className="border-t border-heading/10 bg-surface">
+          <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6">
+            {siteContent.home.introHeading && (
+              <h2 className="mb-10 max-w-2xl text-2xl font-semibold tracking-tight sm:text-3xl">
+                {siteContent.home.introHeading}
+              </h2>
+            )}
+            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+              {siteContent.services.map((service) => (
+                <div
+                  key={service.name}
+                  className="rounded-xl border border-heading/10 bg-base p-7 transition-colors hover:border-accent/40"
+                >
+                  <span aria-hidden className="block h-1.5 w-10 rounded-full bg-accent/80" />
+                  <h3 className="mt-5 text-lg font-semibold">{service.name}</h3>
+                  {service.description && (
+                    <p className="mt-2.5 text-sm leading-6 text-muted">{service.description}</p>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       {faq.length > 0 && (
         <section className="border-t border-heading/10">

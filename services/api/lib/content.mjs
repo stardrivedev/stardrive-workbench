@@ -85,6 +85,70 @@ export function requirementsFor(modules = []) {
   return fields;
 }
 
+/** The empty content pack — every section present, nothing filled. Templates
+ *  render from this shape and hide sections that are empty. */
+export function emptyContent() {
+  return {
+    tagline: '', description: '',
+    home: { heroHeadline: '', heroSubhead: '', ctaLabel: '', introHeading: '', introBody: '' },
+    about: { heading: '', paragraphs: [], mission: '' },
+    services: [],
+    contact: { heading: '', intro: '' },
+    faq: [], team: [], careers: null, store: null, blog: null,
+  };
+}
+
+/** The `content.generated.ts` module source — the CONTENT CONTRACT every
+ *  template renders its page bodies from (analogous to assets.generated.ts).
+ *  Stardrive writes it at assembly with the real pack; templates ship a default
+ *  so they compile standalone. */
+export function renderContentModule(pack) {
+  const base = emptyContent();
+  const c = {
+    ...base, ...(pack || {}),
+    home: { ...base.home, ...(pack?.home || {}) },
+    about: { ...base.about, ...(pack?.about || {}) },
+    contact: { ...base.contact, ...(pack?.contact || {}) },
+  };
+  return `/**
+ * GENERATED FILE. The site's finished copy, written by Stardrive from the
+ * owner's intake answers. Templates render every page body from \`siteContent\`
+ * (with graceful fallbacks); empty sections hide. Do not edit; overwritten.
+ */
+export interface SiteContent {
+  tagline: string;
+  description: string;
+  home: { heroHeadline: string; heroSubhead: string; ctaLabel: string; introHeading: string; introBody: string };
+  about: { heading: string; paragraphs: string[]; mission: string };
+  services: { name: string; description: string }[];
+  contact: { heading: string; intro: string };
+  faq: { question: string; answer: string }[];
+  team: { name: string; role: string; bio: string }[];
+  careers: { heading: string; intro: string; roles: { title: string; summary: string }[] } | null;
+  store: { heading: string; intro: string; products: { name: string; price: string; description: string }[] } | null;
+  blog: { heading: string; intro: string; posts: { title: string; excerpt: string; body: string }[] } | null;
+}
+
+export const siteContent: SiteContent = ${JSON.stringify(c, null, 2)};
+`;
+}
+
+/** Unambiguous filler phrases that must never survive into a shipped site.
+ *  Multi-word so they can't hit legitimate `placeholder=` input attributes. */
+export const PLACEHOLDER_PHRASES = [
+  'Replace this',
+  'Replace these',
+  'sample stories with real',
+  'Project image placeholder',
+  'Lorem ipsum',
+  'two or three sentences about the business',
+  'clear, direct statement of what this business does',
+  'space is ready for a concise',
+  'Summarize the core service',
+  'Name the customers this business exists for',
+  'State the proof',
+];
+
 const isFilledString = (v) => typeof v === 'string' && v.trim().length > 0;
 const someString = (v) => Array.isArray(v) && v.some(isFilledString);
 const someObj = (v, key) => Array.isArray(v) && v.some((x) => x && isFilledString(x[key]));

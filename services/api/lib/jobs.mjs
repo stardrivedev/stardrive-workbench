@@ -23,6 +23,7 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { runFullQA, PREVIEW_FILE } from './qa-full.mjs';
 import { injectAssetDisplay } from './asset-injector.mjs';
+import { renderContentModule, PLACEHOLDER_PHRASES } from './content.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -37,6 +38,29 @@ function countFiles(dir) {
     else if (e.isFile()) n += 1;
   }
   return n;
+}
+
+/** Scan a template's source for unambiguous filler phrases. Skips generated
+ *  files and node_modules; returns [{ file, phrase }] for any leftover. */
+function scanForPlaceholders(srcDir) {
+  const hits = [];
+  const walk = (dir) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name === '.next') continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) { walk(p); continue; }
+      if (!/\.(tsx?|jsx?|mdx?)$/.test(e.name) || e.name.endsWith('.generated.ts')) continue;
+      let t = '';
+      try { t = fs.readFileSync(p, 'utf-8'); } catch { continue; }
+      for (const phrase of PLACEHOLDER_PHRASES) {
+        if (t.includes(phrase)) hits.push({ file: path.relative(srcDir, p).replace(/\\/g, '/'), phrase });
+      }
+    }
+  };
+  walk(srcDir);
+  return hits;
 }
 
 function writeSafe(outDir, relPath, file) {
@@ -233,6 +257,10 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
     fs.writeFileSync(path.join(outDir, 'src', 'config', 'assets.generated.ts'),
       `/**\n * GENERATED FILE. Written by Stardrive at assembly from the customer's\n * uploaded asset compartments. Do not edit; edits are overwritten.\n * Keys are compartment ids; values are public URL paths.\n */\nexport const siteAssets: Record<string, string[]> = ${JSON.stringify(publicMap, null, 2)};\n`);
 
+    // The CONTENT CONTRACT: the finished copy the AI wrote from the intake, so
+    // templates render real page bodies instead of hardcoded sample text.
+    fs.writeFileSync(path.join(outDir, 'src', 'config', 'content.generated.ts'), renderContentModule(pack));
+
     // GUARANTEE the uploads actually SHOW. Templates that consume siteAssets
     // themselves (the catalog) are left alone; templates that ignore it (the
     // Studio's generated designs) get a deterministic showcase + header logo so
@@ -261,14 +289,6 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
       let siteTs = '';
       try { siteTs = fs.readFileSync(path.join(outDir, 'src/config/site.ts'), 'utf-8'); } catch { /* fails below */ }
       add('per-client config written (site name in site.ts)', siteTs.includes(site.config.siteName));
-      // No-placeholder gate: once the customer has done the intake, the
-      // engine's filler defaults must be gone (they are — required facts are
-      // gated + filled). Skipped for headless content-free assemblies.
-      if (hasIntake) {
-        const PLACEHOLDERS = ['Replace this with', 'A clear, direct statement of what this business does', 'two or three sentences about the business'];
-        const leftover = PLACEHOLDERS.filter((ph) => siteTs.includes(ph));
-        add('no placeholder copy in the site config', leftover.length === 0, leftover[0]);
-      }
       add('theme.css present', has('src/app/theme.css'));
       let contrastOk = false; let detail;
       try {
@@ -280,6 +300,18 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
       add('WCAG contrast (validated palettes)', contrastOk, detail);
     }
     add('routes declared', Object.keys(assemblyRecord.routes || {}).length > 0);
+
+    // No-placeholder gate across ALL pages: once the customer has done the
+    // intake, the site must ship finished — no leftover filler ("Replace
+    // this…", "sample stories", the engine's default cards). A template that
+    // ignores the content contract fails here and must be regenerated so its
+    // pages read the answers. Skipped for headless content-free assemblies.
+    if (hasIntake) {
+      const hits = scanForPlaceholders(path.join(outDir, 'src'));
+      const where = hits.slice(0, 3).map((h) => `${h.file}: "${h.phrase}"`).join('; ');
+      add('no placeholder copy anywhere on the site', hits.length === 0,
+        hits.length ? `${where} — regenerate this template so its pages render your answers` : undefined);
+    }
 
     const fileCount = countFiles(outDir); // before full QA installs node_modules
     let structuralPassed = checks.every((c) => c.status === 'pass');

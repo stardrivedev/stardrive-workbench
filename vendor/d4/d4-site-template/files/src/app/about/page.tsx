@@ -1,4 +1,5 @@
 import { siteAssets } from "@/config/assets.generated";
+import { siteContent } from "@/config/content.generated";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { siteConfig } from "@/config/site";
@@ -16,12 +17,18 @@ export default function AboutPage() {
         About {siteConfig.name}
       </h1>
       <div className="mt-10 space-y-6 leading-8">
-        <p className="text-lg text-heading/90">{siteConfig.description}</p>
-        <p>
-          Replace this section with the story of the business: how it started, what it
-          stands for, and the people behind it. Keep it in the client&apos;s own words
-          and grounded in facts they supplied.
-        </p>
+        {siteContent.about.paragraphs.length > 0 ? (
+          siteContent.about.paragraphs.map((para, i) => (
+            <p key={i} className={i === 0 ? "text-lg text-heading/90" : undefined}>
+              {para}
+            </p>
+          ))
+        ) : (
+          <p className="text-lg text-heading/90">{siteConfig.description}</p>
+        )}
+        {siteContent.about.mission && (
+          <p className="text-lg font-medium text-heading">{siteContent.about.mission}</p>
+        )}
       </div>
 
       {siteAssets.about?.length ? (
