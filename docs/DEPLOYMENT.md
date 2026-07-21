@@ -29,7 +29,8 @@ Everything works dormant; each env var lights up a capability with no code chang
 | Real site assembly + export | `STARDRIVE_ENGINE=real` | Ships already; produces real Next.js sites. |
 | Encrypt stored hosting tokens | `STARDRIVE_SECRET` | **Required in prod.** A `var/secret.key` is auto-generated in dev; production must set this from a real secret store. |
 | Secure session cookies | `STARDRIVE_SECURE_COOKIES=1` | Set behind HTTPS. |
-| Template Studio (model) | `STARDRIVE_LLM_KEY` (+ `STARDRIVE_LLM_PROVIDER`, `STARDRIVE_LLM_MODEL`) | Operator's own key; customers never bring one. |
+| Template Studio (model) | `STARDRIVE_LLM_KEY` (+ `STARDRIVE_LLM_PROVIDER`, `STARDRIVE_LLM_MODEL`) | Operator's own key; customers never bring one. Studio template generation defaults to `gpt-5.6-sol`. |
+| Copywriter (model) | `STARDRIVE_COPY_MODEL` (default `gpt-5.5`) | The site copywriter runs on a lighter model than the Studio to save tokens; same key/provider. Copy never uses em-dashes. |
 | Fair-use caps | `STARDRIVE_LLM_MAX_TURNS` (40), `STARDRIVE_LLM_MAX_INPUT_CHARS` (300k) | Defaults are sane; tune per model. |
 | **Full QA tier** | `STARDRIVE_QA=full` (+ optional `STARDRIVE_QA_PORT` 4290, `STARDRIVE_QA_TIMEOUT` 300000, `STARDRIVE_PLAYWRIGHT`, `STARDRIVE_AXE`) | Per assembly: npm install → `next build` (the real compile gate) → serve → every route → axe accessibility → 375px overflow → console errors → a screenshot served at `GET /v1/sites/{id}/preview`. Adds ~3–5 min per build; needs npm (+ Playwright for the browser sub-checks, which skip honestly when absent). Default (`structural`) stays fast. |
 | Billing checkout | `STRIPE_SECRET_KEY`, `STRIPE_PRICE_STARTER|STUDIO|AGENCY` | Subscription price ids per plan. |

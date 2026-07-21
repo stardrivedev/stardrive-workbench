@@ -13,9 +13,18 @@
  * from. Every field is always present (gaps filled from the facts), so a
  * template can trust it.
  */
-import { relayChat, studioConfig } from './chat-proxy.mjs';
+import { relayChat, studioConfig, copyModel } from './chat-proxy.mjs';
 
-const str = (v) => (typeof v === 'string' ? v.trim() : '');
+// House style: NO em-dashes or en-dashes anywhere in the copy. The model is
+// told this too, but we scrub as a safety net so none ever ship.
+const stripDashes = (s) => s
+  .replace(/\s+[—–]\s+/g, ', ') // spaced em/en dash used as punctuation
+  .replace(/—/g, ', ')          // any remaining em-dash
+  .replace(/–/g, '-')           // remaining en-dash (e.g. number ranges)
+  .replace(/\s*,\s*,/g, ',')    // tidy doubled commas
+  .replace(/[ \t]{2,}/g, ' ')   // tidy doubled spaces
+  .trim();
+const str = (v) => (typeof v === 'string' ? stripDashes(v.trim()) : '');
 const arr = (v) => (Array.isArray(v) ? v : []);
 const strList = (v) => arr(v).map(str).filter(Boolean);
 const sentences = (v) => str(v).split(/\n+|(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
@@ -103,7 +112,7 @@ const SCHEMA_HINT = `Return ONLY a JSON object (no prose, no markdown fences) wi
   "store": { "heading": "...", "intro": "...", "products": [ { "name": "...", "price": "...", "description": "1-2 sentences" } ] },
   "blog": { "heading": "...", "intro": "...", "posts": [ { "title": "...", "excerpt": "1 sentence", "body": "2-3 short paragraphs" } ] }
 }
-Omit careers/store/blog entirely if no facts were given for them. Write real, specific, professional copy grounded ONLY in the facts provided — never invent contact details, prices, or claims. No lorem, no "replace this", no bracketed placeholders.`;
+Omit careers/store/blog entirely if no facts were given for them. Write real, specific, professional copy grounded ONLY in the facts provided; never invent contact details, prices, or claims. No lorem, no "replace this", no bracketed placeholders. IMPORTANT STYLE RULE: never use em-dashes (—) or en-dashes (–). Use commas, periods, or the word "to" for ranges (e.g. "9 to 5").`;
 
 function extractJson(text) {
   let t = String(text).trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
@@ -116,7 +125,8 @@ function extractJson(text) {
 async function aiPack({ siteName, facts, modules }) {
   const system = `You are a senior website copywriter. Write finished, ready-to-publish copy for a small business website. ${SCHEMA_HINT}`;
   const user = `Business name: ${siteName}\nSelected feature pages: ${(modules || []).join(', ') || 'none beyond home/about/contact'}\n\nFacts provided by the owner:\n${JSON.stringify(facts, null, 2)}`;
-  const { content, model, tokens } = await relayChat({ system, messages: [{ role: 'user', content: user }] });
+  // The copywriter runs on a lighter model than the Studio's template generator.
+  const { content, model, tokens } = await relayChat({ system, messages: [{ role: 'user', content: user }], model: copyModel() });
   return { raw: extractJson(content), model, tokens };
 }
 

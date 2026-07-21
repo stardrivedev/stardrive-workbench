@@ -21,7 +21,7 @@ import { createAccounts } from './lib/accounts.mjs';
 import { createBilling } from './lib/billing.mjs';
 import { loadCatalog, createImportedStore, validateManifest, validateBundle, summarize } from './lib/templates.mjs';
 import { createJobRunner } from './lib/jobs.mjs';
-import { relayChat, studioConfig } from './lib/chat-proxy.mjs';
+import { relayChat, studioConfig, copyModel } from './lib/chat-proxy.mjs';
 import { createStaticServer } from './lib/static.mjs';
 import { createConnections, PROVIDERS } from './lib/connections.mjs';
 import { createAssets, MAX_ASSET_BYTES } from './lib/assets.mjs';
@@ -148,7 +148,7 @@ const ROUTES = [
         body: {
           ok: true, service: 'stardrive-api', version: VERSION, engine: ENGINE,
           qa: ENGINE === 'real' ? (process.env.STARDRIVE_QA === 'full' ? 'full' : 'structural') : 'dry',
-          studio: { enabled: s.configured, model: s.configured ? s.model : null },
+          studio: { enabled: s.configured, model: s.configured ? s.model : null, copyModel: s.configured ? copyModel() : null },
         },
       };
     },
@@ -610,6 +610,9 @@ const ROUTES = [
       if (!ready.ready) {
         throw httpError(422, 'content_incomplete', `Answer the required questions first — still missing: ${ready.missing.map((m) => m.label).join(', ')}.`);
       }
+      // Same token-quota gate as the Studio, before spending any model budget.
+      const account = accounts.getAccount(key.account) || { id: key.account, plan: 'beta' };
+      billing.checkStudioQuota(account, billing.usageSummary(account, listKeys, auth.usageFor, store));
       const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
       const result = await generateCopy({ siteName: site.config.siteName, facts: site.content || {}, modules });
       site.copy = result.pack;

@@ -39,11 +39,19 @@ function tokensOf(usage) {
   return (usage.input_tokens || 0) + (usage.output_tokens || 0); // Anthropic
 }
 
+/** The model the copywriter uses (a lighter/cheaper model than the Studio's
+ *  template generator). Configurable; defaults to gpt-5.5. */
+export function copyModel() {
+  return process.env.STARDRIVE_COPY_MODEL || 'gpt-5.5';
+}
+
 /**
  * Run one chat turn against the OPERATOR's configured model.
  * Input is only { system, messages } — no key ever comes from the caller.
+ * `model` optionally overrides the configured model (same provider/key) so a
+ * caller like the copywriter can run on a lighter model than the Studio.
  */
-export async function relayChat({ system, messages } = {}) {
+export async function relayChat({ system, messages, model: modelOverride } = {}) {
   // Validate input shape + enforce fair-use caps FIRST — an abusive request
   // is rejected before we reveal config state or spend any model budget.
   if (!Array.isArray(messages) || messages.length === 0 ||
@@ -66,7 +74,8 @@ export async function relayChat({ system, messages } = {}) {
       'The Template Studio is not enabled yet — its model is not configured. It turns on the moment the operator sets STARDRIVE_LLM_KEY; no key of yours is ever required.');
   }
 
-  const { provider, model } = studioConfig();
+  const { provider, model: configuredModel } = studioConfig();
+  const model = modelOverride || configuredModel;
   // Templates are long, and reasoning models spend part of the budget
   // thinking before writing — an undersized cap yields "no text" errors.
   const maxTokens = Number(process.env.STARDRIVE_LLM_MAX_TOKENS) || 48000;

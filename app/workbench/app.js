@@ -811,8 +811,9 @@ $('#genBtn')?.addEventListener('click', () => {
   const colors = $('#brColors').value.trim();
   const audience = $('#brAudience').value.trim();
   const extra = $('#brExtra').value.trim();
+  const vibe = [currentVibe, $('#brVibeCustom').value.trim()].filter(Boolean).join('; ');
   const parts = ['Design a website template for ' + business + '.'];
-  if (currentVibe) parts.push('Overall vibe: ' + currentVibe + '.');
+  if (vibe) parts.push('Overall vibe: ' + vibe + '.');
   if (colors) parts.push('Colors: ' + colors + '.');
   if (audience) parts.push('Audience: ' + audience + '.');
   if (extra) parts.push(extra);
@@ -953,7 +954,7 @@ $('#clearChatBtn').addEventListener('click', () => {
   setGenResult('');
   $('#importGenBtn')?.classList.remove('glow');
   const rw = $('#refineWrap'); if (rw) rw.hidden = true;
-  ['#brBusiness', '#brColors', '#brAudience', '#brExtra', '#chatText'].forEach((s) => { const el = $(s); if (el) el.value = ''; });
+  ['#brBusiness', '#brColors', '#brAudience', '#brExtra', '#brVibeCustom', '#chatText'].forEach((s) => { const el = $(s); if (el) el.value = ''; });
   currentVibe = ''; renderVibes();
 });
 
