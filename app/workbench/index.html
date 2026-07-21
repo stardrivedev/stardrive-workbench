@@ -155,12 +155,12 @@
 
     <!-- ═══ AI Studio ═══ -->
     <section class="view" id="view-studio">
-      <p class="lede"><b>Step 1 · Design a template.</b> Pick the features your site needs, describe the look you want, and the AI builds a template to match — automatically following every rule so it always works. When it looks right, click <b>Add to my templates</b>; you'll build client sites from it in Step 2.</p>
+      <p class="lede"><b>Step 1 · Design a template.</b> Fill in a few details about the business and the look you want. The AI turns them into a finished, working template — following every rule so it always builds. When it's ready, click <b>Add to my templates</b>; you'll build client sites from it in Step 2.</p>
       <div class="studio">
         <div class="studio-side">
           <div class="card" style="margin-bottom:1rem">
-            <h2>Features</h2>
-            <p style="font-size:0.82rem;color:var(--muted);margin:0 0 0.7rem">Toggle what this site should include. Your choices are sent to the AI with every message — no need to spell them out.</p>
+            <h2>Sections to include</h2>
+            <p style="font-size:0.82rem;color:var(--muted);margin:0 0 0.7rem">Toggle what this site should have. These are sent to the AI automatically — no need to mention them.</p>
             <div id="featureList" class="featurelist"></div>
             <div id="featureSummary" class="featuresummary"></div>
           </div>
@@ -171,19 +171,48 @@
             <div id="studioStatus" style="margin-top:0.7rem"></div>
           </div>
         </div>
-        <div class="chatpane">
-          <div class="chatlog" id="chatlog">
-            <div class="msg systemnote">Toggle the features you need on the left, then describe the look and audience — for example, "a warm, editorial template for a family bakery." Ask for revisions until it's right, then add it to your templates.</div>
+        <div class="studio-main">
+          <div class="card" id="briefCard">
+            <h2 style="margin-top:0">Describe the template</h2>
+            <p style="font-size:0.83rem;color:var(--muted);margin:0 0 1rem">Fill in what you know — you can ask for changes after. Only the first line is required.</p>
+            <div class="field"><label for="brBusiness">What kind of business is it? <span style="color:var(--bad)">*</span></label>
+              <input id="brBusiness" placeholder="e.g. a family coffee roaster and neighborhood cafe"></div>
+            <div class="field"><label>Overall vibe</label>
+              <div id="brVibe" class="chips"></div></div>
+            <div class="grid2">
+              <div class="field"><label for="brColors">Colors to use or avoid</label>
+                <input id="brColors" placeholder="e.g. warm browns &amp; cream; no neon"></div>
+              <div class="field"><label for="brAudience">Who is it for?</label>
+                <input id="brAudience" placeholder="e.g. regulars &amp; wholesale buyers"></div>
+            </div>
+            <div class="field"><label for="brExtra">Anything else? <span style="color:var(--muted);font-weight:400">(optional)</span></label>
+              <textarea id="brExtra" rows="3" placeholder="Must-have sections, a reference site you like, the tone of voice…"></textarea></div>
+            <button class="primary big" id="genBtn" type="button">✨ Generate my template</button>
           </div>
-          <div class="chatinput">
-            <textarea id="chatText" placeholder="Describe the look and who it's for… e.g. A warm, editorial template for a family bakery: big imagery, soft corners, a menu-forward home page."></textarea>
-            <button class="primary" id="sendBtn" type="button">Send</button>
+
+          <div id="genResult" style="margin-top:1rem"></div>
+
+          <div id="refineWrap" hidden>
+            <div class="card" style="margin-top:1rem">
+              <h3 style="margin:0 0 0.5rem">Want changes?</h3>
+              <p style="font-size:0.82rem;color:var(--muted);margin:0 0 0.7rem">Describe any tweak and the AI updates the template.</p>
+              <div class="chatinput">
+                <textarea id="chatText" placeholder="e.g. make the hero bolder, use a serif headline, add a testimonials row"></textarea>
+                <button class="primary" id="sendBtn" type="button">Refine</button>
+              </div>
+            </div>
           </div>
-          <div class="studio-actions">
+
+          <div class="studio-actions" id="studioActions">
             <button class="primary" id="importGenBtn" type="button">Add to my templates</button>
             <button class="ghost" id="downloadGenBtn" type="button">Download files</button>
             <button class="ghost" id="clearChatBtn" type="button">Start over</button>
           </div>
+
+          <details id="codePeek" style="margin-top:0.9rem">
+            <summary>View the generated files</summary>
+            <div class="chatlog" id="chatlog"></div>
+          </details>
         </div>
       </div>
     </section>

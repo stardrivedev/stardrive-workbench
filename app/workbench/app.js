@@ -781,47 +781,107 @@ function addMsg(role, content) {
   return div;
 }
 
-$('#sendBtn').addEventListener('click', sendChat);
-$('#chatText').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendChat();
+/* ── Guided brief → template generation ── */
+const VIBES = ['Warm & friendly', 'Bold & modern', 'Elegant & minimal', 'Playful & bright', 'Classic & trustworthy', 'Sleek & techy'];
+let currentVibe = '';
+
+function renderVibes() {
+  const el = $('#brVibe');
+  if (!el) return;
+  el.innerHTML = VIBES.map((v) => '<button type="button" class="chip-btn" data-vibe="' + esc(v) + '">' + esc(v) + '</button>').join('');
+}
+renderVibes();
+$('#brVibe')?.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-vibe]');
+  if (!b) return;
+  currentVibe = currentVibe === b.dataset.vibe ? '' : b.dataset.vibe;
+  [...$('#brVibe').children].forEach((c) => c.classList.toggle('on', c.dataset.vibe === currentVibe));
 });
 
-async function sendChat() {
+function setGenResult(html) { const el = $('#genResult'); if (el) el.innerHTML = html; }
+function genBusy(on) {
+  const g = $('#genBtn'); const s = $('#sendBtn');
+  if (g) g.disabled = on;
+  if (s) s.disabled = on || !studioEnabled;
+}
+
+$('#genBtn')?.addEventListener('click', () => {
+  const business = $('#brBusiness').value.trim();
+  if (!business) { $('#brBusiness').focus(); setGenResult('<div class="report err">Tell us what kind of business it is to get started.</div>'); return; }
+  const colors = $('#brColors').value.trim();
+  const audience = $('#brAudience').value.trim();
+  const extra = $('#brExtra').value.trim();
+  const parts = ['Design a website template for ' + business + '.'];
+  if (currentVibe) parts.push('Overall vibe: ' + currentVibe + '.');
+  if (colors) parts.push('Colors: ' + colors + '.');
+  if (audience) parts.push('Audience: ' + audience + '.');
+  if (extra) parts.push(extra);
+  runGeneration(parts.join(' '), true);
+});
+
+$('#sendBtn').addEventListener('click', () => {
   const text = $('#chatText').value.trim();
   if (!text) return;
-  if (!getApiKey()) return addMsg('systemnote', 'Save your Stardrive API key (top right) first.');
-  if (!studioEnabled) return addMsg('systemnote', 'The Template Studio is not enabled yet — no action needed from you; it turns on once the operator configures the model.');
-
   $('#chatText').value = '';
-  chat.messages.push({ role: 'user', content: text });
-  addMsg('user', text);
-  const activeFeatures = FEATURES.filter((f) => enabledFeatures.has(f.id));
-  if (activeFeatures.length && chat.messages.filter((m) => m.role === 'user').length === 1) {
-    addMsg('systemnote', 'Including your selected features: ' + activeFeatures.map((f) => f.label).join(', ') + '.');
-  }
-  const pending = addMsg('systemnote', 'Generating… (long templates can take a few minutes)');
-  $('#sendBtn').disabled = true;
+  runGeneration(text, false);
+});
+$('#chatText')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) $('#sendBtn').click();
+});
+
+async function runGeneration(userText, isFirst) {
+  if (!getApiKey()) { setGenResult('<div class="report err">Save your Stardrive API key (top right) first.</div>'); return; }
+  if (!studioEnabled) { setGenResult('<div class="report">The Template Studio is not enabled yet — it turns on once the operator configures the model.</div>'); return; }
+  chat.messages.push({ role: 'user', content: userText });
+  addMsg('user', userText);
+  const active = FEATURES.filter((f) => enabledFeatures.has(f.id));
+  const featNote = isFirst && active.length ? ' Including: ' + active.map((f) => f.label).join(', ') + '.' : '';
+  setGenResult('<div class="report ok" style="display:flex;align-items:center;gap:0.55rem"><span class="spin"></span><span>' + (isFirst ? 'Designing your template' : 'Updating your template') + '… this takes a minute or two.' + esc(featNote) + '</span></div>');
+  genBusy(true);
   try {
     const { status, body } = await api('/workbench/chat', {
       method: 'POST',
       body: { system: RULEBOOK_PROMPT + STUDIO_FORMAT + featurePromptBlock(), messages: chat.messages },
     });
-    pending.remove();
     if (status !== 200) {
-      addMsg('systemnote', 'Error: ' + (body.error?.message || 'request failed (' + status + ')'));
+      setGenResult('<div class="report err">' + esc(body.error?.message || 'Generation failed (' + status + ').') + '</div>');
       chat.messages.pop();
       return;
     }
     chat.messages.push({ role: 'assistant', content: body.content });
     addMsg('assistant', body.content);
-    const n = Object.keys(collectFiles()).length;
-    if (n) addMsg('systemnote', n + ' file(s) ready — use "Import generated template" when it looks right.');
+    renderGenOutcome(body.content);
   } catch (err) {
-    pending.remove();
-    addMsg('systemnote', 'Network error: ' + err.message);
+    setGenResult('<div class="report err">Network error: ' + esc(err.message) + '</div>');
     chat.messages.pop();
   } finally {
-    $('#sendBtn').disabled = !studioEnabled ? true : false;
+    genBusy(false);
+  }
+}
+
+/** After each response: a friendly completion card (code hidden), or the
+ *  model's question if it didn't deliver files yet. */
+function renderGenOutcome(content) {
+  const files = collectFiles();
+  const fileCount = Object.keys(files).length;
+  if (files['manifest.json'] && fileCount > 3) {
+    let manifest = {};
+    try { manifest = JSON.parse(files['manifest.json']); } catch { /* name-less card */ }
+    const routes = (manifest.provides?.routes || []).filter((r) => !r.startsWith('/admin'));
+    setGenResult(
+      '<div class="card gen-done">' +
+      '<div class="done-badge">✨ Your template is complete</div>' +
+      '<h3 style="margin:0.55rem 0 0.15rem">' + esc(manifest.name || 'your template') + '</h3>' +
+      '<p style="font-size:0.83rem;color:var(--muted);margin:0 0 0.7rem">' + fileCount + ' files' + (routes.length ? ' · pages: ' + routes.map(esc).join(', ') : '') + '</p>' +
+      '<p style="font-size:0.88rem;color:var(--body);margin:0">Happy with it? Click <b>Add to my templates</b> just below. Want changes? Describe them under <b>Want changes?</b> and it updates.</p>' +
+      '</div>'
+    );
+    $('#importGenBtn')?.classList.add('glow');
+    $('#studioActions')?.classList.add('ready');
+    const rw = $('#refineWrap'); if (rw) rw.hidden = false;
+  } else {
+    const prose = content.replace(/^===\s*FILE:[\s\S]*?^===\s*END FILE\s*===/gm, '').trim();
+    setGenResult('<div class="card"><p style="margin:0;white-space:pre-wrap;font-size:0.9rem">' + esc(prose.slice(0, 700) || 'The model replied — open "View the generated files" to see the details.') + '</p></div>');
   }
 }
 
@@ -854,18 +914,22 @@ function buildGeneratedBundle() {
 $('#importGenBtn').addEventListener('click', async () => {
   try {
     const bundle = buildGeneratedBundle();
-    addMsg('systemnote', 'Validating & importing "' + bundle.manifest.name + '" (' + bundle.files.length + ' files)…');
+    setGenResult('<div class="report ok">Adding "' + esc(bundle.manifest.name) + '" to your library…</div>');
     const { status, body } = await api('/v1/templates', { method: 'POST', body: bundle });
     if (status < 300) {
-      addMsg('systemnote', '✓ Imported into your library' + (body.warnings?.length ? ' with ' + body.warnings.length + ' lint warning(s) — see the Templates page.' : '.'));
+      $('#importGenBtn')?.classList.remove('glow');
+      setGenResult('<div class="card gen-done"><div class="done-badge" style="background:var(--good-soft);color:var(--good)">✓ Added to your templates</div>' +
+        '<p style="font-size:0.9rem;color:var(--body);margin:0.6rem 0 0">"' + esc(bundle.manifest.name) + '" is ready. Head to <b>Step 2 · Sites</b> to build a client site from it.' +
+        (body.warnings?.length ? ' <span style="color:var(--muted)">(' + body.warnings.length + ' minor lint note(s) — see Templates.)</span>' : '') + '</p></div>');
     } else {
       const errs = (body.errors || [body.error?.message || 'rejected']).join('\n- ');
-      addMsg('assistant', 'The import gate rejected the template. Please fix these and re-send ONLY the affected files:\n\n- ' + errs);
-      chat.messages.push({ role: 'user', content: 'The import gate rejected the template with these errors — fix them and re-send only the affected files:\n- ' + errs });
-      addMsg('systemnote', 'The errors were added to the conversation — press Send to have the model fix them, or edit your message first.');
+      // Queue the fix for the model; the operator sends it with Refine.
+      $('#chatText').value = 'The import gate rejected the template with these errors — fix them and re-send only the affected files:\n- ' + errs;
+      const rw = $('#refineWrap'); if (rw) rw.hidden = false;
+      setGenResult('<div class="report err">The template needs a fix before it can be added:<br>- ' + esc(errs).replace(/\n- /g, '<br>- ') + '<br><br>Press <b>Refine</b> below (the fix request is filled in) and the AI will correct it.</div>');
     }
   } catch (err) {
-    addMsg('systemnote', err.message);
+    setGenResult('<div class="report err">' + esc(err.message) + '</div>');
   }
 });
 
@@ -885,7 +949,12 @@ $('#downloadGenBtn').addEventListener('click', () => {
 
 $('#clearChatBtn').addEventListener('click', () => {
   chat.messages = [];
-  $('#chatlog').innerHTML = '<div class="msg systemnote">Cleared. The rulebook stays loaded — describe the next template.</div>';
+  $('#chatlog').innerHTML = '';
+  setGenResult('');
+  $('#importGenBtn')?.classList.remove('glow');
+  const rw = $('#refineWrap'); if (rw) rw.hidden = true;
+  ['#brBusiness', '#brColors', '#brAudience', '#brExtra', '#chatText'].forEach((s) => { const el = $(s); if (el) el.value = ''; });
+  currentVibe = ''; renderVibes();
 });
 
 /* ══════════════ Sites ══════════════ */
@@ -968,22 +1037,37 @@ $('#sitesTable').addEventListener('click', (e) => {
   if (btn) openSiteDetail(btn.dataset.site);
 });
 
+let detailCms = false; // does the open site include the CMS/admin module?
+
 async function openSiteDetail(siteId) {
   const { status, body } = await api('/v1/sites/' + siteId);
   if (status !== 200) return;
   const built = body.jobs.some((j) => j.status === 'done');
+  detailCms = Array.isArray(body.config.modules) && body.config.modules.includes('d4-cms-core');
   const jobsHtml = body.jobs.map((j) =>
     '<tr><td><code>' + esc(j.id.slice(0, 8)) + '</code></td><td>' + esc(j.kind) + '</td><td>' + esc(j.status) + '</td><td style="color:var(--muted)">' + esc((j.finishedAt || j.createdAt || '').slice(0, 19).replace('T', ' ')) + '</td></tr>').join('');
+  const cmsCard = detailCms
+    ? '<div class="card" style="margin-top:0.9rem;border-color:color-mix(in oklab, var(--accent) 45%, var(--line))">' +
+        '<h3 style="margin:0 0 0.35rem">🔐 Admin dashboard (CMS)</h3>' +
+        '<p style="font-size:0.85rem;color:var(--body);margin:0 0 0.5rem">You added the editable-content feature, so this site has a private admin at <code>/admin</code> where the owner edits the site without code.</p>' +
+        '<ul style="font-size:0.83rem;color:var(--body);margin:0;padding-left:1.1rem;display:grid;gap:0.35rem">' +
+          '<li><b>Try it in the live preview:</b> open <code>/admin</code> and sign in with the password <code>preview</code>.</li>' +
+          '<li><b>When you deploy:</b> set an <code>ADMIN_PASSWORD</code> for the real login, connect a <b>Turso</b> database so edits save, and add <code>TOTP_SECRET</code> for two-factor.</li>' +
+        '</ul></div>'
+    : '';
   $('#siteDetail').innerHTML =
     '<h3 style="margin-top:1.2rem;color:var(--ink)">' + esc(body.config.siteName || body.id) + '</h3>' +
-    (built ? '' : '<p style="font-size:0.88rem;color:var(--muted);margin:0.3rem 0 0.6rem">Not built yet — <b style="color:var(--ink)">answer the essentials below and add the client\'s photos</b>, then press Build. The site ships finished, no placeholders.</p>') +
+    (built ? '' : '<p style="font-size:0.88rem;color:var(--muted);margin:0.3rem 0 0.6rem">Not built yet. Do these in order: <b style="color:var(--ink)">1) answer the essentials · 2) add the photos · 3) Build</b>. The site ships finished, with the real copy and images.</p>') +
     '<div id="sitePreview"></div>' +
+    // 1 — the intake (answer questions → AI writes the copy)
     '<div id="siteContent" data-id="' + esc(body.id) + '"></div>' +
-    (jobsHtml ? '<div class="tscroll"><table class="list"><thead><tr><th>Job</th><th>Kind</th><th>Status</th><th>When</th></tr></thead><tbody>' + jobsHtml + '</tbody></table></div>' : '') +
-    '<div id="siteQa"></div>' +
-    '<details style="margin-top:0.8rem"><summary style="cursor:pointer;color:var(--muted);font-size:0.85rem">Config (' + Object.keys(body.config).length + ' slots, ' + body.configHistory.length + ' prior versions)</summary>' +
-    '<div class="codeblock"><pre>' + esc(JSON.stringify(body.config, null, 2)) + '</pre><button class="copybtn" type="button">Copy</button></div></details>' +
-    '<div style="display:flex;gap:0.6rem;margin-top:0.9rem;flex-wrap:wrap;align-items:center">' +
+    // 2 — photos, RIGHT BEFORE the build so they are never missed
+    '<h3 style="margin-top:1.4rem;color:var(--ink)">' + (built ? 'Photos & logo' : 'Add the photos & logo') + '</h3>' +
+    '<p style="font-size:0.85rem;color:var(--muted);margin:0.3rem 0 0.8rem">Drop each file into the right compartment and it lands in its exact place on the site — no paths to think about.' +
+      (built ? ' Photos added after a build appear when you rebuild.' : ' <b style="color:var(--ink)">Add these before you build</b> so the first preview shows the client\'s real logo and images.') + '</p>' +
+    '<div id="siteAssets" data-id="' + esc(body.id) + '" class="grid2"></div>' +
+    // 3 — build + (once built) the site actions
+    '<div style="display:flex;gap:0.6rem;margin-top:1.1rem;flex-wrap:wrap;align-items:center">' +
     '<button class="primary" data-siteact="build" data-id="' + esc(body.id) + '">' + (built ? 'Rebuild site' : 'Build site') + '</button>' +
     (built ? '<button class="primary" data-siteact="live" data-id="' + esc(body.id) + '">▶ Open live preview</button>' +
              '<button class="ghost" data-siteact="export" data-id="' + esc(body.id) + '">Download site (.tar.gz)</button>' +
@@ -991,9 +1075,13 @@ async function openSiteDetail(siteId) {
     '</div>' +
     '<div id="livePreview" style="margin-top:0.6rem"></div>' +
     '<div id="siteActOut" style="margin-top:0.6rem"></div>' +
-    '<h3 style="margin-top:1.4rem;color:var(--ink)">' + (built ? 'Assets' : 'Add the client\'s photos') + '</h3>' +
-    '<p style="font-size:0.85rem;color:var(--muted);margin:0.3rem 0 0.8rem">Drop each file into the right compartment and it lands in its exact place on the site — no paths to think about. Photos added after a build appear when you rebuild.</p>' +
-    '<div id="siteAssets" data-id="' + esc(body.id) + '" class="grid2"></div>';
+    cmsCard +
+    // reference material, kept out of the main flow
+    '<details style="margin-top:1.2rem"><summary style="cursor:pointer;color:var(--muted);font-size:0.85rem">Build history &amp; checks</summary>' +
+    (jobsHtml ? '<div class="tscroll"><table class="list"><thead><tr><th>Job</th><th>Kind</th><th>Status</th><th>When</th></tr></thead><tbody>' + jobsHtml + '</tbody></table></div>' : '<p style="font-size:0.82rem;color:var(--muted)">No builds yet.</p>') +
+    '<div id="siteQa"></div></details>' +
+    '<details style="margin-top:0.5rem"><summary style="cursor:pointer;color:var(--muted);font-size:0.85rem">Config (' + Object.keys(body.config).length + ' slots, ' + body.configHistory.length + ' prior versions)</summary>' +
+    '<div class="codeblock"><pre>' + esc(JSON.stringify(body.config, null, 2)) + '</pre><button class="copybtn" type="button">Copy</button></div></details>';
   loadSiteAssets(body.id);
   loadSiteContent(body.id);
   loadSitePreviewAndQa(body);
@@ -1112,6 +1200,16 @@ function renderCopyPreview(copy, source) {
 /** Build (assemble + QA) with visible progress, then refresh the detail. */
 async function buildSite(siteId) {
   const out = $('#siteActOut');
+  // Nudge: don't let a first build go out with no logo or photos by accident.
+  const alreadyBuilt = document.querySelector('[data-siteact="build"]')?.textContent.includes('Rebuild');
+  if (!alreadyBuilt) {
+    const st = await api('/v1/sites/' + siteId + '/assets');
+    const anyAssets = st.status === 200 && Object.values(st.body.assets || {}).some((a) => a && a.length);
+    if (!anyAssets) {
+      const go = confirm('This site has no logo or photos yet.\n\nOK = build without them\nCancel = go add photos first');
+      if (!go) { $('#siteAssets')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
+    }
+  }
   const { status, body } = await api('/v1/sites/' + siteId + '/assemble', { method: 'POST', body: {} });
   if (status !== 202) {
     out.innerHTML = '<div class="report err">' + esc(body.error?.message || 'Build failed to start (' + status + ').') + '</div>';
@@ -1160,9 +1258,11 @@ async function openLivePreview(siteId, reopenTab) {
     '<div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;margin-bottom:0.5rem">' +
     '<span style="color:var(--good);font-weight:600">● Live at <a href="' + esc(url) + '" target="_blank" rel="noopener"><code>' + esc(url) + '</code></a></span>' +
     '<button class="ghost" data-siteact="live-open" data-id="' + esc(siteId) + '">Open in new tab</button>' +
+    (detailCms ? '<a class="ghost btnlink" href="' + esc(url) + '/admin" target="_blank" rel="noopener">Open admin (/admin)</a>' : '') +
     '<button class="ghost danger" data-siteact="live-stop" data-id="' + esc(siteId) + '">Stop preview</button>' +
     '</div>' +
-    '<p style="font-size:0.8rem;color:var(--muted);margin:0 0 0.5rem">Click through the whole site — every page, with the client\'s real photos. It runs locally and stops on its own after 30 minutes idle.</p>' +
+    '<p style="font-size:0.8rem;color:var(--muted);margin:0 0 0.5rem">Click through the whole site — every page, with the client\'s real photos. It runs locally and stops on its own after 30 minutes idle.' +
+      (detailCms ? ' The admin dashboard is at <code>/admin</code> — sign in with password <code>preview</code>.' : '') + '</p>' +
     '<iframe src="' + esc(url) + '" title="Live preview" style="width:100%;height:70vh;border:1px solid var(--line);border-radius:10px;background:#fff"></iframe>' +
     '</div>';
 }

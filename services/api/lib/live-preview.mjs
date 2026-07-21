@@ -83,7 +83,10 @@ export function createLivePreview({ basePort = 4300 } = {}) {
     const child = spawn(NPM, ['run', 'start', '--', '-p', String(port)], {
       cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], shell: SHELL,
       // PORT is set explicitly so the child never inherits the API's own PORT.
-      env: { ...process.env, PORT: String(port), NEXT_TELEMETRY_DISABLED: '1' },
+      // ADMIN_PASSWORD makes a CMS site's /admin login usable in the preview
+      // (a known demo password) so the operator can see the admin exists; the
+      // real password is set on the host at deploy time.
+      env: { ...process.env, PORT: String(port), NEXT_TELEMETRY_DISABLED: '1', ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'preview' },
     });
     let out = '';
     child.stdout?.on('data', (d) => { out += d; });
