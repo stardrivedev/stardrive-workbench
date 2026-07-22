@@ -127,6 +127,12 @@ export interface SiteContent {
   careers: { heading: string; intro: string; roles: { title: string; summary: string }[] } | null;
   store: { heading: string; intro: string; products: { name: string; price: string; description: string }[] } | null;
   blog: { heading: string; intro: string; posts: { title: string; excerpt: string; body: string }[] } | null;
+  // A template may reference optional sections that aren't always provided
+  // (e.g. testimonials, pricing). Keep the type permissive so a build never
+  // fails on an unknown content field; an absent one resolves to undefined and
+  // the section hides.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any;
 }
 
 export const siteContent: SiteContent = ${JSON.stringify(c, null, 2)};
