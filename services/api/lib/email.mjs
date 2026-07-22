@@ -37,7 +37,7 @@ export function createEmail() {
     to: process.env.STARDRIVE_LEADS_TO || from().replace(/.*<([^>]+)>.*/, '$1'),
     replyTo: lead.email,
     subject: `Stardrive access request: ${lead.name}${lead.company ? ` (${lead.company})` : ''}`,
-    text: `${lead.name} <${lead.email}> requested access.\n\nCompany: ${lead.company || '—'}\n\n${lead.message || '(no message)'}`,
+    text: `${lead.name} <${lead.email}> requested access.\n\nCompany: ${lead.company || '(none)'}\n\n${lead.message || '(no message)'}`,
   });
 
   return { configured, send, welcome, leadNotify };

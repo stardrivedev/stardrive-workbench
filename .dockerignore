@@ -1,5 +1,6 @@
 .git
 **/node_modules
+**/.next
 services/api/var
 **/.d4-cache
 *.log

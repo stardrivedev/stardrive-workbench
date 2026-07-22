@@ -45,10 +45,38 @@ mount a volume in prod). The store interface is four verbs (`readJson`,
 `writeJson`, `deleteJson`, `listIds`) — deliberately swappable for Turso when
 scale calls for it, without touching the API surface.
 
-## Still to wire before GA
+## Go live (runbook)
 
-- Deploy actuator today pushes the assembled site to the customer's **GitHub**
-  (their connected token). One-click **Vercel/Turso** provisioning is the next
-  integration; until then, linking the pushed repo to Vercel builds on push.
-- Turso-backed store swap · container orchestration/HA · full browser-QA tier
-  (headless build + axe/Playwright behind an opt-in flag).
+The whole product is one container. A single instance with a persistent volume
+is a valid launch topology (no external database required to start).
+
+1. **Build & run the image** (`Dockerfile` at the repo root):
+   `docker build -t stardrive . && docker run -p 8080:8080 -v stardrive-data:/data --env-file prod.env stardrive`
+2. **Set the required secrets** in `prod.env`: `STARDRIVE_SECRET` (encrypts
+   stored hosting tokens — REQUIRED), `STARDRIVE_LLM_KEY` (turns the Studio +
+   copywriter on). The image already sets `STARDRIVE_ENGINE=real`,
+   `STARDRIVE_QA=full`, `STARDRIVE_SECURE_COOKIES=1`, `STARDRIVE_VAR_DIR=/data`.
+3. **Domain + TLS**: put stardrive.dev in front of `:8080` behind HTTPS (any
+   reverse proxy / platform TLS). The root redirects to `/workbench/`.
+4. **Payments** (when ready): add `STRIPE_SECRET_KEY`, `STRIPE_PRICE_STARTER|STUDIO|AGENCY`,
+   and `STRIPE_WEBHOOK_SECRET`; point a Stripe webhook at `POST /webhooks/stripe`.
+   The checkout + plan-flip code is built and tested; it activates on these keys.
+5. **Email** (when ready): add `RESEND_API_KEY`, `STARDRIVE_EMAIL_FROM`,
+   `STARDRIVE_LEADS_TO`. Signup welcomes + access-request notifications activate.
+6. **Browser QA sub-checks** (optional): add Playwright + chromium to the image
+   and set `STARDRIVE_PLAYWRIGHT`/`STARDRIVE_AXE` for the accessibility check and
+   the preview screenshot. Core QA (install → build → serve → routes) runs
+   without them.
+
+`GET /v1/health` reports `engine`, `qa`, and the configured Studio/copy models;
+the image `HEALTHCHECK` uses it.
+
+## Scale-up (post-launch)
+
+- **Turso store**: the store interface is four verbs (`readJson`, `writeJson`,
+  `deleteJson`, `listIds`), so a libSQL/Turso adapter is a drop-in when moving
+  from one instance to many. Single-instance + volume needs no code change.
+- **One-click hosting provisioning**: the deploy actuator pushes the assembled
+  site to the customer's **GitHub** today (their connected token). Direct
+  Vercel/Turso provisioning per client is the next integration; until then,
+  linking the pushed repo to Vercel builds on push.
