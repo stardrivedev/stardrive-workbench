@@ -874,7 +874,9 @@ function renderGenOutcome(content) {
       '<div class="done-badge">✨ Your template is complete</div>' +
       '<h3 style="margin:0.55rem 0 0.15rem">' + esc(manifest.name || 'your template') + '</h3>' +
       '<p style="font-size:0.83rem;color:var(--muted);margin:0 0 0.7rem">' + fileCount + ' files' + (routes.length ? ' · pages: ' + routes.map(esc).join(', ') : '') + '</p>' +
-      '<p style="font-size:0.88rem;color:var(--body);margin:0">Happy with it? Click <b>Add to my templates</b> just below. Want changes? Describe them under <b>Want changes?</b> and it updates.</p>' +
+      '<p style="font-size:0.88rem;color:var(--body);margin:0 0 0.7rem">See how it looks before you decide. Preview builds a quick demo with sample content, then keep it or ask for changes.</p>' +
+      '<button class="primary" data-genact="preview">👁 Preview this design</button>' +
+      '<div id="genPreview" style="margin-top:0.7rem"></div>' +
       '</div>'
     );
     $('#importGenBtn')?.classList.add('glow');
@@ -884,6 +886,67 @@ function renderGenOutcome(content) {
     const prose = content.replace(/^===\s*FILE:[\s\S]*?^===\s*END FILE\s*===/gm, '').trim();
     setGenResult('<div class="card"><p style="margin:0;white-space:pre-wrap;font-size:0.9rem">' + esc(prose.slice(0, 700) || 'The model replied, open "View the generated files" to see the details.') + '</p></div>');
   }
+}
+
+// Preview a generated design BEFORE the operator commits to it: import the
+// bundle, build a throwaway demo site with sample content, and show the real
+// result (screenshot + a clickable live preview).
+const PREVIEW_FACTS = {
+  whatYouDo: 'A friendly local business that does great work for its community.',
+  aboutFacts: 'Started a few years ago by people who care about the craft. Serves the neighborhood and beyond. Known for quality work and a warm welcome.',
+  services: ['A first core service', 'A second core service', 'A third core service'],
+  contactEmail: 'hello@example.com', phone: '(555) 123-4567', address: '123 Main Street, Yourtown',
+};
+
+$('#view-studio')?.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-genact]');
+  if (!b) return;
+  if (b.dataset.genact === 'preview') previewGeneratedDesign();
+  if (b.dataset.genact === 'preview-live') previewGeneratedLive(b.dataset.site);
+});
+
+async function previewGeneratedDesign() {
+  const box = $('#genPreview');
+  const spin = (msg) => { box.innerHTML = '<div class="report ok" style="display:flex;align-items:center;gap:0.5rem"><span class="spin"></span><span>' + esc(msg) + '</span></div>'; };
+  let bundle;
+  try { bundle = buildGeneratedBundle(); } catch (err) { box.innerHTML = '<div class="report err">' + esc(err.message) + '</div>'; return; }
+  spin('Preparing a demo of this design…');
+  const imp = await api('/v1/templates', { method: 'POST', body: bundle });
+  if (imp.status >= 300 && imp.status !== 409) { box.innerHTML = '<div class="report err">' + esc(imp.body.errors?.join('; ') || imp.body.error?.message || 'Could not prepare the template.') + '</div>'; return; }
+  const made = await api('/v1/sites', { method: 'POST', body: { templateId: bundle.manifest.name, config: { siteName: 'Preview · ' + bundle.manifest.name }, assemble: false } });
+  if (made.status !== 201) { box.innerHTML = '<div class="report err">Could not start the preview.</div>'; return; }
+  const siteId = made.body.siteId;
+  await api('/v1/sites/' + siteId + '/content', { method: 'PATCH', body: { facts: PREVIEW_FACTS } });
+  const built = await api('/v1/sites/' + siteId + '/assemble', { method: 'POST', body: {} });
+  if (built.status !== 202) { box.innerHTML = '<div class="report err">' + esc(built.body.error?.message || 'Preview build failed to start.') + '</div>'; return; }
+  const started = Date.now();
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 5000));
+    let j;
+    try { j = await api('/v1/jobs/' + built.body.jobId); } catch { continue; }
+    if (j.status !== 200) continue;
+    if (j.body.status === 'done') { showGenPreview(siteId); return; }
+    if (j.body.status === 'failed') { box.innerHTML = '<div class="report err">Preview build failed: ' + esc(j.body.logs?.at(-1)?.line || 'see the site build history') + '</div>'; return; }
+    spin('Building the preview (' + (Math.round((Date.now() - started) / 6000) / 10) + ' min)…');
+  }
+}
+
+async function showGenPreview(siteId) {
+  const box = $('#genPreview');
+  let img = '';
+  try {
+    const res = await fetch('/v1/sites/' + siteId + '/preview', { headers: { Authorization: 'Bearer ' + getApiKey() } });
+    if (res.ok) img = '<img src="' + URL.createObjectURL(await res.blob()) + '" alt="Design preview" style="max-width:100%;border:1px solid var(--line);border-radius:10px">';
+  } catch { /* screenshot optional */ }
+  box.innerHTML = '<div class="card">' +
+    '<h3 style="margin:0 0 0.5rem">How this design looks</h3>' + img +
+    '<div style="margin-top:0.6rem;display:flex;gap:0.5rem;flex-wrap:wrap"><button class="primary" data-genact="preview-live" data-site="' + esc(siteId) + '">▶ Click around it live</button></div>' +
+    '<p style="font-size:0.8rem;color:var(--muted);margin:0.55rem 0 0">Shown with sample content so you can judge the look. Happy with it? Add it to your templates. Want changes? Describe them under "Want changes?". (This demo lives in your Sites list; delete it any time.)</p></div>';
+}
+
+async function previewGeneratedLive(siteId) {
+  const { status, body } = await api('/v1/sites/' + siteId + '/preview/live', { method: 'POST' });
+  if (status === 200 && body.url) window.open(body.url, '_blank', 'noopener');
 }
 
 /** All FILE blocks across the conversation; a later path replaces an earlier one. */
