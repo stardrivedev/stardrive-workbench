@@ -153,7 +153,7 @@ function injectLogoIntoHeader(srcDir) {
     '{siteConfig.name}',
     `{siteAssets.logo?.[0] ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={siteAssets.logo[0]} alt="" className="mr-2 inline-block h-8 w-auto align-middle" />
+              <img src={siteAssets.logo[0]} alt="" className="mr-2.5 inline-block h-11 w-auto max-w-[200px] object-contain align-middle" />
             ) : null}
             {siteConfig.name}`
   );

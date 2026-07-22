@@ -2,6 +2,11 @@ import { redirect } from "next/navigation";
 import { isAuthenticated, totpEnabled } from "@/lib/cms/auth";
 import SetupClient from "./SetupClient";
 
+// Auth depends on the request cookie, so these must render per-request, never
+// be statically prerendered (a build-time render bakes in the logged-out
+// redirect and the admin can never be reached).
+export const dynamic = "force-dynamic";
+
 export const metadata = { title: "Two-factor setup", robots: { index: false } };
 
 export default async function Setup2faPage() {

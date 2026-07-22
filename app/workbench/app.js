@@ -188,7 +188,10 @@ files/src/config/assets.generated.ts
   - hero: use siteAssets.hero?.[0] as the hero image when present; your
     designed hero (gradients/shapes/type) is the fallback.
   - logo: render <img src={siteAssets.logo[0]}> in the header when
-    present; the styled text logo is the fallback.
+    present; the styled text logo is the fallback. Size it well: around
+    h-10 / h-11 with object-contain and a max-width (e.g. max-w-[200px])
+    so it scales properly instead of rendering tiny. Prefer transparent
+    PNGs so it blends into the header background.
   - gallery/portfolio page: render siteAssets.gallery images when
     present; your placeholder grid is the fallback.
   - about/team: same pattern where your design has imagery.

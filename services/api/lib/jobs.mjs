@@ -24,6 +24,7 @@ import { execFileSync } from 'node:child_process';
 import { runFullQA, PREVIEW_FILE } from './qa-full.mjs';
 import { injectAssetDisplay } from './asset-injector.mjs';
 import { renderContentModule, PLACEHOLDER_PHRASES } from './content.mjs';
+import { generateHeroImage } from './image-gen.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -289,6 +290,26 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
       const urls = items.map((a) => a.target).filter((t) => t.startsWith('public/')).map((t) => t.slice('public'.length));
       if (urls.length) publicMap[slot] = urls;
     }
+
+    // No hero uploaded? Generate one from the business details so the home page
+    // still opens on real imagery. Degrades silently to the template's designed
+    // hero if image generation is unavailable or fails.
+    if (!publicMap.hero?.length && hasIntake && process.env.STARDRIVE_HERO_IMAGE !== 'off') {
+      try {
+        log(job, 'No hero uploaded, generating one from the business details…');
+        const img = await generateHeroImage({ siteName: site.config.siteName, facts, vibe: site.config.pairing || '' });
+        if (img) {
+          const rel = path.join('public', 'assets', 'hero', `ai-hero.${img.ext}`);
+          fs.mkdirSync(path.join(outDir, path.dirname(rel)), { recursive: true });
+          fs.writeFileSync(path.join(outDir, rel), img.buffer);
+          publicMap.hero = [`/assets/hero/ai-hero.${img.ext}`];
+          log(job, `Generated a hero image (${img.model}).`);
+        } else {
+          log(job, 'Hero image generation unavailable, using the template hero.');
+        }
+      } catch (e) { log(job, `Hero image generation skipped: ${e.message}`); }
+    }
+
     fs.mkdirSync(path.join(outDir, 'src', 'config'), { recursive: true });
     fs.writeFileSync(path.join(outDir, 'src', 'config', 'assets.generated.ts'),
       `/**\n * GENERATED FILE. Written by Stardrive at assembly from the customer's\n * uploaded asset compartments. Do not edit; edits are overwritten.\n * Keys are compartment ids; values are public URL paths.\n */\nexport const siteAssets: Record<string, string[]> = ${JSON.stringify(publicMap, null, 2)};\n`);

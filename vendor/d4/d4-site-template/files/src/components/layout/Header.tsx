@@ -82,7 +82,7 @@ export default function Header() {
           >
             {siteAssets.logo?.[0] ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={siteAssets.logo[0]} alt="" className="h-8 w-auto" />
+              <img src={siteAssets.logo[0]} alt="" className="h-11 w-auto max-w-[200px] object-contain" />
             ) : null}
             {siteConfig.name}
           </Link>

@@ -23,6 +23,14 @@ export function totpEnabled(): boolean {
   return Boolean(process.env.TOTP_SECRET);
 }
 
+// Secure cookies require HTTPS. Real deployments serve over HTTPS, so cookies
+// stay Secure. The Stardrive live preview serves over plain HTTP on localhost
+// and sets CMS_INSECURE_COOKIES=1 so the admin is still usable there; a real
+// host never sets it.
+function useSecureCookies(): boolean {
+  return process.env.NODE_ENV === "production" && process.env.CMS_INSECURE_COOKIES !== "1";
+}
+
 export async function assertAuthenticated(): Promise<void> {
   const adminPassword = process.env.ADMIN_PASSWORD;
   if (!adminPassword) throw new Error("Admin not configured.");
@@ -46,7 +54,7 @@ export async function setSessionCookie(): Promise<void> {
   const store = await cookies();
   store.set(SESSION_COOKIE, computeToken(adminPassword), {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: useSecureCookies(),
     sameSite: "lax",
     maxAge: 60 * 60 * 8,
     path: "/",
@@ -72,7 +80,7 @@ export async function setPendingCookie(): Promise<void> {
   const store = await cookies();
   store.set(PENDING_COOKIE, pendingTokenForWindow(adminPassword, window), {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: useSecureCookies(),
     sameSite: "lax",
     maxAge: 60 * 10,
     path: "/",
