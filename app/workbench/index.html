@@ -252,27 +252,28 @@
 
     <!-- ═══ Connections ═══ -->
     <section class="view" id="view-connections">
-      <p class="lede">Your hosting, your accounts, your site. Connect your own Vercel, Turso, and GitHub credentials and every deploy goes to infrastructure <b>you</b> own, on whatever plan tier you choose, Stardrive never owns your website. Tokens are encrypted at rest, never shown again after saving, and only ever receive the assembled site: no part of the Stardrive engine is ever pushed to your accounts.</p>
+      <p class="lede">Your hosting, your accounts, your site. Connect your own Vercel, Turso, and GitHub credentials and every deploy goes to infrastructure <b>you</b> own, on whatever plan tier you choose, Stardrive never owns your website. <b>Set them once and every client site you build publishes here automatically</b>, no re-entering, ideal when you host for your clients. Only override on a site when that client hosts it themselves. Tokens are encrypted at rest, never shown again after saving, and only ever receive the assembled site: no part of the Stardrive engine is ever pushed to your accounts.</p>
       <div class="grid2" id="connGrid">
         <div class="card" data-provider="vercel">
           <h2>Vercel <span class="badge imported" data-role="status" style="display:none">Connected</span></h2>
-          <p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.8rem">Where your sites go live. Free Hobby tier works; upgrade on your own terms.</p>
+          <p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.8rem">One click to a live URL. Where your sites go live; set the token once and every build publishes here. Free Hobby tier works; upgrade on your own terms.</p>
           <div data-role="state" style="font-size:0.85rem;margin-bottom:0.6rem;color:var(--muted)">Not connected.</div>
           <div class="field"><label>Vercel token</label><input class="mono" type="password" data-role="token" placeholder="paste token" autocomplete="off"></div>
           <button class="ghost" data-act="save" type="button">Save</button>
           <button class="ghost danger" data-act="disconnect" type="button" style="display:none">Disconnect</button>
         </div>
         <div class="card" data-provider="turso">
-          <h2>Turso <span class="badge imported" data-role="status" style="display:none">Connected</span></h2>
-          <p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.8rem">Your site's database, in your own account and region.</p>
+          <h2>Database <span class="badge imported" data-role="status" style="display:none">Connected</span></h2>
+          <p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.8rem">Vendor-neutral: any libSQL-compatible endpoint works, not just one provider. <a href="https://turso.tech" target="_blank" rel="noopener">Turso</a> is the easiest hosted option (free tier), self-hosted libSQL/SQLite works too. Only needed for sites with the CMS.</p>
           <div data-role="state" style="font-size:0.85rem;margin-bottom:0.6rem;color:var(--muted)">Not connected.</div>
-          <div class="field"><label>Turso token</label><input class="mono" type="password" data-role="token" placeholder="paste token" autocomplete="off"></div>
+          <div class="field"><label>Database URL</label><input class="mono" data-role="url" placeholder="libsql://your-db.turso.io" autocomplete="off" spellcheck="false"></div>
+          <div class="field"><label>Auth token (leave blank if your endpoint needs none)</label><input class="mono" type="password" data-role="token" placeholder="paste token" autocomplete="off"></div>
           <button class="ghost" data-act="save" type="button">Save</button>
           <button class="ghost danger" data-act="disconnect" type="button" style="display:none">Disconnect</button>
         </div>
         <div class="card" data-provider="github">
           <h2>GitHub <span class="badge imported" data-role="status" style="display:none">Connected</span></h2>
-          <p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.8rem">Optional: your assembled site's repo, pushed to an account you control.</p>
+          <p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.8rem">Alternative to Vercel: push the finished site to a repo you control, then connect it to any host. Set once and reuse for every site.</p>
           <div data-role="state" style="font-size:0.85rem;margin-bottom:0.6rem;color:var(--muted)">Not connected.</div>
           <div class="field"><label>GitHub token</label><input class="mono" type="password" data-role="token" placeholder="paste token" autocomplete="off"></div>
           <div class="field"><label>Owner (username or org)</label><input class="mono" data-role="owner" placeholder="e.g. ada-web-co" autocomplete="off" spellcheck="false"></div>

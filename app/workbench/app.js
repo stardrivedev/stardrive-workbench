@@ -1125,16 +1125,15 @@ async function openSiteDetail(siteId) {
   // features. Everything here is OPTIONAL, the site works as-is, but this is
   // where the operator learns they CAN wire up email + the admin.
   const goLiveCard = built
-    ? '<div class="card" style="margin-top:0.9rem;border-color:color-mix(in oklab, var(--accent) 35%, var(--line))">' +
-        '<h3 style="margin:0 0 0.35rem">🚀 Going live: what to set on your host</h3>' +
-        '<p style="font-size:0.84rem;color:var(--body);margin:0 0 0.55rem">The site works the moment it deploys. These optional environment variables switch on delivery features; they are also listed in the site\'s <code>.env.example</code>.</p>' +
+    ? '<details class="card" style="margin-top:0.9rem"><summary style="cursor:pointer;font-weight:600;color:var(--ink)">Optional delivery settings (email, admin, database)</summary>' +
+        '<p style="font-size:0.84rem;color:var(--body);margin:0.6rem 0 0.55rem">The site works the moment it publishes. These optional environment variables switch on delivery features; they are also listed in the site\'s <code>.env.example</code>. Whoever owns that client\'s hosting sets them there.</p>' +
         '<ul style="font-size:0.83rem;color:var(--body);margin:0;padding-left:1.1rem;display:grid;gap:0.4rem">' +
           '<li><b>Contact-form email.</b> Messages are always saved to the site\'s inbox. To also email the owner on every submission, set <code>RESEND_API_KEY</code> and <code>CONTACT_TO_EMAIL</code> (a <a href="https://resend.com" target="_blank" rel="noopener">Resend</a> key is free to start). This is per-site, set by whoever owns that client\'s hosting.</li>' +
           (detailCms
             ? '<li><b>Admin login.</b> This site has a private admin at <code>/admin</code>. In the live preview the password is <code>preview</code>; on your host set <code>ADMIN_PASSWORD</code> for the real one, plus <code>TOTP_SECRET</code> for two-factor.</li>' +
-              '<li><b>Editable content.</b> Connect a <b>Turso</b> database (<code>TURSO_DATABASE_URL</code>, <code>TURSO_AUTH_TOKEN</code>) so admin edits save, and <code>BLOB_READ_WRITE_TOKEN</code> for image uploads.</li>'
+              '<li><b>Editable content.</b> Use the "Connect the database" step above (any libSQL-compatible endpoint, not just one vendor) so admin edits save; publishing to Vercel wires it in automatically. Other hosts need <code>TURSO_DATABASE_URL</code> + <code>TURSO_AUTH_TOKEN</code> set manually, plus <code>BLOB_READ_WRITE_TOKEN</code> for image uploads.</li>'
             : '') +
-        '</ul></div>'
+        '</ul></details>'
     : '';
   $('#siteDetail').innerHTML =
     '<h3 style="margin-top:1.2rem;color:var(--ink)">' + esc(body.config.siteName || body.id) + '</h3>' +
@@ -1151,11 +1150,11 @@ async function openSiteDetail(siteId) {
     '<div style="display:flex;gap:0.6rem;margin-top:1.1rem;flex-wrap:wrap;align-items:center">' +
     '<button class="primary" data-siteact="build" data-id="' + esc(body.id) + '">' + (built ? 'Rebuild site' : 'Build site') + '</button>' +
     (built ? '<button class="primary" data-siteact="live" data-id="' + esc(body.id) + '">▶ Open live preview</button>' +
-             '<button class="ghost" data-siteact="export" data-id="' + esc(body.id) + '">Download site (.tar.gz)</button>' +
-             '<button class="ghost" data-siteact="deploy" data-id="' + esc(body.id) + '">Deploy…</button>' : '') +
+             '<button class="ghost" data-siteact="export" data-id="' + esc(body.id) + '">Download site (.tar.gz)</button>' : '') +
     '</div>' +
     '<div id="livePreview" style="margin-top:0.6rem"></div>' +
     '<div id="siteActOut" style="margin-top:0.6rem"></div>' +
+    (built ? '<div id="launchPanel"></div>' : '') +
     goLiveCard +
     // reference material, kept out of the main flow
     '<details style="margin-top:1.2rem"><summary style="cursor:pointer;color:var(--muted);font-size:0.85rem">Build history &amp; checks</summary>' +
@@ -1170,6 +1169,7 @@ async function openSiteDetail(siteId) {
   loadSiteAssets(body.id);
   loadSiteContent(body.id);
   loadSitePreviewAndQa(body);
+  if (built) loadLaunchPanel(body.id);
 }
 
 /* ══════════════ Content intake (DFY: facts in → AI writes the site) ══════════════ */
@@ -1383,36 +1383,166 @@ async function stopLivePreview(siteId) {
   if (box) box.innerHTML = '<div class="report">Live preview stopped.</div>';
 }
 
-/** Per-site deploy form: each client site can ship to its own account. */
-async function showDeployForm(siteId) {
-  const out = $('#siteActOut');
-  const { body } = await api('/v1/sites/' + siteId + '/deploy-target');
-  const st = body?.site; const def = body?.accountDefault;
-  out.innerHTML =
-    '<div class="card" style="margin-top:0.6rem"><h3 style="margin:0 0 0.5rem">Deploy this site to GitHub</h3>' +
-    '<p style="font-size:0.8rem;color:var(--muted);margin:0 0 0.8rem">Every site can go to a different account, perfect for per-client hosting. ' +
-    (st?.connected ? 'This site has its own saved target (token ····' + esc(st.last4 || '') + ').' : def ? 'Blank fields fall back to your Hosting default (' + esc(def.owner || 'no owner') + ', ····' + esc(def.last4) + ').' : 'No default saved, fill these in (or set a default once in Hosting).') + '</p>' +
-    '<div class="grid2">' +
-    '<div class="field"><label>GitHub owner (user or org)</label><input id="depOwner" class="mono" value="' + esc(st?.owner || def?.owner || '') + '" spellcheck="false"></div>' +
-    '<div class="field"><label>Repository name</label><input id="depRepo" class="mono" value="' + esc(st?.repo || '') + '" placeholder="defaults to the site name" spellcheck="false"></div>' +
-    '</div>' +
-    '<div class="field"><label>GitHub token for THIS site (leave blank to use the saved/default one)</label><input id="depToken" class="mono" type="password" autocomplete="off"></div>' +
-    '<label class="checkline" style="margin-bottom:0.8rem"><input type="checkbox" id="depSave" checked> Remember as this site\'s deploy target</label>' +
-    '<div><button class="primary" data-siteact="deploy-go" data-id="' + esc(siteId) + '">Deploy now</button></div>' +
-    '<div id="deployOut" style="margin-top:0.6rem"></div></div>';
+/**
+ * The "Publish this site" panel. One click to a live Vercel URL, or push to
+ * GitHub. An agency that hosts every client on its OWN account sets a token
+ * once (saved as the default) and never re-enters it: when a default exists we
+ * show a ready-to-launch button, and the per-client override is tucked away for
+ * the rarer case where the client owns their own hosting.
+ */
+async function loadLaunchPanel(siteId) {
+  const host = document.getElementById('launchPanel');
+  if (!host) return;
+  let dt = {};
+  try { const r = await api('/v1/sites/' + siteId + '/deploy-target'); dt = r.body || {}; } catch { /* fall through to entry fields */ }
+  let dbInfo = {};
+  if (detailCms) {
+    try { const r = await api('/v1/sites/' + siteId + '/database'); dbInfo = r.body || {}; } catch { /* fall through to entry fields */ }
+  }
+  const vc = dt.vercel || {}; const gh = dt.github || {};
+  const vcReady = Boolean(vc.site?.connected || vc.accountDefault);
+  const vcVia = vc.site?.connected ? 'this client\'s own Vercel token'
+    : vc.accountDefault ? 'your saved Vercel default' : null;
+  const ghOwner = gh.site?.owner || gh.accountDefault?.owner || '';
+  const ghReady = Boolean(gh.site?.connected || gh.accountDefault);
+  const ghVia = gh.site?.connected ? 'this client\'s own GitHub token' : gh.accountDefault ? 'your saved GitHub default' : null;
+  const info = (id, text) => '<button class="infoBtn" type="button" data-info="' + id + '" aria-label="What is this?">i</button>' +
+    '<div class="tip" id="' + id + '" hidden>' + text + '</div>';
+
+  // ── Vercel: the recommended one-click-to-live path ──
+  const vercelBlock =
+    '<div class="launchProv">' +
+      '<div class="lpHead"><b>Publish to Vercel</b> ' + info('tipVc',
+        'A Vercel token lets Stardrive upload the finished site and give you a live URL in about a minute. Create one at <a href="https://vercel.com/account/tokens" target="_blank" rel="noopener">vercel.com/account/tokens</a> (the free Hobby tier works). Save it once as your default and every client site you build reuses it, no re-entering.') +
+        ' <span class="lpTag">one click to a live URL</span></div>' +
+      (vcReady
+        ? '<p class="lpReady">Ready to go using <b>' + esc(vcVia) + '</b>. Publish and this client\'s site goes live under that account.</p>' +
+          '<button class="primary" data-siteact="vercel-go" data-id="' + esc(siteId) + '">Publish to Vercel</button>' +
+          '<details class="lpOverride"><summary>This client hosts on their own Vercel</summary>' +
+            '<div class="field"><label>Their Vercel token</label><input id="vcToken" class="mono" type="password" autocomplete="off"></div>' +
+            '<label class="checkline"><input type="checkbox" id="vcSaveSite"> Remember this token for this client only</label>' +
+          '</details>'
+        : '<div class="field"><label>Vercel token</label><input id="vcToken" class="mono" type="password" placeholder="paste your Vercel token" autocomplete="off"></div>' +
+          '<label class="checkline"><input type="checkbox" id="vcSaveDefault" checked> Save as my Vercel default, reuse it for every site I build</label>' +
+          '<button class="primary" data-siteact="vercel-go" data-id="' + esc(siteId) + '">Publish to Vercel</button>') +
+    '</div>';
+
+  // ── Database: vendor-neutral libSQL connection (CMS sites only) ──
+  const dbSite = dbInfo.site; const dbDef = dbInfo.accountDefault;
+  const dbReady = Boolean(dbSite?.connected || dbDef);
+  const dbVia = dbSite?.connected ? 'this client\'s own database' : dbDef ? 'your saved database default' : null;
+  const dbBlock = detailCms
+    ? '<div class="launchProv">' +
+        '<div class="lpHead"><b>Connect the database</b> ' + info('tipDb',
+          'This site\'s admin needs a database to save edits. Any libSQL-compatible endpoint works, this is not locked to one vendor: <a href="https://turso.tech" target="_blank" rel="noopener">Turso</a> is the easiest hosted option (free tier), self-hosted libSQL/SQLite works too. Paste the database URL and its auth token (leave the token blank if your endpoint needs none). Publishing to Vercel wires it in automatically, no manual env vars to copy.') + '</div>' +
+        (dbReady
+          ? '<p class="lpReady">Using <b>' + esc(dbVia) + '</b>' + (dbSite?.url || dbDef?.url ? ' (' + esc(dbSite?.url || dbDef?.url) + ')' : '') + '. Publishing to Vercel wires it in automatically.</p>' +
+            '<details class="lpOverride"><summary>Use a different database for this client</summary>' +
+              '<div class="field"><label>Database URL</label><input id="dbUrl" class="mono" placeholder="libsql://your-db.turso.io" spellcheck="false"></div>' +
+              '<div class="field"><label>Auth token (leave blank if none needed)</label><input id="dbToken" class="mono" type="password" autocomplete="off"></div>' +
+              '<label class="checkline"><input type="checkbox" id="dbSaveSite" checked> Remember this database for this client only</label>' +
+              '<div><button class="ghost" data-siteact="db-go" data-id="' + esc(siteId) + '">Save database</button></div>' +
+            '</details>'
+          : '<div class="field"><label>Database URL</label><input id="dbUrl" class="mono" placeholder="libsql://your-db.turso.io" spellcheck="false"></div>' +
+            '<div class="field"><label>Auth token (leave blank if none needed)</label><input id="dbToken" class="mono" type="password" autocomplete="off"></div>' +
+            '<label class="checkline"><input type="checkbox" id="dbSaveDefault" checked> Save as my database default, reuse it for every site I build</label>' +
+            '<div><button class="ghost" data-siteact="db-go" data-id="' + esc(siteId) + '">Save database</button></div>') +
+      '</div>'
+    : '';
+
+  // ── GitHub: push the code to any account, connect to any host ──
+  const githubBlock =
+    '<div class="launchProv">' +
+      '<div class="lpHead"><b>Or push to GitHub</b> ' + info('tipGh',
+        'Pushes the finished site (a standard Next.js repo, the engine is never included) to a GitHub account you choose. From there connect it to Vercel, Netlify, Cloudflare, or any host. Create a token at <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">github.com/settings/tokens</a> with repo scope. Save it once and reuse it for every site.') + '</div>' +
+      '<div class="grid2">' +
+        '<div class="field"><label>GitHub owner (user or org)</label><input id="ghOwner" class="mono" value="' + esc(ghOwner) + '" placeholder="e.g. ada-web-co" spellcheck="false"></div>' +
+        '<div class="field"><label>Repository name</label><input id="ghRepo" class="mono" placeholder="defaults to the site name" spellcheck="false"></div>' +
+      '</div>' +
+      (ghReady
+        ? '<p class="lpReady">Using <b>' + esc(ghVia) + '</b>' + (ghOwner ? ' (' + esc(ghOwner) + ')' : '') + '. Leave the token blank to reuse it.</p>' +
+          '<details class="lpOverride"><summary>Use a different GitHub token for this client</summary>' +
+            '<div class="field"><label>Their GitHub token</label><input id="ghToken" class="mono" type="password" autocomplete="off"></div>' +
+            '<label class="checkline"><input type="checkbox" id="ghSaveSite"> Remember this token for this client only</label>' +
+          '</details>'
+        : '<div class="field"><label>GitHub token</label><input id="ghToken" class="mono" type="password" placeholder="paste your GitHub token" autocomplete="off"></div>' +
+          '<label class="checkline"><input type="checkbox" id="ghSaveDefault" checked> Save as my GitHub default, reuse it for every site I build</label>') +
+      '<div style="margin-top:0.5rem"><button class="ghost" data-siteact="github-go" data-id="' + esc(siteId) + '">Push to GitHub</button></div>' +
+    '</div>';
+
+  host.innerHTML =
+    '<div class="card launch">' +
+      '<h3 style="margin:0 0 0.2rem">🚀 Publish this site</h3>' +
+      '<p style="font-size:0.84rem;color:var(--body);margin:0 0 0.9rem">Take this finished site live. Set a token once and it becomes your default for every client, so you never enter it twice. Override per client only when they host it themselves.</p>' +
+      vercelBlock + dbBlock + githubBlock +
+      '<div id="launchOut" style="margin-top:0.7rem"></div>' +
+    '</div>';
 }
 
-async function deployNow(siteId) {
-  const out = $('#deployOut') || $('#siteActOut');
-  const payload = { save: $('#depSave')?.checked };
-  const owner = $('#depOwner')?.value.trim(); if (owner) payload.owner = owner;
-  const repo = $('#depRepo')?.value.trim(); if (repo) payload.repo = repo;
-  const token = $('#depToken')?.value.trim(); if (token) payload.token = token;
-  out.innerHTML = '<div class="report ok">Deploying, pushing the site to GitHub…</div>';
+async function publishVercel(siteId) {
+  const out = $('#launchOut');
+  const token = $('#vcToken')?.value.trim() || '';
+  const saveDefault = $('#vcSaveDefault')?.checked;
+  const saveSite = $('#vcSaveSite')?.checked;
+  out.innerHTML = '<div class="report ok">Publishing to Vercel, uploading and building. This can take a minute…</div>';
+  // Saving as the account default (agency mode) stores it once for every site.
+  if (token && saveDefault) {
+    const s = await api('/v1/connections/vercel', { method: 'PUT', body: { token } });
+    if (s.status !== 200) { out.innerHTML = '<div class="report err">' + esc(s.body.error?.message || 'Could not save the Vercel token.') + '</div>'; return; }
+  }
+  const payload = {};
+  if (token) payload.token = token;
+  if (saveSite) payload.save = true;
+  const { status, body } = await api('/v1/sites/' + siteId + '/deploy/vercel', { method: 'POST', body: payload });
+  out.innerHTML = status === 200
+    ? '<div class="report ok">✓ ' + esc(body.note || 'Published to Vercel.') + (body.url ? ' Live at <a href="' + esc(body.url) + '" target="_blank" rel="noopener">' + esc(body.url) + '</a>.' : '') + (body.inspectorUrl ? ' <a href="' + esc(body.inspectorUrl) + '" target="_blank" rel="noopener">Build logs</a>.' : '') + '</div>'
+    : '<div class="report err">' + esc(body.error?.message || 'Publish failed (' + status + ').') + '</div>';
+}
+
+async function deployGithub(siteId) {
+  const out = $('#launchOut');
+  const owner = $('#ghOwner')?.value.trim() || '';
+  const repo = $('#ghRepo')?.value.trim() || '';
+  const token = $('#ghToken')?.value.trim() || '';
+  const saveDefault = $('#ghSaveDefault')?.checked;
+  const saveSite = $('#ghSaveSite')?.checked;
+  out.innerHTML = '<div class="report ok">Pushing the site to GitHub…</div>';
+  if (token && saveDefault) {
+    const s = await api('/v1/connections/github', { method: 'PUT', body: { token, ...(owner ? { owner } : {}) } });
+    if (s.status !== 200) { out.innerHTML = '<div class="report err">' + esc(s.body.error?.message || 'Could not save the GitHub token.') + '</div>'; return; }
+  }
+  const payload = {};
+  if (owner) payload.owner = owner;
+  if (repo) payload.repo = repo;
+  if (token) payload.token = token;
+  if (saveSite) payload.save = true;
   const { status, body } = await api('/v1/sites/' + siteId + '/deploy', { method: 'POST', body: payload });
   out.innerHTML = status === 200
-    ? '<div class="report ok">✓ Deployed to <a href="' + esc(body.url) + '" target="_blank" rel="noopener">' + esc(body.repo) + '</a> (' + body.files + ' files' + (body.createdRepo ? ', repo created' : '') + '). ' + esc(body.note) + '</div>'
-    : '<div class="report err">' + esc(body.error?.message || 'Deploy failed (' + status + ').') + '</div>';
+    ? '<div class="report ok">✓ Pushed to <a href="' + esc(body.url) + '" target="_blank" rel="noopener">' + esc(body.repo) + '</a> (' + body.files + ' files' + (body.createdRepo ? ', repo created' : '') + '). ' + esc(body.note) + '</div>'
+    : '<div class="report err">' + esc(body.error?.message || 'Push failed (' + status + ').') + '</div>';
+}
+
+/** Save a database connection (vendor-neutral libSQL: url + optional auth
+ *  token). Not a deploy itself, publishing to Vercel wires it in after. */
+async function saveDatabase(siteId) {
+  const out = $('#launchOut');
+  const url = $('#dbUrl')?.value.trim() || '';
+  const authToken = $('#dbToken')?.value.trim() || '';
+  const saveDefault = $('#dbSaveDefault')?.checked;
+  const saveSite = $('#dbSaveSite')?.checked;
+  if (!url) { out.innerHTML = '<div class="report err">A database URL is required (libsql://… or https://…).</div>'; return; }
+  out.innerHTML = '<div class="report ok">Saving the database connection…</div>';
+  if (saveDefault) {
+    const s = await api('/v1/connections/turso', { method: 'PUT', body: { token: authToken, url } });
+    if (s.status !== 200) { out.innerHTML = '<div class="report err">' + esc(s.body.error?.message || 'Could not save the database.') + '</div>'; return; }
+  }
+  if (saveSite) {
+    const s = await api('/v1/sites/' + siteId + '/database', { method: 'POST', body: { url, authToken } });
+    if (s.status !== 200) { out.innerHTML = '<div class="report err">' + esc(s.body.error?.message || 'Could not save the database.') + '</div>'; return; }
+  }
+  await loadLaunchPanel(siteId);
+  const out2 = $('#launchOut');
+  if (out2) out2.innerHTML = '<div class="report ok">✓ Database connected. Publishing to Vercel will wire it in automatically, no manual env vars.</div>';
 }
 
 /** Visual preview (full-QA screenshot) + the latest job's QA report. */
@@ -1502,6 +1632,12 @@ $('#siteDetail').addEventListener('click', async (e) => {
     if (cbtn.dataset.contentact === 'generate') generateSiteCopy(cbtn.dataset.id);
     return;
   }
+  const infoBtn = e.target.closest('button[data-info]');
+  if (infoBtn) {
+    const tip = document.getElementById(infoBtn.dataset.info);
+    if (tip) tip.hidden = !tip.hidden;
+    return;
+  }
   const btn = e.target.closest('button[data-siteact]');
   if (!btn) return;
   if (btn.dataset.siteact === 'build') { buildSite(btn.dataset.id); return; }
@@ -1511,8 +1647,9 @@ $('#siteDetail').addEventListener('click', async (e) => {
   if (btn.dataset.siteact === 'live') { openLivePreview(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'live-stop') { stopLivePreview(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'live-open') { openLivePreview(btn.dataset.id, true); return; }
-  if (btn.dataset.siteact === 'deploy') { showDeployForm(btn.dataset.id); return; }
-  if (btn.dataset.siteact === 'deploy-go') { deployNow(btn.dataset.id); return; }
+  if (btn.dataset.siteact === 'vercel-go') { publishVercel(btn.dataset.id); return; }
+  if (btn.dataset.siteact === 'github-go') { deployGithub(btn.dataset.id); return; }
+  if (btn.dataset.siteact === 'db-go') { saveDatabase(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'export') {
     // Real export streams a .tar.gz, fetch with auth and trigger a download.
     const res = await fetch('/v1/sites/' + btn.dataset.id + '/export', { headers: { Authorization: 'Bearer ' + getApiKey() } });
@@ -1574,7 +1711,7 @@ async function loadConnections() {
     card.querySelector('[data-role="status"]').style.display = c.connected ? '' : 'none';
     card.querySelector('[data-act="disconnect"]').style.display = c.connected ? '' : 'none';
     card.querySelector('[data-role="state"]').textContent = c.connected
-      ? 'Connected · ends in ' + c.last4 + (c.owner ? ' · ' + c.owner : '') + ' · saved ' + (c.updatedAt || '').slice(0, 10)
+      ? 'Connected · ' + (c.url ? c.url + ' · ' : '') + (c.last4 ? 'ends in ' + c.last4 + ' · ' : '') + (c.owner ? c.owner + ' · ' : '') + 'saved ' + (c.updatedAt || '').slice(0, 10)
       : 'Not connected.';
   }
 }
@@ -1587,7 +1724,8 @@ $('#connGrid').addEventListener('click', async (e) => {
   if (btn.dataset.act === 'save') {
     const token = card.querySelector('[data-role="token"]').value.trim();
     const owner = card.querySelector('[data-role="owner"]')?.value.trim();
-    const { status, body } = await api('/v1/connections/' + provider, { method: 'PUT', body: { token, ...(owner ? { owner } : {}) } });
+    const url = card.querySelector('[data-role="url"]')?.value.trim();
+    const { status, body } = await api('/v1/connections/' + provider, { method: 'PUT', body: { token, ...(owner ? { owner } : {}), ...(url ? { url } : {}) } });
     if (status === 200) {
       card.querySelector('[data-role="token"]').value = '';
       flash(btn, 'Saved ✓');
@@ -1641,12 +1779,16 @@ const REF = [
       curl: `curl -X POST {BASE}/v1/sites/{siteId}/assets/logo \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"filename":"logo.svg","contentBase64":"…"}'` },
     { m: 'DELETE', p: '/v1/sites/{id}/assets/{slot}/{assetId}', d: 'Remove an uploaded asset.', curl: `curl -X DELETE {BASE}/v1/sites/{siteId}/assets/logo/{assetId} -H "Authorization: Bearer {KEY}"` },
     { m: 'POST', p: '/v1/sites/{id}/assemble', d: 'Re-assemble with the current config + latest assets.', curl: `curl -X POST {BASE}/v1/sites/{siteId}/assemble -H "Authorization: Bearer {KEY}" -d '{}'` },
-    { m: 'POST', p: '/v1/sites/{id}/deploy', d: 'Deploy with your own hosting tokens. Honest 501 until the real engine lands.', curl: `curl -X POST {BASE}/v1/sites/{siteId}/deploy -H "Authorization: Bearer {KEY}" -d '{}'` },
-    { m: 'GET', p: '/v1/sites/{id}/export', d: 'Export the assembled repo. Honest 501 until the real engine lands.', curl: `curl {BASE}/v1/sites/{siteId}/export -H "Authorization: Bearer {KEY}"` },
+    { m: 'POST', p: '/v1/sites/{id}/deploy', d: 'Push the finished site to GitHub (this request > this site\'s saved target > your account default).', curl: `curl -X POST {BASE}/v1/sites/{siteId}/deploy -H "Authorization: Bearer {KEY}" -d '{}'` },
+    { m: 'POST', p: '/v1/sites/{id}/deploy/vercel', d: 'One-click publish to Vercel and get a live URL (token: request > site > account default). Auto-wires a connected database as Vercel env vars.', curl: `curl -X POST {BASE}/v1/sites/{siteId}/deploy/vercel -H "Authorization: Bearer {KEY}" -d '{}'` },
+    { m: 'GET', p: '/v1/sites/{id}/database', d: 'This site\'s database target (masked) and your account default.', curl: `curl {BASE}/v1/sites/{siteId}/database -H "Authorization: Bearer {KEY}"` },
+    { m: 'POST', p: '/v1/sites/{id}/database', d: 'Connect this site to a libSQL database (vendor-neutral: any libsql://, https://, or file: endpoint — Turso is just the recommended hosted one).',
+      curl: `curl -X POST {BASE}/v1/sites/{siteId}/database \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"url":"libsql://your-db.turso.io","authToken":"YOUR_TOKEN"}'` },
+    { m: 'GET', p: '/v1/sites/{id}/export', d: 'Export the assembled repo as a .tar.gz (a standalone Next.js project; the engine is never included).', curl: `curl {BASE}/v1/sites/{siteId}/export -H "Authorization: Bearer {KEY}"` },
   ]},
   { group: 'Connections, your hosting, your site', items: [
     { m: 'GET', p: '/v1/connections', d: 'Which providers are connected (masked, tokens are never returned).', curl: `curl {BASE}/v1/connections -H "Authorization: Bearer {KEY}"` },
-    { m: 'PUT', p: '/v1/connections/{provider}', d: 'Save your own vercel | turso | github token (encrypted at rest; deploys receive only the assembled site, never the engine).',
+    { m: 'PUT', p: '/v1/connections/{provider}', d: 'Save your own vercel | turso | github credentials as your account default (encrypted at rest; deploys receive only the assembled site, never the engine). "turso" is a generic libSQL database connection, not vendor-exclusive — pass {url, token} for any libsql/https/file endpoint.',
       curl: `curl -X PUT {BASE}/v1/connections/vercel \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"token":"YOUR_VERCEL_TOKEN"}'` },
     { m: 'DELETE', p: '/v1/connections/{provider}', d: 'Disconnect a provider.', curl: `curl -X DELETE {BASE}/v1/connections/vercel -H "Authorization: Bearer {KEY}"` },
   ]},
@@ -1803,17 +1945,18 @@ async function loadBilling() {
   // Plan grid.
   $('#planGrid').innerHTML = b.plans.map((p) => {
     const isNow = p.id === b.plan;
-    const rate = p.priceUsd > 0 ? '$' + p.effectivePer1kUsd.toFixed(4) + '/1k tokens' : 'free';
+    const perBuild = p.priceUsd > 0 ? '$' + p.effectivePerBuildUsd.toFixed(2) + '/site' : 'free';
+    const overBuild = p.overagePer1kUsd != null ? ' · then $' + (p.overagePer1kUsd * 20).toFixed(2) + '/site' : '';
     return '<div class="plan' + (isNow ? ' current' : '') + (p.popular ? ' popular' : '') + '">' +
       (p.popular ? '<span class="pop">Popular</span>' : '') +
       '<h3>' + esc(p.label) + '</h3>' +
       '<div class="price">' + (p.priceUsd > 0 ? '$' + p.priceUsd + '<small>/mo</small>' : '$0') + '</div>' +
-      '<div class="rate">' + rate + (p.overagePer1kUsd != null ? ' · overage $' + p.overagePer1kUsd.toFixed(3) + '/1k' : '') + '</div>' +
+      '<div class="rate">' + perBuild + overBuild + '</div>' +
       '<ul>' +
-        '<li>~' + fmtTokens(p.approxSites) + ' client sites/mo</li>' +
-        '<li>~' + p.approxDesigns + ' bespoke template designs</li>' +
-        '<li>' + fmtTokens(p.includedTokens) + ' tokens · unlimited builds &amp; previews</li>' +
-        '<li>' + (p.overagePer1kUsd != null ? 'Extra usage available (opt-in)' : 'Hard cap (no surprise charges)') + '</li>' +
+        '<li>~' + p.approxBuilds + ' finished sites/mo</li>' +
+        '<li>' + (p.heroImage ? 'AI hero images on every build' : 'Designed template hero images') + '</li>' +
+        '<li>Unlimited builds, previews &amp; deploys</li>' +
+        '<li>' + (p.overagePer1kUsd != null ? 'Extra sites available (opt-in)' : 'Hard cap (no surprise charges)') + '</li>' +
       '</ul>' +
       '<div class="blurb">' + esc(p.blurb) + '</div>' +
       (isNow ? '<div class="isnow">Your plan</div>'

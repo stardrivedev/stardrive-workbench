@@ -30,6 +30,7 @@ import { requirementsFor, readiness, validateFacts, GROUP_LABELS } from './lib/c
 import { generateCopy } from './lib/copy-gen.mjs';
 import { tarGzDir } from './lib/archive.mjs';
 import { pushToGitHub } from './lib/deploy.mjs';
+import { deployToVercel } from './lib/deploy-vercel.mjs';
 import { createEmail } from './lib/email.mjs';
 import { runMapping, validateMapping } from '../../packages/field-mapping/index.mjs';
 
@@ -105,6 +106,12 @@ function loadSite(id, account) {
     throw httpError(404, 'not_found', `Site ${id} not found.`);
   }
   return site;
+}
+
+/** Enqueue an assemble job, gating the AI hero-image perk on the account plan. */
+function enqueueAssemble(siteId, accountId) {
+  const account = accounts.getAccount(accountId) || { id: accountId, plan: 'beta' };
+  return jobs.enqueue('assemble', siteId, accountId, { heroImage: billing.planAllows(account, 'heroImage') });
 }
 
 /** Compartment ids that currently hold at least one upload (for readiness). */
@@ -443,7 +450,7 @@ const ROUTES = [
         store.writeJson(`sites/${site.id}.json`, site);
         return { status: 201, body: { siteId: site.id, status: 'created' } };
       }
-      const job = jobs.enqueue('assemble', site.id, key.account);
+      const job = enqueueAssemble(site.id, key.account);
       site.jobs.push(job.id);
       store.writeJson(`sites/${site.id}.json`, site);
       return { status: 202, body: { siteId: site.id, jobId: job.id, status: job.status } };
@@ -504,7 +511,7 @@ const ROUTES = [
       if (typeof site.config.siteName !== 'string' || !site.config.siteName.trim()) {
         throw httpError(422, 'incomplete_config', 'The change would leave config.siteName empty.');
       }
-      const job = jobs.enqueue('assemble', site.id, key.account);
+      const job = enqueueAssemble(site.id, key.account);
       site.jobs.push(job.id);
       site.updatedAt = new Date().toISOString();
       store.writeJson(`sites/${site.id}.json`, site);
@@ -646,7 +653,7 @@ const ROUTES = [
         site.copy = result.pack;
         if (result.tokens) { try { auth.meter(key.id, 'studio.tokens', result.tokens); } catch { /* best-effort */ } }
       }
-      const job = jobs.enqueue('assemble', site.id, key.account);
+      const job = enqueueAssemble(site.id, key.account);
       site.jobs.push(job.id);
       site.updatedAt = new Date().toISOString();
       store.writeJson(`sites/${site.id}.json`, site);
@@ -686,12 +693,111 @@ const ROUTES = [
     },
   },
   {
-    // The site's saved deploy target (masked) — for prefilling the form.
+    // The site's saved deploy targets (masked) for BOTH providers, plus the
+    // account defaults — so an agency that hosts every client on its own
+    // Vercel/GitHub sets those once and never re-enters them per site.
     method: 'GET', pattern: '/v1/sites/:id/deploy-target', scope: 'deploy',
     handler: ({ params, key }) => {
       const s = loadSite(params.id, key.account);
-      const acct = connections.get(key.account).github;
-      return { status: 200, body: { site: connections.getSiteTarget(s.id), accountDefault: acct.connected ? { owner: acct.owner, last4: acct.last4 } : null } };
+      const conns = connections.get(key.account);
+      const gh = conns.github; const vc = conns.vercel;
+      return {
+        status: 200,
+        body: {
+          // Back-compat: `site`/`accountDefault` remain the GitHub view.
+          site: connections.getSiteTarget(s.id, 'github'),
+          accountDefault: gh.connected ? { owner: gh.owner, last4: gh.last4 } : null,
+          github: {
+            site: connections.getSiteTarget(s.id, 'github'),
+            accountDefault: gh.connected ? { owner: gh.owner, last4: gh.last4 } : null,
+          },
+          vercel: {
+            site: connections.getSiteTarget(s.id, 'vercel'),
+            accountDefault: vc.connected ? { last4: vc.last4 } : null,
+          },
+        },
+      };
+    },
+  },
+  {
+    // The site's connected database (masked): a libSQL-compatible endpoint
+    // (Turso is the recommended hosted provider, but any libsql://, https://,
+    // or self-hosted endpoint works — this is vendor-neutral, not Turso-only).
+    method: 'GET', pattern: '/v1/sites/:id/database', scope: 'deploy',
+    handler: ({ params, key }) => {
+      const s = loadSite(params.id, key.account);
+      const acct = connections.get(key.account).turso;
+      return {
+        status: 200,
+        body: {
+          site: connections.getSiteTarget(s.id, 'turso'),
+          accountDefault: acct.connected ? { url: acct.url || null, last4: acct.last4 } : null,
+        },
+      };
+    },
+  },
+  {
+    // Save this site's database connection (or, via /v1/connections/turso,
+    // the account-wide default). Publishing to Vercel wires it in
+    // automatically as project env vars, no manual copying required.
+    method: 'POST', pattern: '/v1/sites/:id/database', scope: 'deploy', bodyLimit: 4_000,
+    handler: ({ params, body, key }) => {
+      const s = loadSite(params.id, key.account);
+      const url = String(body?.url || '').trim();
+      if (!url || !/^(libsql:|https:|file:)/.test(url)) {
+        throw httpError(400, 'bad_request', 'url is required and must start with libsql://, https://, or file: (any libSQL-compatible endpoint).');
+      }
+      const authToken = String(body?.authToken ?? '').trim();
+      if (authToken.length > 2000 || /\s/.test(authToken)) {
+        throw httpError(400, 'bad_request', 'authToken must not contain whitespace (max 2000 chars).');
+      }
+      connections.setSiteTarget(s.id, { provider: 'turso', token: authToken, url });
+      return { status: 200, body: { site: connections.getSiteTarget(s.id, 'turso') } };
+    },
+  },
+  {
+    // One-click publish to Vercel: upload the assembled site and get a live URL.
+    // Resolution mirrors GitHub deploy: this request's token > this site's saved
+    // Vercel token > the account default. Sending token with save:true stores it
+    // (encrypted) as this site's target.
+    method: 'POST', pattern: '/v1/sites/:id/deploy/vercel', scope: 'deploy', meter: 'sites.deploy',
+    handler: async ({ params, body, key }) => {
+      const s = loadSite(params.id, key.account);
+      const dir = store.path('workspaces', s.id);
+      if (!fs.existsSync(path.join(dir, 'package.json'))) {
+        throw httpError(409, 'not_assembled', 'Build the site before publishing.');
+      }
+      const acct = connections.get(key.account).vercel;
+      const token = (typeof body?.token === 'string' && body.token.trim())
+        || connections.revealSiteToken(s.id, 'vercel')
+        || (acct.connected ? connections.reveal(key.account, 'vercel') : null);
+      if (!token) {
+        throw httpError(422, 'no_target', 'Add a Vercel token to publish: either right here for this site, or once in Hosting as your default so every site reuses it. Get one at vercel.com/account/tokens.');
+      }
+      const teamId = typeof body?.teamId === 'string' && body.teamId.trim() ? body.teamId.trim() : null;
+      if (body?.save) connections.setSiteTarget(s.id, { provider: 'vercel', token: body?.token?.trim() || undefined });
+
+      // Auto-wire a connected database (per-site target > account default) as
+      // Vercel project env vars, so the CMS admin works on first publish with
+      // no manual env copying. Vendor-neutral: whatever libSQL endpoint the
+      // customer connected, not necessarily Turso.
+      const dbSite = connections.getSiteTarget(s.id, 'turso');
+      const dbAcct = connections.get(key.account).turso;
+      const dbUrl = dbSite?.url || dbAcct.url;
+      const dbToken = dbSite?.connected ? connections.revealSiteToken(s.id, 'turso') : (dbAcct.connected ? connections.reveal(key.account, 'turso') : null);
+      const env = dbUrl ? { TURSO_DATABASE_URL: dbUrl, ...(dbToken ? { TURSO_AUTH_TOKEN: dbToken } : {}) } : null;
+
+      const result = await deployToVercel({ token, teamId, name: body?.name || s.config.siteName, dir, env });
+      const dbNote = result.envWired ? 'Database connected and wired in automatically. ' : '';
+      return {
+        status: 200,
+        body: {
+          deployed: true, target: 'vercel', ...result,
+          note: dbNote + (result.readyState === 'READY'
+            ? 'Your site is live on Vercel.'
+            : 'Uploaded to Vercel and building now. The URL goes live the moment the build finishes (usually a minute or two).'),
+        },
+      };
     },
   },
   {
@@ -784,15 +890,25 @@ const ROUTES = [
       if (!PROVIDERS.includes(provider)) {
         throw httpError(422, 'unknown_provider', `provider must be one of: ${PROVIDERS.join(', ')} — the supported set is deliberate so a deploy can never leave you with a broken site.`);
       }
+      const isDatabase = provider === 'turso'; // a generic libSQL connection; Turso is the recommended, not the only, provider
       const token = String(body?.token ?? '');
-      if (token.length < 8 || token.length > 500 || /\s/.test(token)) {
+      if (token.length > 500 || /\s/.test(token)) {
+        throw httpError(400, 'bad_request', 'token must not contain whitespace (max 500 chars).');
+      }
+      // Every other provider needs a real token; a database endpoint may need
+      // none (self-hosted with no auth), so only its URL is required.
+      if (!isDatabase && token.length < 8) {
         throw httpError(400, 'bad_request', 'token is required (8–500 chars, no whitespace).');
       }
       const owner = body?.owner != null ? String(body.owner) : undefined;
       if (provider === 'github' && owner !== undefined && !/^[a-zA-Z0-9-]{1,80}$/.test(owner)) {
         throw httpError(400, 'bad_request', 'owner must be a GitHub username/org slug.');
       }
-      return { status: 200, body: { connections: connections.set(key.account, provider, token, { owner }) } };
+      const url = body?.url != null ? String(body.url) : undefined;
+      if (isDatabase && (!url || !/^(libsql:|https:|file:)/.test(url))) {
+        throw httpError(400, 'bad_request', 'url is required for the database connection and must start with libsql://, https://, or file: (any libSQL-compatible endpoint, not just Turso).');
+      }
+      return { status: 200, body: { connections: connections.set(key.account, provider, token, { owner, url }) } };
     },
   },
   {

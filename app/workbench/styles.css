@@ -334,3 +334,26 @@ button.primary.glow { animation: glowpulse 1.5s ease-in-out infinite; }
 .plan .blurb { font-size: 0.8rem; color: var(--muted); }
 .plan button { margin-top: auto; }
 .plan .isnow { margin-top: auto; text-align: center; font-size: 0.82rem; color: var(--accent); font-weight: 600; padding: 0.5rem; }
+
+/* ── Publish ("Going live") panel ── */
+.card.launch { margin-top: 0.9rem; border-color: color-mix(in oklab, var(--accent) 35%, var(--line)); }
+.launchProv { border-top: 1px solid var(--line); margin-top: 0.9rem; padding-top: 0.9rem; }
+.launchProv:first-of-type { border-top: 0; margin-top: 0.2rem; padding-top: 0; }
+.lpHead { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; font-size: 0.95rem; color: var(--ink); margin-bottom: 0.4rem; }
+.lpTag { font-size: 0.72rem; color: var(--muted); font-weight: 400; }
+.lpReady { font-size: 0.83rem; color: var(--body); margin: 0 0 0.6rem; }
+.lpOverride { margin: 0.6rem 0; }
+.lpOverride > summary { cursor: pointer; font-size: 0.8rem; color: var(--muted); }
+.lpOverride[open] > summary { margin-bottom: 0.5rem; }
+.infoBtn {
+  flex: none; width: 1.15rem; height: 1.15rem; border-radius: 50%;
+  border: 1px solid var(--line); background: var(--code-bg); color: var(--muted);
+  font-family: var(--serif, Georgia, serif); font-style: italic; font-size: 0.78rem; font-weight: 700;
+  line-height: 1; cursor: pointer; padding: 0;
+}
+.infoBtn:hover { border-color: var(--accent); color: var(--accent); }
+.tip {
+  flex-basis: 100%; margin: 0.4rem 0 0.2rem; padding: 0.55rem 0.7rem; font-size: 0.8rem; line-height: 1.45;
+  color: var(--body); background: var(--accent-soft); border-radius: 8px;
+}
+.tip[hidden] { display: none; }

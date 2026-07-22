@@ -4,17 +4,23 @@
  * (STRIPE_SECRET_KEY). Everything works and tests pass without the key;
  * real Stripe calls light up the moment it is present.
  *
- * The billable unit is a **token**: Template Studio generation consumes
- * model tokens (Stardrive's real marginal cost), so plans are sized in
- * tokens. Site assembly is deterministic (no model cost) and is included.
+ * The billable unit is a **token**, but the unit customers feel is a
+ * **finished site**: one build = a bespoke template design (~18k tokens) plus
+ * that client's written copy (~2k), about 20k tokens and roughly $0.59 of real
+ * model cost. Agencies build a fresh design per client (little reuse), so the
+ * recurring unit is the whole build, not an amortized design. Plans are sized
+ * in builds and priced per build, with tokens as the metered substrate.
  *
  * Design rules baked into the tiers below:
- *   1. Every tier is margin-positive on included tokens, and overage is
- *      priced ABOVE the included effective rate (so "keep working" pays).
- *   2. Higher tiers are cheaper per token — both a lower effective included
+ *   1. Every tier is margin-positive per build (well above the ~$0.59 cost),
+ *      and overage is priced ABOVE the included effective rate (so "keep
+ *      building" always pays).
+ *   2. Higher tiers are cheaper per build — both a lower effective included
  *      rate and a lower overage rate — so scaling up rewards the customer.
  *   3. Overage is opt-in and bills to the card on file, so a customer never
  *      hard-stops mid-project unless they choose to.
+ *   4. AI hero-image generation is a Studio-and-up perk (it adds real image
+ *      cost per build), so it rides the tiers where the margin carries it.
  *
  * Numbers are sane, profitable starting points to be tuned with beta data
  * and the chosen generation model (STARDRIVE_LLM_MODEL drives real cost).
@@ -23,42 +29,49 @@ import crypto from 'node:crypto';
 
 const httpError = (status, code, message) => Object.assign(new Error(message), { status, code });
 
-// includedTokens sized so effective $/1k descends up the tiers; overagePer1kUsd
+// includedTokens sized so effective $/build descends up the tiers; overage
 // descends too and always sits above the tier's effective included rate.
+// heroImage marks the AI hero-image perk (Studio and up).
 export const PLANS = {
   beta: {
     label: 'Beta', order: 0, hidden: true, priceUsd: 0,
     includedTokens: 5_000_000, includedAssemblies: null, overagePer1kUsd: null,
+    heroImage: true,
     blurb: 'Free while pricing is finalized with founding licensees.',
   },
   free: {
     label: 'Free', order: 1, priceUsd: 0,
-    includedTokens: 250_000, includedAssemblies: 5, overagePer1kUsd: null,
-    blurb: 'Kick the tires, no card required.',
+    includedTokens: 60_000, includedAssemblies: null, overagePer1kUsd: null,
+    heroImage: false,
+    blurb: 'Kick the tires: three finished sites, no card required.',
   },
   starter: {
     label: 'Starter', order: 2, priceUsd: 39,
-    includedTokens: 2_000_000, includedAssemblies: null, overagePer1kUsd: 0.030,
-    blurb: 'Solo and freelance, a few sites a month.',
+    includedTokens: 400_000, includedAssemblies: null, overagePer1kUsd: 0.125,
+    heroImage: false,
+    blurb: 'Solo and freelance, around twenty finished sites a month.',
   },
   studio: {
-    label: 'Studio', order: 3, priceUsd: 119, popular: true,
-    includedTokens: 8_000_000, includedAssemblies: null, overagePer1kUsd: 0.022,
-    blurb: 'A working studio shipping steadily.',
+    label: 'Studio', order: 3, priceUsd: 99, popular: true,
+    includedTokens: 1_200_000, includedAssemblies: null, overagePer1kUsd: 0.100,
+    heroImage: true,
+    blurb: 'A working studio, with AI hero images on every build.',
   },
   agency: {
-    label: 'Agency', order: 4, priceUsd: 349,
-    includedTokens: 30_000_000, includedAssemblies: null, overagePer1kUsd: 0.016,
-    blurb: 'High volume, lowest per-token rate.',
+    label: 'Agency', order: 4, priceUsd: 299,
+    includedTokens: 5_000_000, includedAssemblies: null, overagePer1kUsd: 0.075,
+    heroImage: true,
+    blurb: 'High volume, the lowest per-site rate, AI hero images.',
   },
 };
 
 // Measured token costs (2026-07): a Studio TEMPLATE design runs ~18k tokens on
-// gpt-5.6-sol; a client SITE's copy runs ~2k on gpt-5.5. An agency reuses one
-// design across many client sites, so the recurring unit is the site (~2k), not
-// the design. Plan sizes below are therefore very generous in "sites".
+// gpt-5.6-sol; a client SITE's copy runs ~2k on gpt-5.5. Agencies build a fresh
+// design per client (little reuse), so the recurring unit is the whole BUILD
+// (design + copy, ~20k tokens, ~$0.59 real cost), and plans are sized in builds.
 export const TOKENS_PER_GENERATION = 18_000; // one bespoke template design
 export const TOKENS_PER_SITE = 2_000;        // one client site's written copy
+export const TOKENS_PER_BUILD = TOKENS_PER_GENERATION + TOKENS_PER_SITE; // one finished site
 
 function planOf(account) {
   return PLANS[account?.plan] || PLANS.beta;
@@ -77,11 +90,19 @@ export function planCatalog() {
       includedAssemblies: p.includedAssemblies,
       overagePer1kUsd: p.overagePer1kUsd,
       popular: Boolean(p.popular),
+      heroImage: Boolean(p.heroImage),
       blurb: p.blurb,
       approxDesigns: Math.round(p.includedTokens / TOKENS_PER_GENERATION),
       approxSites: Math.round(p.includedTokens / TOKENS_PER_SITE),
+      approxBuilds: Math.round(p.includedTokens / TOKENS_PER_BUILD),
       effectivePer1kUsd: p.priceUsd > 0 ? +(p.priceUsd / (p.includedTokens / 1000)).toFixed(4) : 0,
+      effectivePerBuildUsd: p.priceUsd > 0 ? +(p.priceUsd / (p.includedTokens / TOKENS_PER_BUILD)).toFixed(2) : 0,
     }));
+}
+
+/** Does this account's plan include a named capability (e.g. 'heroImage')? */
+export function planAllows(account, feature) {
+  return Boolean(planOf(account)[feature]);
 }
 
 export function createBilling(accounts) {
@@ -216,5 +237,5 @@ export function createBilling(accounts) {
     return { received: true, action: `ignored (${event.type})` };
   }
 
-  return { configured, summary, usageSummary, quota, checkStudioQuota, createCheckout, handleWebhook };
+  return { configured, summary, usageSummary, quota, checkStudioQuota, createCheckout, handleWebhook, planAllows };
 }

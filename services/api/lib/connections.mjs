@@ -1,7 +1,12 @@
 /**
  * Per-account hosting connections — the licensee's OWN credentials
- * (Vercel, Turso, GitHub), so assembled sites deploy to hosting THEY own
- * and Stardrive never owns a customer's website.
+ * (Vercel, GitHub, and a database), so assembled sites deploy to hosting THEY
+ * own and Stardrive never owns a customer's website.
+ *
+ * The "turso" provider is really a generic libSQL database connection (a
+ * `url` + optional `authToken`): Turso is the recommended hosted provider,
+ * but the CMS's data layer (@libsql/client) talks to ANY libsql://, https://,
+ * or local file endpoint, so this is vendor-neutral, not Turso-exclusive.
  *
  * Security model:
  * - Tokens are encrypted at rest (AES-256-GCM, key derived via scrypt from
@@ -55,7 +60,11 @@ export function createConnections(store, varDir) {
     const out = {};
     for (const p of PROVIDERS) {
       out[p] = record?.[p]
-        ? { connected: true, last4: record[p].last4, updatedAt: record[p].updatedAt, ...(record[p].owner ? { owner: record[p].owner } : {}) }
+        ? {
+            connected: true, last4: record[p].last4, updatedAt: record[p].updatedAt,
+            ...(record[p].owner ? { owner: record[p].owner } : {}),
+            ...(record[p].url ? { url: record[p].url } : {}),
+          }
         : { connected: false };
     }
     return out;
@@ -66,8 +75,9 @@ export function createConnections(store, varDir) {
     const record = store.readJson(rel(account), {});
     record[provider] = {
       enc: encrypt(token),
-      last4: token.slice(-4),
+      last4: token ? token.slice(-4) : null,
       ...(extra.owner ? { owner: extra.owner } : {}),
+      ...(extra.url ? { url: extra.url } : {}),
       updatedAt: new Date().toISOString(),
     };
     store.writeJson(rel(account), record);
@@ -93,27 +103,37 @@ export function createConnections(store, varDir) {
     return true;
   }
 
-  /** Store an encrypted per-site github target { token?, owner, repo? }. */
-  function setSiteTarget(siteId, { token, owner, repo }) {
+  /**
+   * Store an encrypted per-site deploy target for one provider (github keeps
+   * owner/repo; vercel just a token; turso/database keeps url + authToken).
+   * Each client site can ship to a different account. Provider defaults to
+   * github for backward compatibility.
+   */
+  function setSiteTarget(siteId, { provider = 'github', token, owner, repo, url }) {
     const record = store.readJson(rel(siteScope(siteId)), {});
-    record.github = {
-      ...(token ? { enc: encrypt(token), last4: token.slice(-4) } : record.github?.enc ? { enc: record.github.enc, last4: record.github.last4 } : {}),
-      ...(owner ? { owner } : record.github?.owner ? { owner: record.github.owner } : {}),
-      ...(repo ? { repo } : record.github?.repo ? { repo: record.github.repo } : {}),
+    const prev = record[provider] || {};
+    // token !== undefined (rather than truthy) so an explicit empty string —
+    // a database endpoint that needs no auth — still marks the target
+    // "connected" instead of silently falling through to any prior value.
+    record[provider] = {
+      ...(token !== undefined ? { enc: encrypt(token), last4: token ? token.slice(-4) : null } : prev.enc ? { enc: prev.enc, last4: prev.last4 } : {}),
+      ...(owner ? { owner } : prev.owner ? { owner: prev.owner } : {}),
+      ...(repo ? { repo } : prev.repo ? { repo: prev.repo } : {}),
+      ...(url ? { url } : prev.url ? { url: prev.url } : {}),
       updatedAt: new Date().toISOString(),
     };
     store.writeJson(rel(siteScope(siteId)), record);
-    return getSiteTarget(siteId);
+    return getSiteTarget(siteId, provider);
   }
 
   /** Masked per-site target (never token material). */
-  function getSiteTarget(siteId) {
-    const g = store.readJson(rel(siteScope(siteId)), {}).github;
-    return g ? { connected: Boolean(g.enc), last4: g.last4 ?? null, owner: g.owner ?? null, repo: g.repo ?? null, updatedAt: g.updatedAt } : null;
+  function getSiteTarget(siteId, provider = 'github') {
+    const g = store.readJson(rel(siteScope(siteId)), {})[provider];
+    return g ? { connected: Boolean(g.enc), last4: g.last4 ?? null, owner: g.owner ?? null, repo: g.repo ?? null, url: g.url ?? null, updatedAt: g.updatedAt } : null;
   }
 
-  function revealSiteToken(siteId) {
-    const g = store.readJson(rel(siteScope(siteId)), {}).github;
+  function revealSiteToken(siteId, provider = 'github') {
+    const g = store.readJson(rel(siteScope(siteId)), {})[provider];
     return g?.enc ? decrypt(g.enc) : null;
   }
 

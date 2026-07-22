@@ -127,13 +127,16 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
     save(job);
   }
 
-  function enqueue(kind, siteId, account) {
+  function enqueue(kind, siteId, account, opts = {}) {
     const job = {
       id: crypto.randomUUID(),
       kind,
       siteId,
       account: account ?? null,
       engine,
+      // AI hero-image generation is a plan perk; the server sets this per the
+      // account's plan. Defaults to true so headless/tests keep their behavior.
+      heroImage: opts.heroImage !== false,
       status: 'queued',
       logs: [],
       result: null,
@@ -292,22 +295,27 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
     }
 
     // No hero uploaded? Generate one from the business details so the home page
-    // still opens on real imagery. Degrades silently to the template's designed
-    // hero if image generation is unavailable or fails.
+    // still opens on real imagery. This is a Studio-plan perk (job.heroImage is
+    // set from the account's plan); other plans fall back to the template's
+    // designed hero. Degrades silently on any failure.
     if (!publicMap.hero?.length && hasIntake && process.env.STARDRIVE_HERO_IMAGE !== 'off') {
-      try {
-        log(job, 'No hero uploaded, generating one from the business details…');
-        const img = await generateHeroImage({ siteName: site.config.siteName, facts, vibe: site.config.pairing || '' });
-        if (img) {
-          const rel = path.join('public', 'assets', 'hero', `ai-hero.${img.ext}`);
-          fs.mkdirSync(path.join(outDir, path.dirname(rel)), { recursive: true });
-          fs.writeFileSync(path.join(outDir, rel), img.buffer);
-          publicMap.hero = [`/assets/hero/ai-hero.${img.ext}`];
-          log(job, `Generated a hero image (${img.model}).`);
-        } else {
-          log(job, 'Hero image generation unavailable, using the template hero.');
-        }
-      } catch (e) { log(job, `Hero image generation skipped: ${e.message}`); }
+      if (job.heroImage === false) {
+        log(job, 'AI hero image is a Studio-plan feature; using the template\'s designed hero.');
+      } else {
+        try {
+          log(job, 'No hero uploaded, generating one from the business details…');
+          const img = await generateHeroImage({ siteName: site.config.siteName, facts, vibe: site.config.pairing || '' });
+          if (img) {
+            const rel = path.join('public', 'assets', 'hero', `ai-hero.${img.ext}`);
+            fs.mkdirSync(path.join(outDir, path.dirname(rel)), { recursive: true });
+            fs.writeFileSync(path.join(outDir, rel), img.buffer);
+            publicMap.hero = [`/assets/hero/ai-hero.${img.ext}`];
+            log(job, `Generated a hero image (${img.model}).`);
+          } else {
+            log(job, 'Hero image generation unavailable, using the template hero.');
+          }
+        } catch (e) { log(job, `Hero image generation skipped: ${e.message}`); }
+      }
     }
 
     fs.mkdirSync(path.join(outDir, 'src', 'config'), { recursive: true });
