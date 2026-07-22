@@ -707,6 +707,22 @@ const ROUTES = [
     },
   },
   {
+    // Permanently delete a site: its record, workspace, uploaded assets, jobs,
+    // saved deploy target, and any running preview. The caller confirms in the UI.
+    method: 'DELETE', pattern: '/v1/sites/:id', scope: 'sites',
+    handler: ({ params, key }) => {
+      const site = loadSite(params.id, key.account);
+      livePreview.stop(site.id);
+      fs.rmSync(store.path('workspaces', site.id), { recursive: true, force: true });
+      fs.rmSync(store.path('workspaces', `${site.id}.stage`), { recursive: true, force: true });
+      fs.rmSync(store.path('assets', site.id), { recursive: true, force: true });
+      for (const jid of site.jobs || []) { try { store.deleteJson(`jobs/${jid}.json`); } catch { /* best-effort */ } }
+      try { store.deleteJson(`connections/site-${site.id}.json`); } catch { /* may not exist */ }
+      store.deleteJson(`sites/${site.id}.json`);
+      return { status: 200, body: { deleted: site.id } };
+    },
+  },
+  {
     // Start (or reuse) a clickable live preview: `next start` on a localhost
     // port, so the operator can navigate the REAL assembled site. Local-only.
     method: 'POST', pattern: '/v1/sites/:id/preview/live', scope: 'sites',

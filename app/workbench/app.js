@@ -875,7 +875,8 @@ function renderGenOutcome(content) {
     setGenResult(
       '<div class="card gen-done">' +
       '<div class="done-badge">✨ Your template is complete</div>' +
-      '<h3 style="margin:0.55rem 0 0.15rem">' + esc(manifest.name || 'your template') + '</h3>' +
+      '<div class="field" style="margin:0.6rem 0 0.3rem"><label>Name this template</label>' +
+      '<input id="tplName" value="' + esc(manifest.name || 'my-template') + '" spellcheck="false" style="max-width:24rem" placeholder="my-template"></div>' +
       '<p style="font-size:0.83rem;color:var(--muted);margin:0 0 0.7rem">' + fileCount + ' files' + (routes.length ? ' · pages: ' + routes.map(esc).join(', ') : '') + '</p>' +
       '<p style="font-size:0.88rem;color:var(--body);margin:0 0 0.7rem">See how it looks before you decide. Preview builds a quick demo with sample content, then keep it or ask for changes.</p>' +
       '<button class="primary" data-genact="preview">👁 Preview this design</button>' +
@@ -971,6 +972,13 @@ function buildGeneratedBundle() {
   if (!manifestSrc) throw new Error('No manifest.json block in the conversation yet, ask the model to deliver the template files.');
   let manifest;
   try { manifest = JSON.parse(manifestSrc); } catch { throw new Error('The manifest.json block is not valid JSON, ask the model to re-send it.'); }
+  // The operator names the template; override the AI's suggestion with theirs.
+  const chosen = $('#tplName')?.value.trim();
+  if (chosen) {
+    const slug = chosen.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    if (!slug) throw new Error('Template name needs at least one letter or number.');
+    manifest.name = slug;
+  }
   const payload = Object.entries(files)
     .filter(([p]) => p !== 'manifest.json')
     .map(([path, content]) => ({ path: path.replace(/^files\//, ''), content }));
@@ -1154,7 +1162,11 @@ async function openSiteDetail(siteId) {
     (jobsHtml ? '<div class="tscroll"><table class="list"><thead><tr><th>Job</th><th>Kind</th><th>Status</th><th>When</th></tr></thead><tbody>' + jobsHtml + '</tbody></table></div>' : '<p style="font-size:0.82rem;color:var(--muted)">No builds yet.</p>') +
     '<div id="siteQa"></div></details>' +
     '<details style="margin-top:0.5rem"><summary style="cursor:pointer;color:var(--muted);font-size:0.85rem">Config (' + Object.keys(body.config).length + ' slots, ' + body.configHistory.length + ' prior versions)</summary>' +
-    '<div class="codeblock"><pre>' + esc(JSON.stringify(body.config, null, 2)) + '</pre><button class="copybtn" type="button">Copy</button></div></details>';
+    '<div class="codeblock"><pre>' + esc(JSON.stringify(body.config, null, 2)) + '</pre><button class="copybtn" type="button">Copy</button></div></details>' +
+    // Danger zone: delete this site (with typed confirmation).
+    '<div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--line)">' +
+    '<button class="ghost danger" data-siteact="delete" data-id="' + esc(body.id) + '" data-name="' + esc(body.config.siteName || body.id) + '">Delete this site…</button>' +
+    '<div id="deleteConfirm" style="margin-top:0.6rem"></div></div>';
   loadSiteAssets(body.id);
   loadSiteContent(body.id);
   loadSitePreviewAndQa(body);
@@ -1268,6 +1280,30 @@ function renderCopyPreview(copy, source) {
   if (copy.careers?.roles?.length) html += sec('Roles', '<ul style="margin:0.2rem 0;padding-left:1.1rem;font-size:0.84rem">' + copy.careers.roles.map((r) => '<li><b>' + esc(r.title) + '</b>' + (r.summary ? ', ' + esc(r.summary) : '') + '</li>').join('') + '</ul>');
   html += '<p style="font-size:0.78rem;color:var(--muted);margin-top:0.5rem">This lands on the site when you build. Change any answer above and write it again to update.</p></div>';
   box.innerHTML = html;
+}
+
+/** Delete a site, but only after the operator types its name to confirm. */
+function showDeleteConfirm(siteId, name) {
+  const el = $('#deleteConfirm');
+  if (!el) return;
+  el.innerHTML =
+    '<div class="card" style="margin:0;border-color:var(--bad)">' +
+    '<p style="margin:0 0 0.6rem;font-size:0.86rem">This permanently deletes <b>' + esc(name) + '</b> and its build, photos, and history. It cannot be undone.</p>' +
+    '<div class="field"><label>Type the site name to confirm</label><input id="delName" placeholder="' + esc(name) + '" spellcheck="false" autocomplete="off"></div>' +
+    '<div style="display:flex;gap:0.5rem;margin-top:0.3rem">' +
+    '<button class="ghost danger" data-siteact="delete-go" data-id="' + esc(siteId) + '" data-name="' + esc(name) + '">Delete permanently</button>' +
+    '<button class="ghost" data-siteact="delete-cancel">Cancel</button></div>' +
+    '<div id="delOut" style="margin-top:0.5rem"></div></div>';
+  setTimeout(() => $('#delName')?.focus(), 50);
+}
+
+async function deleteSiteNow(siteId, name) {
+  const typed = $('#delName')?.value.trim();
+  if (typed !== name) { $('#delOut').innerHTML = '<div class="report err">The name does not match, so nothing was deleted.</div>'; return; }
+  const { status, body } = await api('/v1/sites/' + siteId, { method: 'DELETE' });
+  if (status !== 200) { $('#delOut').innerHTML = '<div class="report err">' + esc(body.error?.message || 'Could not delete the site.') + '</div>'; return; }
+  $('#siteDetail').innerHTML = '<div class="report ok">Deleted "' + esc(name) + '".</div>';
+  loadSites();
 }
 
 /** Build (assemble + QA) with visible progress, then refresh the detail. */
@@ -1469,6 +1505,9 @@ $('#siteDetail').addEventListener('click', async (e) => {
   const btn = e.target.closest('button[data-siteact]');
   if (!btn) return;
   if (btn.dataset.siteact === 'build') { buildSite(btn.dataset.id); return; }
+  if (btn.dataset.siteact === 'delete') { showDeleteConfirm(btn.dataset.id, btn.dataset.name); return; }
+  if (btn.dataset.siteact === 'delete-cancel') { const el = $('#deleteConfirm'); if (el) el.innerHTML = ''; return; }
+  if (btn.dataset.siteact === 'delete-go') { deleteSiteNow(btn.dataset.id, btn.dataset.name); return; }
   if (btn.dataset.siteact === 'live') { openLivePreview(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'live-stop') { stopLivePreview(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'live-open') { openLivePreview(btn.dataset.id, true); return; }
