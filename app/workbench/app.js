@@ -1135,27 +1135,46 @@ async function openSiteDetail(siteId) {
             : '') +
         '</ul></details>'
     : '';
-  $('#siteDetail').innerHTML =
-    '<h3 style="margin-top:1.2rem;color:var(--ink)">' + esc(body.config.siteName || body.id) + '</h3>' +
-    (built ? '' : '<p style="font-size:0.88rem;color:var(--muted);margin:0.3rem 0 0.6rem">Not built yet. Do these in order: <b style="color:var(--ink)">1) answer the essentials · 2) add the photos · 3) Build</b>. The site ships finished, with the real copy and images.</p>') +
-    '<div id="sitePreview"></div>' +
-    // 1, the intake (answer questions → AI writes the copy)
-    '<div id="siteContent" data-id="' + esc(body.id) + '"></div>' +
-    // 2, photos, RIGHT BEFORE the build so they are never missed
-    '<h3 style="margin-top:1.4rem;color:var(--ink)">' + (built ? 'Photos & logo' : 'Add the photos & logo') + '</h3>' +
-    '<p style="font-size:0.85rem;color:var(--muted);margin:0.3rem 0 0.8rem">Drop each file into the right compartment and it lands in its exact place on the site, no paths to think about.' +
-      (built ? ' Photos added after a build appear when you rebuild.' : ' <b style="color:var(--ink)">Add these before you build</b> so the first preview shows the client\'s real logo and images.') + '</p>' +
-    '<div id="siteAssets" data-id="' + esc(body.id) + '" class="grid2"></div>' +
-    // 3, build + (once built) the site actions
-    '<div style="display:flex;gap:0.6rem;margin-top:1.1rem;flex-wrap:wrap;align-items:center">' +
-    '<button class="primary" data-siteact="build" data-id="' + esc(body.id) + '">' + (built ? 'Rebuild site' : 'Build site') + '</button>' +
-    (built ? '<button class="primary" data-siteact="live" data-id="' + esc(body.id) + '">▶ Open live preview</button>' +
-             '<button class="ghost" data-siteact="export" data-id="' + esc(body.id) + '">Download site (.tar.gz)</button>' : '') +
+  const id = body.id;
+  // One step at a time: locked steps hide their body, the active step is open,
+  // completed steps show a check. State is reactive (refreshSiteSteps).
+  const step = (n, title, bodyHtml, lockedMsg) =>
+    '<section class="sstep" data-step="' + n + '">' +
+      '<div class="sstep-head"><span class="sstep-num">' + n + '</span>' +
+        '<h3>' + title + '</h3><span class="sstep-status" data-role="status"></span></div>' +
+      '<div class="sstep-body">' + bodyHtml + '</div>' +
+      '<div class="sstep-locked">' + lockedMsg + '</div>' +
+    '</section>';
+  const buildRow =
+    '<div style="display:flex;gap:0.6rem;flex-wrap:wrap;align-items:center">' +
+    '<button class="primary" data-siteact="build" data-id="' + esc(id) + '">' + (built ? 'Rebuild site' : 'Build site') + '</button>' +
+    (built ? '<button class="primary" data-siteact="live" data-id="' + esc(id) + '">▶ Open live preview</button>' +
+             '<button class="ghost" data-siteact="export" data-id="' + esc(id) + '">Download site (.tar.gz)</button>' : '') +
     '</div>' +
     '<div id="livePreview" style="margin-top:0.6rem"></div>' +
-    '<div id="siteActOut" style="margin-top:0.6rem"></div>' +
-    (built ? '<div id="launchPanel"></div>' : '') +
-    goLiveCard +
+    '<div id="siteActOut" style="margin-top:0.6rem"></div>';
+  $('#siteDetail').innerHTML =
+    '<h3 style="margin-top:1.2rem;color:var(--ink)">' + esc(body.config.siteName || body.id) + '</h3>' +
+    '<div id="siteStepper" class="stepper"></div>' +
+    '<div id="sitePreview"></div>' +
+    // Step 1 — the intake (answer questions → AI writes the copy)
+    step(1, 'The essentials',
+      '<p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.2rem">Answer these and the AI writes finished copy for every page, no placeholders.</p>' +
+      '<div id="siteContent" data-id="' + esc(id) + '"></div>', '') +
+    // Step 2 — photos (encouraged, but skippable)
+    step(2, 'Photos &amp; logo',
+      '<p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.6rem">Drop each file into the right compartment and it lands in its exact place, no paths to think about. Optional: the AI can generate a hero, and the logo can come later.</p>' +
+      '<div id="siteAssets" data-id="' + esc(id) + '" class="grid2"></div>' +
+      '<div style="margin-top:0.7rem"><button class="ghost" data-siteact="photos-skip" data-id="' + esc(id) + '">Continue without photos</button></div>',
+      'Answer the essentials first, then add photos.') +
+    // Step 3 — build
+    step(3, built ? 'Rebuild the site' : 'Build the site',
+      '<p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.6rem">' + (built ? 'Rebuild to pick up edits or newly added photos.' : 'This assembles the finished, shippable site with real copy and images.') + '</p>' + buildRow,
+      'Answer the essentials to unlock the build.') +
+    // Step 4 — publish
+    step(4, 'Publish',
+      (built ? '<div id="launchPanel"></div>' + goLiveCard : ''),
+      'Build the site first, then publish it live.') +
     // reference material, kept out of the main flow
     '<details style="margin-top:1.2rem"><summary style="cursor:pointer;color:var(--muted);font-size:0.85rem">Build history &amp; checks</summary>' +
     (jobsHtml ? '<div class="tscroll"><table class="list"><thead><tr><th>Job</th><th>Kind</th><th>Status</th><th>When</th></tr></thead><tbody>' + jobsHtml + '</tbody></table></div>' : '<p style="font-size:0.82rem;color:var(--muted)">No builds yet.</p>') +
@@ -1164,12 +1183,40 @@ async function openSiteDetail(siteId) {
     '<div class="codeblock"><pre>' + esc(JSON.stringify(body.config, null, 2)) + '</pre><button class="copybtn" type="button">Copy</button></div></details>' +
     // Danger zone: delete this site (with typed confirmation).
     '<div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--line)">' +
-    '<button class="ghost danger" data-siteact="delete" data-id="' + esc(body.id) + '" data-name="' + esc(body.config.siteName || body.id) + '">Delete this site…</button>' +
+    '<button class="ghost danger" data-siteact="delete" data-id="' + esc(id) + '" data-name="' + esc(body.config.siteName || body.id) + '">Delete this site…</button>' +
     '<div id="deleteConfirm" style="margin-top:0.6rem"></div></div>';
+  // A built site has already cleared essentials + moved past photos.
+  stepState = { siteId: id, ready: built, hasPhotos: false, photosAck: built, built };
+  refreshSiteSteps();
   loadSiteAssets(body.id);
   loadSiteContent(body.id);
   loadSitePreviewAndQa(body);
   if (built) loadLaunchPanel(body.id);
+}
+
+// The 4-step gated flow state for the open site, and its reactive render.
+let stepState = null;
+function stepStatus(n, s) {
+  if (n === 1) return s.ready ? 'done' : 'active';
+  if (n === 2) return !s.ready ? 'locked' : (s.hasPhotos || s.photosAck) ? 'done' : 'active';
+  if (n === 3) return !s.ready ? 'locked' : s.built ? 'done' : 'active';
+  return !s.built ? 'locked' : 'active'; // step 4, publish
+}
+function refreshSiteSteps() {
+  const s = stepState;
+  if (!s) return;
+  document.querySelectorAll('#siteDetail .sstep').forEach((sec) => {
+    const st = stepStatus(Number(sec.dataset.step), s);
+    sec.classList.remove('done', 'active', 'locked');
+    sec.classList.add(st);
+    const pill = sec.querySelector('[data-role="status"]');
+    if (pill) pill.textContent = st === 'done' ? '✓ Done' : st === 'active' ? 'Now' : 'Locked';
+  });
+  const bar = document.getElementById('siteStepper');
+  if (bar) bar.innerHTML = ['The essentials', 'Photos & logo', 'Build', 'Publish'].map((label, i) => {
+    const st = stepStatus(i + 1, s);
+    return '<div class="stepchip ' + st + '"><span class="stepchip-n">' + (st === 'done' ? '✓' : (i + 1)) + '</span><span>' + esc(label) + '</span></div>';
+  }).join('');
 }
 
 /* ══════════════ Content intake (DFY: facts in → AI writes the site) ══════════════ */
@@ -1243,6 +1290,7 @@ async function loadSiteContent(siteId) {
     '<div id="copyPreview" style="margin-top:0.6rem"></div>';
   root.innerHTML = html;
   if (body.copy) renderCopyPreview(body.copy, 'saved');
+  if (stepState && stepState.siteId === siteId) { stepState.ready = Boolean(body.readiness?.ready); refreshSiteSteps(); }
 }
 
 let contentSaveTimer = null;
@@ -1255,6 +1303,7 @@ async function saveSiteContent() {
   });
   const { status, body } = await api('/v1/sites/' + siteId + '/content', { method: 'PATCH', body: { facts } });
   if (status === 200 && $('#contentReady')) $('#contentReady').innerHTML = readyBadge(body.readiness);
+  if (status === 200 && stepState && stepState.siteId === siteId) { stepState.ready = Boolean(body.readiness?.ready); refreshSiteSteps(); }
 }
 
 async function generateSiteCopy(siteId) {
@@ -1591,6 +1640,10 @@ async function loadSiteAssets(siteId) {
         : '<div style="font-size:0.78rem;color:var(--muted)">Compartment full.</div>');
     root.appendChild(card);
   }
+  if (stepState && stepState.siteId === siteId) {
+    stepState.hasPhotos = body.slots.some((slot) => (body.assets[slot.id] || []).length > 0);
+    refreshSiteSteps();
+  }
 }
 
 $('#view-sites').addEventListener('change', async (e) => {
@@ -1641,6 +1694,11 @@ $('#siteDetail').addEventListener('click', async (e) => {
   const btn = e.target.closest('button[data-siteact]');
   if (!btn) return;
   if (btn.dataset.siteact === 'build') { buildSite(btn.dataset.id); return; }
+  if (btn.dataset.siteact === 'photos-skip') {
+    if (stepState) { stepState.photosAck = true; refreshSiteSteps(); }
+    document.querySelector('#siteDetail .sstep[data-step="3"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
   if (btn.dataset.siteact === 'delete') { showDeleteConfirm(btn.dataset.id, btn.dataset.name); return; }
   if (btn.dataset.siteact === 'delete-cancel') { const el = $('#deleteConfirm'); if (el) el.innerHTML = ''; return; }
   if (btn.dataset.siteact === 'delete-go') { deleteSiteNow(btn.dataset.id, btn.dataset.name); return; }

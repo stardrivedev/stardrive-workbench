@@ -90,6 +90,13 @@ hermetic offline builds):
   landed with it: accounts on keys; templates/mappings/sites/jobs private
   per account, catalog shared. Remaining Workbench work: mapping editor,
   client-facts form, build/QA/deploy status views (with the real engine).
+- **Gated Sites flow SHIPPED 2026-07-22**: the site-detail page is now a
+  4-step progressive-disclosure flow (Essentials -> Photos -> Build ->
+  Publish) with a visible stepper; locked steps hide their body until their
+  prerequisite is met, so a user is never overwhelmed and always sees which
+  step they are on. Photos are encouraged but skippable (the AI fills the
+  hero). Front-end only, derived from readiness/assets/build state already
+  fetched.
 - **Customer-facing side v1 SHIPPED 2026-07-17**: the public marketing site
   at `/` (app/site — deliberate night-sky identity, how-it-works, pillars,
   Studio story, honest private-beta pricing card, FAQ incl. the

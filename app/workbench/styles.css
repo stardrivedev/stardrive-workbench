@@ -357,3 +357,28 @@ button.primary.glow { animation: glowpulse 1.5s ease-in-out infinite; }
   color: var(--body); background: var(--accent-soft); border-radius: 8px;
 }
 .tip[hidden] { display: none; }
+
+/* ── Sites: gated step flow ── */
+.stepper { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.7rem 0 0.3rem; }
+.stepchip { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; padding: 0.3rem 0.7rem; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); background: var(--panel); }
+.stepchip-n { flex: none; width: 1.2rem; height: 1.2rem; border-radius: 50%; display: grid; place-items: center; font-size: 0.7rem; font-weight: 700; background: var(--code-bg); color: var(--muted); }
+.stepchip.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.stepchip.active .stepchip-n { background: var(--accent); color: var(--accent-ink); }
+.stepchip.done { border-color: color-mix(in oklab, var(--good) 45%, var(--line)); color: var(--good); }
+.stepchip.done .stepchip-n { background: var(--good); color: #fff; }
+.stepchip.locked { opacity: 0.5; }
+
+.sstep { border-top: 1px solid var(--line); padding: 0.9rem 0 0.2rem; margin-top: 0.7rem; }
+.sstep-head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.6rem; }
+.sstep-head h3 { font-size: 1.02rem; margin: 0; }
+.sstep-num { flex: none; width: 1.65rem; height: 1.65rem; border-radius: 50%; display: grid; place-items: center; font-size: 0.82rem; font-weight: 700; background: var(--code-bg); color: var(--muted); border: 1px solid var(--line); }
+.sstep-status { margin-left: auto; font-size: 0.72rem; font-weight: 600; padding: 0.12rem 0.55rem; border-radius: 999px; color: var(--muted); background: var(--code-bg); }
+.sstep.active > .sstep-head .sstep-num { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.sstep.active > .sstep-head .sstep-status { color: var(--accent); background: var(--accent-soft); }
+.sstep.done > .sstep-head .sstep-num { background: var(--good); color: #fff; border-color: var(--good); }
+.sstep.done > .sstep-head .sstep-status { color: var(--good); background: var(--good-soft); }
+.sstep.done > .sstep-head h3 { color: var(--muted); }
+.sstep.locked > .sstep-head { opacity: 0.55; }
+.sstep-locked { display: none; font-size: 0.85rem; color: var(--muted); padding: 0.1rem 0 0.6rem; }
+.sstep.locked > .sstep-body { display: none; }
+.sstep.locked > .sstep-locked { display: block; }
