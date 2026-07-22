@@ -13,11 +13,12 @@ field-mapping engine is imported directly from `packages/field-mapping`.
 node server.mjs [--port 4650]
 ```
 
-Then open **http://localhost:4650**:
+Then open **http://localhost:4650** (the root redirects to the Console):
 
-- **/** — the public marketing site (`app/site/`): what Stardrive is, how it
-  works, pricing shape, FAQ, and a request-access form whose leads land in
-  `var/leads/` (public endpoint, per-IP throttled).
+- **/** — redirects to `/workbench/`. The public marketing site is a separate
+  deployment (built with Stardrive itself), not bundled here. The
+  `POST /site/request-access` lead endpoint (per-IP throttled, leads land in
+  `var/leads/`) remains available for an external marketing site to post to.
 - **/workbench/** — the customer console (`app/workbench/`). It opens a
   **login / signup** gate: sign up with an email + password and the console
   creates your account, opens a session, and mints your first API key

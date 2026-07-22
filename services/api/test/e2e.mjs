@@ -667,14 +667,10 @@ await check('create-first flow: assemble:false creates without building; photos 
 
 // ── Workbench: static pages + the BYO-key chat relay ────────────────────
 console.log('workbench:');
-await check('the marketing site serves at /, the Workbench at /workbench/; no auth for pages', async () => {
-  const home = await fetch(BASE + '/');
-  assert.strictEqual(home.status, 200);
-  assert.strictEqual((home.headers.get('content-type') || '').includes('text/html'), true);
-  const html = await home.text();
-  assert.strictEqual(html.includes('Request access'), true, 'marketing page owns /');
-  assert.strictEqual((await fetch(BASE + '/site.js')).status, 200);
-  assert.strictEqual((await fetch(BASE + '/site.css')).status, 200);
+await check('/ redirects into the Console; the Workbench serves at /workbench/; no auth for pages', async () => {
+  const home = await fetch(BASE + '/', { redirect: 'manual' });
+  assert.strictEqual(home.status, 302);
+  assert.strictEqual(home.headers.get('location'), '/workbench/');
   const wb = await fetch(BASE + '/workbench/');
   assert.strictEqual(wb.status, 200);
   assert.strictEqual((await wb.text()).includes('Workbench'), true);
@@ -684,11 +680,10 @@ await check('the marketing site serves at /, the Workbench at /workbench/; no au
   assert.strictEqual(redir.status, 302);
   assert.strictEqual(redir.headers.get('location'), '/workbench/');
 });
-await check('static serving refuses traversal and unknown types on both roots', async () => {
-  assert.strictEqual((await fetch(BASE + '/..%2Fserver.mjs')).status, 404);
+await check('static serving refuses traversal and unknown paths', async () => {
   assert.strictEqual((await fetch(BASE + '/server.mjs')).status, 404);
   assert.strictEqual((await fetch(BASE + '/workbench/..%2F..%2Fserver.mjs')).status, 404);
-  assert.strictEqual((await fetch(BASE + '/app.js')).status, 404, 'workbench assets no longer at the root');
+  assert.strictEqual((await fetch(BASE + '/app.js')).status, 404, 'workbench assets are not at the root');
 });
 await check('request-access: stores valid leads, rejects junk, throttles per IP', async () => {
   const post = (body) => call('POST', '/site/request-access', { body });

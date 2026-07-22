@@ -34,12 +34,12 @@ export const PLANS = {
   free: {
     label: 'Free', order: 1, priceUsd: 0,
     includedTokens: 250_000, includedAssemblies: 5, overagePer1kUsd: null,
-    blurb: 'Kick the tires — no card required.',
+    blurb: 'Kick the tires, no card required.',
   },
   starter: {
     label: 'Starter', order: 2, priceUsd: 39,
     includedTokens: 2_000_000, includedAssemblies: null, overagePer1kUsd: 0.030,
-    blurb: 'Solo and freelance — a few sites a month.',
+    blurb: 'Solo and freelance, a few sites a month.',
   },
   studio: {
     label: 'Studio', order: 3, priceUsd: 119, popular: true,
@@ -53,8 +53,12 @@ export const PLANS = {
   },
 };
 
-/** A token estimate for one typical template generation (for humanizing sizes). */
-export const TOKENS_PER_GENERATION = 40_000;
+// Measured token costs (2026-07): a Studio TEMPLATE design runs ~18k tokens on
+// gpt-5.6-sol; a client SITE's copy runs ~2k on gpt-5.5. An agency reuses one
+// design across many client sites, so the recurring unit is the site (~2k), not
+// the design. Plan sizes below are therefore very generous in "sites".
+export const TOKENS_PER_GENERATION = 18_000; // one bespoke template design
+export const TOKENS_PER_SITE = 2_000;        // one client site's written copy
 
 function planOf(account) {
   return PLANS[account?.plan] || PLANS.beta;
@@ -74,7 +78,8 @@ export function planCatalog() {
       overagePer1kUsd: p.overagePer1kUsd,
       popular: Boolean(p.popular),
       blurb: p.blurb,
-      approxGenerations: Math.round(p.includedTokens / TOKENS_PER_GENERATION),
+      approxDesigns: Math.round(p.includedTokens / TOKENS_PER_GENERATION),
+      approxSites: Math.round(p.includedTokens / TOKENS_PER_SITE),
       effectivePer1kUsd: p.priceUsd > 0 ? +(p.priceUsd / (p.includedTokens / 1000)).toFixed(4) : 0,
     }));
 }
@@ -144,7 +149,7 @@ export function createBilling(accounts) {
   async function createCheckout(account, { plan, successUrl, cancelUrl }) {
     if (!configured()) {
       throw httpError(501, 'billing_unconfigured',
-        'Checkout is not enabled yet — Stripe is not configured. It activates the moment STRIPE_SECRET_KEY (and a plan price id) are set; pricing is being finalized from real usage first.');
+        'Checkout is not enabled yet: Stripe is not configured. It activates the moment STRIPE_SECRET_KEY (and a plan price id) are set; pricing is being finalized from real usage first.');
     }
     if (!PLANS[plan] || PLANS[plan].priceUsd <= 0) throw httpError(422, 'unknown_plan', `"${plan}" is not a purchasable plan.`);
     const priceId = process.env[`STRIPE_PRICE_${String(plan).toUpperCase()}`];

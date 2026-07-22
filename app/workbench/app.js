@@ -1,4 +1,4 @@
-/* Stardrive Workbench — plain JS, no build step, same-origin API. */
+/* Stardrive Workbench, plain JS, no build step, same-origin API. */
 'use strict';
 
 /* ══════════════ The authoring rulebook (system prompt for the Studio) ══════════════ */
@@ -79,12 +79,12 @@ Rules:
   postAssemble, assetSlots. Unknown keys are rejected.
 - assetSlots (optional): EXTRA asset compartments your template needs
   beyond the standard set every site template already has (logo, favicon,
-  hero, about, gallery, team, misc — those ids are reserved). Each entry:
+  hero, about, gallery, team, misc, those ids are reserved). Each entry:
   { "id": "menu-pages", "label": "Menu pages",
     "description": "One image per menu page.",
     "accept": ["jpg","jpeg","png"], "max": 8 }
   accept is a subset of png, jpg, jpeg, webp, svg, gif, ico; max is 1-50.
-  The engine slots uploads for slot "x" under public/assets/x/ — read
+  The engine slots uploads for slot "x" under public/assets/x/, read
   imagery from there with graceful fallbacks when a compartment is empty.
 
 =====================================================================
@@ -202,7 +202,7 @@ files/src/config/content.generated.ts
   and NEVER hardcode client-specific text or leave "sample"/"Replace this"
   placeholders. The build FAILS if any filler phrase survives on any page.
   Shape (all fields always present; render only what is non-empty, hide the
-  rest — no empty headings):
+  rest, no empty headings):
     tagline; description
     home: { heroHeadline, heroSubhead, ctaLabel, introHeading, introBody }
     about: { heading, paragraphs: string[], mission }
@@ -416,29 +416,29 @@ window.addEventListener('hashchange', route);
 /* ══════════════ Home (guided journey) ══════════════ */
 async function loadHome() {
   if (!getApiKey()) return;
-  // Step 1 — templates (imports beyond the shared catalog).
+  // Step 1, templates (imports beyond the shared catalog).
   try {
     const { body } = await api('/v1/templates');
     const mine = (body.templates || []).filter((t) => t.source !== 'bundled').length;
     const total = (body.templates || []).length;
     setStep('jstep-1', 'homeTemplates', mine > 0,
       mine > 0 ? `You have <span class="ok">${mine} of your own template${mine === 1 ? '' : 's'}</span> (plus ${total - mine} from the catalog).`
-               : `<span class="todo">No templates of your own yet — the ${total}-design catalog is ready to start from.</span>`);
+               : `<span class="todo">No templates of your own yet, the ${total}-design catalog is ready to start from.</span>`);
   } catch { /* not logged in / no key */ }
-  // Step 2 — sites.
+  // Step 2, sites.
   try {
     const { body } = await api('/v1/sites');
     const n = (body.sites || []).length;
     setStep('jstep-2', 'homeSites', n > 0,
       n > 0 ? `<span class="ok">${n} site${n === 1 ? '' : 's'} built.</span>` : '<span class="todo">No sites built yet.</span>');
   } catch { /* ignore */ }
-  // Step 3 — hosting.
+  // Step 3, hosting.
   try {
     const { status, body } = await api('/v1/connections');
     if (status === 200) {
       const connected = Object.entries(body.connections).filter(([, c]) => c.connected).map(([p]) => p);
       setStep('jstep-3', 'homeHosting', connected.length > 0,
-        connected.length ? `<span class="ok">Connected: ${connected.join(', ')}.</span>` : '<span class="todo">No hosting connected yet — you can still export finished sites.</span>');
+        connected.length ? `<span class="ok">Connected: ${connected.join(', ')}.</span>` : '<span class="todo">No hosting connected yet, you can still export finished sites.</span>');
     }
   } catch { /* ignore */ }
 }
@@ -671,7 +671,7 @@ function renderImportReport(el, status, body) {
     el.innerHTML = '<div class="report ok">✓ Imported <b>' + esc(body.name) + '</b> into your private library.' +
       (body.warnings?.length ? '<div class="warns"><b>Warnings (review deliberately):</b><ul>' + body.warnings.map((w) => '<li>' + esc(w) + '</li>').join('') + '</ul></div>' : '') + '</div>';
   } else {
-    el.innerHTML = '<div class="report err"><b>Rejected — fix these and re-upload:</b><ul>' +
+    el.innerHTML = '<div class="report err"><b>Rejected, fix these and re-upload:</b><ul>' +
       (body.errors || [body.error?.message || 'Unknown error']).map((er) => '<li>' + esc(er) + '</li>').join('') + '</ul></div>';
   }
 }
@@ -728,13 +728,13 @@ function featurePromptBlock() {
   const on = FEATURES.filter((f) => enabledFeatures.has(f.id));
   if (!on.length) return '';
   return '\n\n=====================================================================\n'
-    + 'REQUESTED FEATURES (the customer toggled these ON — include ALL of them,\n'
+    + 'REQUESTED FEATURES (the customer toggled these ON, include ALL of them,\n'
     + 'and declare any new page routes they add in manifest.provides.routes)\n'
     + '=====================================================================\n'
     + on.map((f) => `- ${f.label}: ${f.prompt}`).join('\n')
     + '\nBuild these into the template design at descriptive routes of your own '
     + '(e.g. /portfolio, /work, /shop). Do NOT use the reserved routes /admin, '
-    + '/catalog, /careers, /insights, or /gallery — those belong to engine modules.';
+    + '/catalog, /careers, /insights, or /gallery, those belong to engine modules.';
 }
 document.getElementById('featureList')?.addEventListener('change', (e) => {
   const cb = e.target.closest('input[data-feature]');
@@ -756,8 +756,8 @@ function applyStudioConfig(studio) {
   $('#studioModel').textContent = studioEnabled ? (studio.model || 'configured') : 'not enabled yet';
   $('#sendBtn').disabled = !studioEnabled;
   $('#studioStatus').innerHTML = studioEnabled
-    ? '<div class="report ok" style="margin:0">Ready — template generation is on.</div>'
-    : '<div class="report" style="margin:0;background:var(--code-bg);color:var(--muted)">The Studio is not enabled yet. It turns on once the operator configures the model — you never need a model key of your own.</div>';
+    ? '<div class="report ok" style="margin:0">Ready, template generation is on.</div>'
+    : '<div class="report" style="margin:0;background:var(--code-bg);color:var(--muted)">The Studio is not enabled yet. It turns on once the operator configures the model, you never need a model key of your own.</div>';
 }
 
 function addMsg(role, content) {
@@ -832,7 +832,7 @@ $('#chatText')?.addEventListener('keydown', (e) => {
 
 async function runGeneration(userText, isFirst) {
   if (!getApiKey()) { setGenResult('<div class="report err">Save your Stardrive API key (top right) first.</div>'); return; }
-  if (!studioEnabled) { setGenResult('<div class="report">The Template Studio is not enabled yet — it turns on once the operator configures the model.</div>'); return; }
+  if (!studioEnabled) { setGenResult('<div class="report">The Template Studio is not enabled yet, it turns on once the operator configures the model.</div>'); return; }
   chat.messages.push({ role: 'user', content: userText });
   addMsg('user', userText);
   const active = FEATURES.filter((f) => enabledFeatures.has(f.id));
@@ -882,7 +882,7 @@ function renderGenOutcome(content) {
     const rw = $('#refineWrap'); if (rw) rw.hidden = false;
   } else {
     const prose = content.replace(/^===\s*FILE:[\s\S]*?^===\s*END FILE\s*===/gm, '').trim();
-    setGenResult('<div class="card"><p style="margin:0;white-space:pre-wrap;font-size:0.9rem">' + esc(prose.slice(0, 700) || 'The model replied — open "View the generated files" to see the details.') + '</p></div>');
+    setGenResult('<div class="card"><p style="margin:0;white-space:pre-wrap;font-size:0.9rem">' + esc(prose.slice(0, 700) || 'The model replied, open "View the generated files" to see the details.') + '</p></div>');
   }
 }
 
@@ -902,13 +902,13 @@ function collectFiles() {
 function buildGeneratedBundle() {
   const files = collectFiles();
   const manifestSrc = files['manifest.json'];
-  if (!manifestSrc) throw new Error('No manifest.json block in the conversation yet — ask the model to deliver the template files.');
+  if (!manifestSrc) throw new Error('No manifest.json block in the conversation yet, ask the model to deliver the template files.');
   let manifest;
-  try { manifest = JSON.parse(manifestSrc); } catch { throw new Error('The manifest.json block is not valid JSON — ask the model to re-send it.'); }
+  try { manifest = JSON.parse(manifestSrc); } catch { throw new Error('The manifest.json block is not valid JSON, ask the model to re-send it.'); }
   const payload = Object.entries(files)
     .filter(([p]) => p !== 'manifest.json')
     .map(([path, content]) => ({ path: path.replace(/^files\//, ''), content }));
-  if (!payload.length) throw new Error('No payload files yet — the template needs its files/ content.');
+  if (!payload.length) throw new Error('No payload files yet, the template needs its files/ content.');
   return { manifest, files: payload };
 }
 
@@ -921,11 +921,11 @@ $('#importGenBtn').addEventListener('click', async () => {
       $('#importGenBtn')?.classList.remove('glow');
       setGenResult('<div class="card gen-done"><div class="done-badge" style="background:var(--good-soft);color:var(--good)">✓ Added to your templates</div>' +
         '<p style="font-size:0.9rem;color:var(--body);margin:0.6rem 0 0">"' + esc(bundle.manifest.name) + '" is ready. Head to <b>Step 2 · Sites</b> to build a client site from it.' +
-        (body.warnings?.length ? ' <span style="color:var(--muted)">(' + body.warnings.length + ' minor lint note(s) — see Templates.)</span>' : '') + '</p></div>');
+        (body.warnings?.length ? ' <span style="color:var(--muted)">(' + body.warnings.length + ' minor lint note(s), see Templates.)</span>' : '') + '</p></div>');
     } else {
       const errs = (body.errors || [body.error?.message || 'rejected']).join('\n- ');
       // Queue the fix for the model; the operator sends it with Refine.
-      $('#chatText').value = 'The import gate rejected the template with these errors — fix them and re-send only the affected files:\n- ' + errs;
+      $('#chatText').value = 'The import gate rejected the template with these errors, fix them and re-send only the affected files:\n- ' + errs;
       const rw = $('#refineWrap'); if (rw) rw.hidden = false;
       setGenResult('<div class="report err">The template needs a fix before it can be added:<br>- ' + esc(errs).replace(/\n- /g, '<br>- ') + '<br><br>Press <b>Refine</b> below (the fix request is filled in) and the AI will correct it.</div>');
     }
@@ -972,7 +972,7 @@ async function loadSiteTemplateOptions() {
 }
 
 /** Module-backed feature toggles. Catalog base: default from the Studio
- *  selection (carry-over). Your own template: default OFF — its features are
+ *  selection (carry-over). Your own template: default OFF, its features are
  *  already in the design, and modules are opt-in CMS-backed extras. */
 function renderAssembleFeatures() {
   const root = $('#assembleFeatures');
@@ -995,7 +995,7 @@ function updateAssembleNote() {
   } else {
     note.innerHTML = mods.length
       ? 'Adds real engine features to this catalog template: <b>' + mods.map(esc).join('</b>, <b>') + '</b>.'
-      : 'No add-on features selected — the base template ships as-is.';
+      : 'No add-on features selected, the base template ships as-is.';
   }
 }
 $('#assembleFeatures').addEventListener('change', (e) => {
@@ -1017,7 +1017,7 @@ async function loadSites() {
     return;
   }
   if (!body.sites.length) {
-    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No sites yet — assemble your first one above.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No sites yet, assemble your first one above.</td></tr>';
     return;
   }
   tbody.innerHTML = '';
@@ -1026,7 +1026,7 @@ async function loadSites() {
     tr.innerHTML =
       '<td style="color:var(--ink);font-weight:600">' + esc(s.siteName) + '</td>' +
       '<td><code>' + esc(s.templateId) + '</code></td>' +
-      '<td>' + esc(s.lastJobStatus || '—') + '</td>' +
+      '<td>' + esc(s.lastJobStatus || 'not built') + '</td>' +
       '<td style="color:var(--muted)">' + esc((s.updatedAt || '').slice(0, 16).replace('T', ' ')) + '</td>' +
       '<td><button class="ghost" data-site="' + esc(s.id) + '">View</button></td>';
     tbody.appendChild(tr);
@@ -1047,27 +1047,33 @@ async function openSiteDetail(siteId) {
   detailCms = Array.isArray(body.config.modules) && body.config.modules.includes('d4-cms-core');
   const jobsHtml = body.jobs.map((j) =>
     '<tr><td><code>' + esc(j.id.slice(0, 8)) + '</code></td><td>' + esc(j.kind) + '</td><td>' + esc(j.status) + '</td><td style="color:var(--muted)">' + esc((j.finishedAt || j.createdAt || '').slice(0, 19).replace('T', ' ')) + '</td></tr>').join('');
-  const cmsCard = detailCms
-    ? '<div class="card" style="margin-top:0.9rem;border-color:color-mix(in oklab, var(--accent) 45%, var(--line))">' +
-        '<h3 style="margin:0 0 0.35rem">🔐 Admin dashboard (CMS)</h3>' +
-        '<p style="font-size:0.85rem;color:var(--body);margin:0 0 0.5rem">You added the editable-content feature, so this site has a private admin at <code>/admin</code> where the owner edits the site without code.</p>' +
-        '<ul style="font-size:0.83rem;color:var(--body);margin:0;padding-left:1.1rem;display:grid;gap:0.35rem">' +
-          '<li><b>Try it in the live preview:</b> open <code>/admin</code> and sign in with the password <code>preview</code>.</li>' +
-          '<li><b>When you deploy:</b> set an <code>ADMIN_PASSWORD</code> for the real login, connect a <b>Turso</b> database so edits save, and add <code>TOTP_SECRET</code> for two-factor.</li>' +
+  // One "going live" card: what to set on the host to turn on delivery
+  // features. Everything here is OPTIONAL, the site works as-is, but this is
+  // where the operator learns they CAN wire up email + the admin.
+  const goLiveCard = built
+    ? '<div class="card" style="margin-top:0.9rem;border-color:color-mix(in oklab, var(--accent) 35%, var(--line))">' +
+        '<h3 style="margin:0 0 0.35rem">🚀 Going live: what to set on your host</h3>' +
+        '<p style="font-size:0.84rem;color:var(--body);margin:0 0 0.55rem">The site works the moment it deploys. These optional environment variables switch on delivery features; they are also listed in the site\'s <code>.env.example</code>.</p>' +
+        '<ul style="font-size:0.83rem;color:var(--body);margin:0;padding-left:1.1rem;display:grid;gap:0.4rem">' +
+          '<li><b>Contact-form email.</b> Messages are always saved to the site\'s inbox. To also email the owner on every submission, set <code>RESEND_API_KEY</code> and <code>CONTACT_TO_EMAIL</code> (a <a href="https://resend.com" target="_blank" rel="noopener">Resend</a> key is free to start). This is per-site, set by whoever owns that client\'s hosting.</li>' +
+          (detailCms
+            ? '<li><b>Admin login.</b> This site has a private admin at <code>/admin</code>. In the live preview the password is <code>preview</code>; on your host set <code>ADMIN_PASSWORD</code> for the real one, plus <code>TOTP_SECRET</code> for two-factor.</li>' +
+              '<li><b>Editable content.</b> Connect a <b>Turso</b> database (<code>TURSO_DATABASE_URL</code>, <code>TURSO_AUTH_TOKEN</code>) so admin edits save, and <code>BLOB_READ_WRITE_TOKEN</code> for image uploads.</li>'
+            : '') +
         '</ul></div>'
     : '';
   $('#siteDetail').innerHTML =
     '<h3 style="margin-top:1.2rem;color:var(--ink)">' + esc(body.config.siteName || body.id) + '</h3>' +
     (built ? '' : '<p style="font-size:0.88rem;color:var(--muted);margin:0.3rem 0 0.6rem">Not built yet. Do these in order: <b style="color:var(--ink)">1) answer the essentials · 2) add the photos · 3) Build</b>. The site ships finished, with the real copy and images.</p>') +
     '<div id="sitePreview"></div>' +
-    // 1 — the intake (answer questions → AI writes the copy)
+    // 1, the intake (answer questions → AI writes the copy)
     '<div id="siteContent" data-id="' + esc(body.id) + '"></div>' +
-    // 2 — photos, RIGHT BEFORE the build so they are never missed
+    // 2, photos, RIGHT BEFORE the build so they are never missed
     '<h3 style="margin-top:1.4rem;color:var(--ink)">' + (built ? 'Photos & logo' : 'Add the photos & logo') + '</h3>' +
-    '<p style="font-size:0.85rem;color:var(--muted);margin:0.3rem 0 0.8rem">Drop each file into the right compartment and it lands in its exact place on the site — no paths to think about.' +
+    '<p style="font-size:0.85rem;color:var(--muted);margin:0.3rem 0 0.8rem">Drop each file into the right compartment and it lands in its exact place on the site, no paths to think about.' +
       (built ? ' Photos added after a build appear when you rebuild.' : ' <b style="color:var(--ink)">Add these before you build</b> so the first preview shows the client\'s real logo and images.') + '</p>' +
     '<div id="siteAssets" data-id="' + esc(body.id) + '" class="grid2"></div>' +
-    // 3 — build + (once built) the site actions
+    // 3, build + (once built) the site actions
     '<div style="display:flex;gap:0.6rem;margin-top:1.1rem;flex-wrap:wrap;align-items:center">' +
     '<button class="primary" data-siteact="build" data-id="' + esc(body.id) + '">' + (built ? 'Rebuild site' : 'Build site') + '</button>' +
     (built ? '<button class="primary" data-siteact="live" data-id="' + esc(body.id) + '">▶ Open live preview</button>' +
@@ -1076,7 +1082,7 @@ async function openSiteDetail(siteId) {
     '</div>' +
     '<div id="livePreview" style="margin-top:0.6rem"></div>' +
     '<div id="siteActOut" style="margin-top:0.6rem"></div>' +
-    cmsCard +
+    goLiveCard +
     // reference material, kept out of the main flow
     '<details style="margin-top:1.2rem"><summary style="cursor:pointer;color:var(--muted);font-size:0.85rem">Build history &amp; checks</summary>' +
     (jobsHtml ? '<div class="tscroll"><table class="list"><thead><tr><th>Job</th><th>Kind</th><th>Status</th><th>When</th></tr></thead><tbody>' + jobsHtml + '</tbody></table></div>' : '<p style="font-size:0.82rem;color:var(--muted)">No builds yet.</p>') +
@@ -1089,7 +1095,7 @@ async function openSiteDetail(siteId) {
 }
 
 /* ══════════════ Content intake (DFY: facts in → AI writes the site) ══════════════ */
-const FACT_SEP = /\s+[—–-]\s+|\s*[|]\s*/; // "Name — Role" / "A | B" splitters
+const FACT_SEP = /\s+[—–-]\s+|\s*[|]\s*/; // "Name - Role" / "A | B" splitters
 
 function parseFact(kind, raw) {
   const text = raw || '';
@@ -1097,8 +1103,8 @@ function parseFact(kind, raw) {
   switch (kind) {
     case 'list': case 'topics': return lines;
     case 'people': return lines.map((l) => { const [name, role] = l.split(FACT_SEP); return { name: (name || '').trim(), role: (role || '').trim() }; });
-    case 'roles': return lines.map((l) => { const [title, ...rest] = l.split(FACT_SEP); return { title: (title || '').trim(), summary: rest.join(' — ').trim() }; });
-    case 'products': return lines.map((l) => { const [name, price, ...rest] = l.split(FACT_SEP); return { name: (name || '').trim(), price: (price || '').trim(), note: rest.join(' — ').trim() }; });
+    case 'roles': return lines.map((l) => { const [title, ...rest] = l.split(FACT_SEP); return { title: (title || '').trim(), summary: rest.join(' - ').trim() }; });
+    case 'products': return lines.map((l) => { const [name, price, ...rest] = l.split(FACT_SEP); return { name: (name || '').trim(), price: (price || '').trim(), note: rest.join(' - ').trim() }; });
     default: return text.trim();
   }
 }
@@ -1107,9 +1113,9 @@ function serializeFact(kind, val) {
   if (val == null) return '';
   switch (kind) {
     case 'list': case 'topics': return Array.isArray(val) ? val.join('\n') : '';
-    case 'people': return Array.isArray(val) ? val.map((p) => [p.name, p.role].filter(Boolean).join(' — ')).join('\n') : '';
-    case 'roles': return Array.isArray(val) ? val.map((r) => [r.title, r.summary].filter(Boolean).join(' — ')).join('\n') : '';
-    case 'products': return Array.isArray(val) ? val.map((p) => [p.name, p.price, p.note].filter(Boolean).join(' — ')).join('\n') : '';
+    case 'people': return Array.isArray(val) ? val.map((p) => [p.name, p.role].filter(Boolean).join(' - ')).join('\n') : '';
+    case 'roles': return Array.isArray(val) ? val.map((r) => [r.title, r.summary].filter(Boolean).join(' - ')).join('\n') : '';
+    case 'products': return Array.isArray(val) ? val.map((p) => [p.name, p.price, p.note].filter(Boolean).join(' - ')).join('\n') : '';
     default: return String(val);
   }
 }
@@ -1122,11 +1128,11 @@ function factInput(f, val) {
   }
   const v = esc(serializeFact(f.kind, val));
   const multiline = ['facts', 'list', 'topics', 'people', 'roles', 'products'].includes(f.kind);
-  const ph = f.kind === 'people' ? 'One per line:  Name — Role'
-    : f.kind === 'roles' ? 'One per line:  Title — one-line summary'
-    : f.kind === 'products' ? 'One per line:  Name — Price — note'
+  const ph = f.kind === 'people' ? 'One per line:  Name - Role'
+    : f.kind === 'roles' ? 'One per line:  Title - one-line summary'
+    : f.kind === 'products' ? 'One per line:  Name - Price - note'
     : (f.kind === 'list' || f.kind === 'topics') ? 'One per line'
-    : f.kind === 'facts' ? 'Notes are fine — the AI turns them into polished copy' : '';
+    : f.kind === 'facts' ? 'Notes are fine, the AI turns them into polished copy' : '';
   const control = multiline
     ? '<textarea data-fact="' + f.id + '" data-kind="' + f.kind + '" rows="' + (f.kind === 'facts' ? 4 : 3) + '" placeholder="' + esc(ph) + '" style="width:100%;font-size:0.85rem">' + v + '</textarea>'
     : '<input data-fact="' + f.id + '" data-kind="' + f.kind + '" type="' + (f.kind === 'email' ? 'email' : f.kind === 'tel' ? 'tel' : 'text') + '" value="' + v + '" style="width:100%">';
@@ -1134,7 +1140,7 @@ function factInput(f, val) {
 }
 
 function readyBadge(r) {
-  if (r.ready) return '<div class="report ok">✓ All essentials answered — this will build a finished, shippable site.</div>';
+  if (r.ready) return '<div class="report ok">✓ All essentials answered, this will build a finished, shippable site.</div>';
   return '<div class="report" style="background:var(--warn-soft);color:var(--warn)">' + r.answeredCount + ' of ' + r.requiredCount +
     ' essentials answered. Still needed: <b>' + r.missing.map((m) => esc(m.label)).join(', ') + '</b></div>';
 }
@@ -1147,7 +1153,7 @@ async function loadSiteContent(siteId) {
   const byGroup = {};
   for (const f of body.fields) (byGroup[f.group] = byGroup[f.group] || []).push(f);
   let html = '<h3 style="margin-top:1.4rem;color:var(--ink)">Tell us about the business</h3>' +
-    '<p style="font-size:0.85rem;color:var(--muted);margin:0.3rem 0 0.7rem">Answer the essentials (<span style="color:var(--bad)">*</span>) and the AI writes finished copy for every page — no placeholders, nothing left blank. Optional fields add more when you have them.</p>' +
+    '<p style="font-size:0.85rem;color:var(--muted);margin:0.3rem 0 0.7rem">Answer the essentials (<span style="color:var(--bad)">*</span>) and the AI writes finished copy for every page, no placeholders, nothing left blank. Optional fields add more when you have them.</p>' +
     '<div id="contentReady">' + readyBadge(body.readiness) + '</div>';
   for (const [g, fields] of Object.entries(byGroup)) {
     html += '<div class="card" style="margin-top:0.6rem"><h3 style="margin-top:0">' + esc(body.groups[g] || g) + '</h3>' +
@@ -1190,10 +1196,10 @@ function renderCopyPreview(copy, source) {
     '<span style="font-size:0.72rem;color:var(--muted)">' + (source === 'ai' ? 'written by AI' : source === 'saved' ? 'saved draft' : 'auto-composed') + '</span></div>';
   html += sec('Tagline', P(copy.tagline));
   html += sec('Description', P(copy.description));
-  if (copy.services?.length) html += sec('Services', '<ul style="margin:0.2rem 0;padding-left:1.1rem;font-size:0.84rem">' + copy.services.map((s) => '<li><b>' + esc(s.name) + '</b>' + (s.description ? ' — ' + esc(s.description) : '') + '</li>').join('') + '</ul>');
+  if (copy.services?.length) html += sec('Services', '<ul style="margin:0.2rem 0;padding-left:1.1rem;font-size:0.84rem">' + copy.services.map((s) => '<li><b>' + esc(s.name) + '</b>' + (s.description ? ', ' + esc(s.description) : '') + '</li>').join('') + '</ul>');
   if (copy.about?.paragraphs?.length) html += sec('About', copy.about.paragraphs.map(P).join(''));
   if (copy.faq?.length) html += sec('FAQ', copy.faq.map((f) => '<p style="margin:0.3rem 0;font-size:0.84rem"><b>' + esc(f.question) + '</b><br>' + esc(f.answer) + '</p>').join(''));
-  if (copy.careers?.roles?.length) html += sec('Roles', '<ul style="margin:0.2rem 0;padding-left:1.1rem;font-size:0.84rem">' + copy.careers.roles.map((r) => '<li><b>' + esc(r.title) + '</b>' + (r.summary ? ' — ' + esc(r.summary) : '') + '</li>').join('') + '</ul>');
+  if (copy.careers?.roles?.length) html += sec('Roles', '<ul style="margin:0.2rem 0;padding-left:1.1rem;font-size:0.84rem">' + copy.careers.roles.map((r) => '<li><b>' + esc(r.title) + '</b>' + (r.summary ? ', ' + esc(r.summary) : '') + '</li>').join('') + '</ul>');
   html += '<p style="font-size:0.78rem;color:var(--muted);margin-top:0.5rem">This lands on the site when you build. Change any answer above and write it again to update.</p></div>';
   box.innerHTML = html;
 }
@@ -1211,6 +1217,7 @@ async function buildSite(siteId) {
       if (!go) { $('#siteAssets')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
     }
   }
+  out.innerHTML = '<div class="report ok" style="display:flex;align-items:center;gap:0.5rem"><span class="spin"></span><span>Preparing the site (writing any missing copy)…</span></div>';
   const { status, body } = await api('/v1/sites/' + siteId + '/assemble', { method: 'POST', body: {} });
   if (status !== 202) {
     out.innerHTML = '<div class="report err">' + esc(body.error?.message || 'Build failed to start (' + status + ').') + '</div>';
@@ -1222,7 +1229,7 @@ async function buildSite(siteId) {
   for (;;) {
     await new Promise((r) => setTimeout(r, 5000));
     let j;
-    // The heavy build steps briefly block the server — ride through
+    // The heavy build steps briefly block the server, ride through
     // dropped polls instead of silently stopping.
     try { j = await api('/v1/jobs/' + body.jobId); } catch { continue; }
     if (j.status !== 200) continue;
@@ -1231,7 +1238,7 @@ async function buildSite(siteId) {
       loadSites();
       setTimeout(() => {
         $('#siteActOut').innerHTML = j.body.status === 'done'
-          ? '<div class="report ok">✓ Built and checked — the preview above is the real site' + (j.body.result?.preview ? ', photos included' : '') + '.</div>'
+          ? '<div class="report ok">✓ Built and checked, the preview above is the real site' + (j.body.result?.preview ? ', photos included' : '') + '.</div>'
           : '<div class="report err">Build failed: ' + esc(j.body.logs?.at(-1)?.line || 'see jobs') + '</div>';
       }, 400);
       return;
@@ -1262,8 +1269,8 @@ async function openLivePreview(siteId, reopenTab) {
     (detailCms ? '<a class="ghost btnlink" href="' + esc(url) + '/admin" target="_blank" rel="noopener">Open admin (/admin)</a>' : '') +
     '<button class="ghost danger" data-siteact="live-stop" data-id="' + esc(siteId) + '">Stop preview</button>' +
     '</div>' +
-    '<p style="font-size:0.8rem;color:var(--muted);margin:0 0 0.5rem">Click through the whole site — every page, with the client\'s real photos. It runs locally and stops on its own after 30 minutes idle.' +
-      (detailCms ? ' The admin dashboard is at <code>/admin</code> — sign in with password <code>preview</code>.' : '') + '</p>' +
+    '<p style="font-size:0.8rem;color:var(--muted);margin:0 0 0.5rem">Click through the whole site, every page, with the client\'s real photos. It runs locally and stops on its own after 30 minutes idle.' +
+      (detailCms ? ' The admin dashboard is at <code>/admin</code>, sign in with password <code>preview</code>.' : '') + '</p>' +
     '<iframe src="' + esc(url) + '" title="Live preview" style="width:100%;height:70vh;border:1px solid var(--line);border-radius:10px;background:#fff"></iframe>' +
     '</div>';
 }
@@ -1281,8 +1288,8 @@ async function showDeployForm(siteId) {
   const st = body?.site; const def = body?.accountDefault;
   out.innerHTML =
     '<div class="card" style="margin-top:0.6rem"><h3 style="margin:0 0 0.5rem">Deploy this site to GitHub</h3>' +
-    '<p style="font-size:0.8rem;color:var(--muted);margin:0 0 0.8rem">Every site can go to a different account — perfect for per-client hosting. ' +
-    (st?.connected ? 'This site has its own saved target (token ····' + esc(st.last4 || '') + ').' : def ? 'Blank fields fall back to your Hosting default (' + esc(def.owner || 'no owner') + ', ····' + esc(def.last4) + ').' : 'No default saved — fill these in (or set a default once in Hosting).') + '</p>' +
+    '<p style="font-size:0.8rem;color:var(--muted);margin:0 0 0.8rem">Every site can go to a different account, perfect for per-client hosting. ' +
+    (st?.connected ? 'This site has its own saved target (token ····' + esc(st.last4 || '') + ').' : def ? 'Blank fields fall back to your Hosting default (' + esc(def.owner || 'no owner') + ', ····' + esc(def.last4) + ').' : 'No default saved, fill these in (or set a default once in Hosting).') + '</p>' +
     '<div class="grid2">' +
     '<div class="field"><label>GitHub owner (user or org)</label><input id="depOwner" class="mono" value="' + esc(st?.owner || def?.owner || '') + '" spellcheck="false"></div>' +
     '<div class="field"><label>Repository name</label><input id="depRepo" class="mono" value="' + esc(st?.repo || '') + '" placeholder="defaults to the site name" spellcheck="false"></div>' +
@@ -1299,7 +1306,7 @@ async function deployNow(siteId) {
   const owner = $('#depOwner')?.value.trim(); if (owner) payload.owner = owner;
   const repo = $('#depRepo')?.value.trim(); if (repo) payload.repo = repo;
   const token = $('#depToken')?.value.trim(); if (token) payload.token = token;
-  out.innerHTML = '<div class="report ok">Deploying — pushing the site to GitHub…</div>';
+  out.innerHTML = '<div class="report ok">Deploying, pushing the site to GitHub…</div>';
   const { status, body } = await api('/v1/sites/' + siteId + '/deploy', { method: 'POST', body: payload });
   out.innerHTML = status === 200
     ? '<div class="report ok">✓ Deployed to <a href="' + esc(body.url) + '" target="_blank" rel="noopener">' + esc(body.repo) + '</a> (' + body.files + ' files' + (body.createdRepo ? ', repo created' : '') + '). ' + esc(body.note) + '</div>'
@@ -1316,7 +1323,7 @@ async function loadSitePreviewAndQa(site) {
       $('#sitePreview').innerHTML =
         '<div style="margin:0.6rem 0 0.9rem"><img src="' + url + '" alt="Site preview" style="max-width:100%;border:1px solid var(--line);border-radius:10px"><div style="font-size:0.75rem;color:var(--muted);margin-top:0.3rem">Home-page snapshot from the last build. Press <b style="color:var(--ink)">Open live preview</b> to click through the whole site.</div></div>';
     }
-  } catch { /* no preview — fine */ }
+  } catch { /* no preview, fine */ }
   // QA report of the most recent finished job.
   const last = [...(site.jobs || [])].reverse().find((j) => j.status === 'done' || j.status === 'failed');
   if (!last) return;
@@ -1324,9 +1331,9 @@ async function loadSitePreviewAndQa(site) {
   const qa = status === 200 ? body.result?.qa : null;
   if (!qa?.checks?.length) return;
   $('#siteQa').innerHTML =
-    '<details style="margin-top:0.8rem"' + (qa.verdict !== 'passed' ? ' open' : '') + '><summary style="cursor:pointer;font-size:0.85rem;color:' + (qa.verdict === 'passed' ? 'var(--good)' : 'var(--warn)') + '">QA (' + esc(qa.mode) + '): ' + esc(qa.verdict) + ' — ' + qa.checks.filter((c) => c.status === 'pass').length + '/' + qa.checks.length + ' checks</summary>' +
+    '<details style="margin-top:0.8rem"' + (qa.verdict !== 'passed' ? ' open' : '') + '><summary style="cursor:pointer;font-size:0.85rem;color:' + (qa.verdict === 'passed' ? 'var(--good)' : 'var(--warn)') + '">QA (' + esc(qa.mode) + '): ' + esc(qa.verdict) + ', ' + qa.checks.filter((c) => c.status === 'pass').length + '/' + qa.checks.length + ' checks</summary>' +
     '<ul style="list-style:none;margin:0.5rem 0 0;padding:0;display:grid;gap:0.25rem;font-size:0.82rem">' +
-    qa.checks.map((c) => '<li>' + (c.status === 'pass' ? '<span style="color:var(--good)">✓</span> ' : '<span style="color:var(--bad)">✗</span> ') + esc(c.name) + (c.detail ? ' <span style="color:var(--muted)">— ' + esc(c.detail) + '</span>' : '') + '</li>').join('') +
+    qa.checks.map((c) => '<li>' + (c.status === 'pass' ? '<span style="color:var(--good)">✓</span> ' : '<span style="color:var(--bad)">✗</span> ') + esc(c.name) + (c.detail ? ' <span style="color:var(--muted)">· ' + esc(c.detail) + '</span>' : '') + '</li>').join('') +
     '</ul></details>';
 }
 
@@ -1402,7 +1409,7 @@ $('#siteDetail').addEventListener('click', async (e) => {
   if (btn.dataset.siteact === 'deploy') { showDeployForm(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'deploy-go') { deployNow(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'export') {
-    // Real export streams a .tar.gz — fetch with auth and trigger a download.
+    // Real export streams a .tar.gz, fetch with auth and trigger a download.
     const res = await fetch('/v1/sites/' + btn.dataset.id + '/export', { headers: { Authorization: 'Bearer ' + getApiKey() } });
     if (res.ok) {
       const blob = await res.blob();
@@ -1411,7 +1418,7 @@ $('#siteDetail').addEventListener('click', async (e) => {
       a.download = (res.headers.get('content-disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'site.tar.gz';
       a.click();
       URL.revokeObjectURL(a.href);
-      $('#siteActOut').innerHTML = '<div class="report ok">Downloaded the assembled site — a standalone Next.js project (the engine is never included).</div>';
+      $('#siteActOut').innerHTML = '<div class="report ok">Downloaded the assembled site, a standalone Next.js project (the engine is never included).</div>';
     } else {
       const body = await res.json().catch(() => ({}));
       $('#siteActOut').innerHTML = '<div class="report" style="background:var(--warn-soft);color:var(--warn)">' + esc(body.error?.message || 'Export unavailable.') + '</div>';
@@ -1441,7 +1448,7 @@ $('#assembleBtn').addEventListener('click', async () => {
     out.innerHTML = '<div class="report err">' + esc(body.error?.message || 'Could not create the site (' + status + ').') + '</div>';
     return;
   }
-  out.innerHTML = '<div class="report ok">✓ Created — now add the client\'s photos below, then press <b>Build site</b>.</div>';
+  out.innerHTML = '<div class="report ok">✓ Created, now add the client\'s photos below, then press <b>Build site</b>.</div>';
   $('#siteNameInput').value = ''; $('#siteTaglineInput').value = '';
   loadSites();
   openSiteDetail(body.siteId);
@@ -1453,7 +1460,7 @@ async function loadConnections() {
   if (!getApiKey()) { $('#connNote').innerHTML = '<div class="report err">Save an API key first (top right).</div>'; return; }
   const { status, body } = await api('/v1/connections');
   if (status !== 200) {
-    $('#connNote').innerHTML = '<div class="report err">' + (status === 403 ? 'This key lacks the deploy scope — mint one with --scopes mappings,templates,sites,deploy.' : 'Could not load connections (' + status + ').') + '</div>';
+    $('#connNote').innerHTML = '<div class="report err">' + (status === 403 ? 'This key lacks the deploy scope, mint one with --scopes mappings,templates,sites,deploy.' : 'Could not load connections (' + status + ').') + '</div>';
     return;
   }
   $('#connNote').innerHTML = '';
@@ -1497,7 +1504,7 @@ const REF = [
     { m: 'GET', p: '/v1/health', d: 'Service status. No key needed.', curl: `curl {BASE}/v1/health` },
     { m: 'GET', p: '/v1', d: 'Lists the whole surface. No key needed.', curl: `curl {BASE}/v1` },
   ]},
-  { group: 'Mappings — your questionnaire, declaratively', items: [
+  { group: 'Mappings, your questionnaire, declaratively', items: [
     { m: 'POST', p: '/v1/mappings/validate', d: 'Full-report validation of a mapping document.',
       curl: `curl -X POST {BASE}/v1/mappings/validate \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d @my-mapping.json` },
     { m: 'POST', p: '/v1/intake/parse', d: 'Run answers through a mapping (inline or stored) → proposed site config.',
@@ -1507,7 +1514,7 @@ const REF = [
     { m: 'GET', p: '/v1/mappings', d: 'List your stored mappings.', curl: `curl {BASE}/v1/mappings -H "Authorization: Bearer {KEY}"` },
     { m: 'DELETE', p: '/v1/mappings/{id}', d: 'Delete a stored mapping.', curl: `curl -X DELETE {BASE}/v1/mappings/my-intake -H "Authorization: Bearer {KEY}"` },
   ]},
-  { group: 'Templates — the shared catalog + your private imports', items: [
+  { group: 'Templates, the shared catalog + your private imports', items: [
     { m: 'GET', p: '/v1/templates', d: 'The bundled d4 catalog plus your imports.', curl: `curl {BASE}/v1/templates -H "Authorization: Bearer {KEY}"` },
     { m: 'GET', p: '/v1/templates/{name}', d: 'Full manifest (and import warnings, for yours).', curl: `curl {BASE}/v1/templates/d4-site-template -H "Authorization: Bearer {KEY}"` },
     { m: 'POST', p: '/v1/templates', d: 'Import a template bundle {manifest, files[]}. Errors reject; warnings import. Private to your account.',
@@ -1516,7 +1523,7 @@ const REF = [
       curl: `curl -X POST {BASE}/v1/templates/validate \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"manifest":{"name":"my-template","version":"1.0.0","kind":"site","description":"…","provides":{"routes":["/"],"nav":[],"adminPanels":[],"collections":[]},"copy":[{"from":"files","to":"."}]}}'` },
     { m: 'DELETE', p: '/v1/templates/{name}', d: 'Delete one of YOUR imports (the shared catalog is protected).', curl: `curl -X DELETE {BASE}/v1/templates/my-template -H "Authorization: Bearer {KEY}"` },
   ]},
-  { group: 'Sites & jobs — assemble, watch, change', items: [
+  { group: 'Sites & jobs, assemble, watch, change', items: [
     { m: 'POST', p: '/v1/sites', d: 'Assemble from explicit config, or mappingId+answers in one step. Returns an async job.',
       curl: `curl -X POST {BASE}/v1/sites \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"templateId":"d4-site-template","config":{"siteName":"Acme Fixture Works","modules":["d4-cms-core"]}}'` },
     { m: 'GET', p: '/v1/jobs/{id}', d: 'Job status + logs + the QA report.', curl: `curl {BASE}/v1/jobs/{jobId} -H "Authorization: Bearer {KEY}"` },
@@ -1525,22 +1532,22 @@ const REF = [
     { m: 'POST', p: '/v1/sites/{id}/change', d: 'Shallow config delta → re-assemble; history kept.',
       curl: `curl -X POST {BASE}/v1/sites/{siteId}/change \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"config":{"tagline":"A new line."}}'` },
     { m: 'GET', p: '/v1/sites/{id}/assets', d: 'The site’s asset compartments (standard + template-declared) and what’s in them.', curl: `curl {BASE}/v1/sites/{siteId}/assets -H "Authorization: Bearer {KEY}"` },
-    { m: 'POST', p: '/v1/sites/{id}/assets/{slot}', d: 'Upload into a compartment (logo, favicon, hero, about, gallery, team, misc, …) — slotted to its exact site path at the next assembly.',
+    { m: 'POST', p: '/v1/sites/{id}/assets/{slot}', d: 'Upload into a compartment (logo, favicon, hero, about, gallery, team, misc, …), slotted to its exact site path at the next assembly.',
       curl: `curl -X POST {BASE}/v1/sites/{siteId}/assets/logo \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"filename":"logo.svg","contentBase64":"…"}'` },
     { m: 'DELETE', p: '/v1/sites/{id}/assets/{slot}/{assetId}', d: 'Remove an uploaded asset.', curl: `curl -X DELETE {BASE}/v1/sites/{siteId}/assets/logo/{assetId} -H "Authorization: Bearer {KEY}"` },
     { m: 'POST', p: '/v1/sites/{id}/assemble', d: 'Re-assemble with the current config + latest assets.', curl: `curl -X POST {BASE}/v1/sites/{siteId}/assemble -H "Authorization: Bearer {KEY}" -d '{}'` },
     { m: 'POST', p: '/v1/sites/{id}/deploy', d: 'Deploy with your own hosting tokens. Honest 501 until the real engine lands.', curl: `curl -X POST {BASE}/v1/sites/{siteId}/deploy -H "Authorization: Bearer {KEY}" -d '{}'` },
     { m: 'GET', p: '/v1/sites/{id}/export', d: 'Export the assembled repo. Honest 501 until the real engine lands.', curl: `curl {BASE}/v1/sites/{siteId}/export -H "Authorization: Bearer {KEY}"` },
   ]},
-  { group: 'Connections — your hosting, your site', items: [
-    { m: 'GET', p: '/v1/connections', d: 'Which providers are connected (masked — tokens are never returned).', curl: `curl {BASE}/v1/connections -H "Authorization: Bearer {KEY}"` },
+  { group: 'Connections, your hosting, your site', items: [
+    { m: 'GET', p: '/v1/connections', d: 'Which providers are connected (masked, tokens are never returned).', curl: `curl {BASE}/v1/connections -H "Authorization: Bearer {KEY}"` },
     { m: 'PUT', p: '/v1/connections/{provider}', d: 'Save your own vercel | turso | github token (encrypted at rest; deploys receive only the assembled site, never the engine).',
       curl: `curl -X PUT {BASE}/v1/connections/vercel \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"token":"YOUR_VERCEL_TOKEN"}'` },
     { m: 'DELETE', p: '/v1/connections/{provider}', d: 'Disconnect a provider.', curl: `curl -X DELETE {BASE}/v1/connections/vercel -H "Authorization: Bearer {KEY}"` },
   ]},
   { group: 'Account', items: [
     { m: 'GET', p: '/v1/usage', d: 'This key’s monthly counters (failed calls are never metered).', curl: `curl {BASE}/v1/usage -H "Authorization: Bearer {KEY}"` },
-    { m: 'POST', p: '/workbench/chat', d: 'The Template Studio relay — runs on Stardrive’s own model (included; no model key from you). Send { system, messages }.',
+    { m: 'POST', p: '/workbench/chat', d: 'The Template Studio relay, runs on Stardrive’s own model (included; no model key from you). Send { system, messages }.',
       curl: `curl -X POST {BASE}/workbench/chat \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"messages":[{"role":"user","content":"hi"}]}'` },
   ]},
 ];
@@ -1579,7 +1586,7 @@ $('#testKeyBtn').addEventListener('click', async () => {
   const rows = Object.entries(body.counters || {}).sort()
     .map(([k, v]) => '<tr><td><code>' + esc(k) + '</code></td><td style="text-align:right;font-variant-numeric:tabular-nums">' + v + '</td></tr>').join('');
   out.innerHTML =
-    '<div class="report ok">✓ Key valid — <b>' + esc(body.name) + '</b> · account <code>' + esc(body.account) + '</code> · period ' + esc(body.period) + '</div>' +
+    '<div class="report ok">✓ Key valid, <b>' + esc(body.name) + '</b> · account <code>' + esc(body.account) + '</code> · period ' + esc(body.period) + '</div>' +
     '<div class="tscroll"><table class="list"><thead><tr><th>Counter</th><th style="text-align:right">This period</th></tr></thead><tbody>' +
     (rows || '<tr><td colspan="2" style="color:var(--muted)">No usage yet this period.</td></tr>') + '</tbody></table></div>';
 });
@@ -1590,7 +1597,7 @@ async function loadKeys() {
   const res = await fetch('/v1/keys');
   if (!res.ok) { tbody.innerHTML = '<tr><td colspan="5" style="color:var(--bad)">Log in to manage keys.</td></tr>'; return; }
   const { keys } = await res.json();
-  if (!keys.length) { tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No keys yet — create one above.</td></tr>'; return; }
+  if (!keys.length) { tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No keys yet, create one above.</td></tr>'; return; }
   tbody.innerHTML = '';
   for (const k of keys) {
     const tr = document.createElement('tr');
@@ -1614,7 +1621,7 @@ $('#createKeyBtn').addEventListener('click', async () => {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) { $('#newKeyOut').innerHTML = '<div class="report err">' + esc(body.error?.message || 'Failed.') + '</div>'; return; }
   $('#newKeyName').value = '';
-  $('#newKeyOut').innerHTML = '<div class="keyreveal">Key <b>' + esc(body.name) + '</b> created — copy it now, it will not be shown again.<code>' + esc(body.secret) + '</code></div>';
+  $('#newKeyOut').innerHTML = '<div class="keyreveal">Key <b>' + esc(body.name) + '</b> created, copy it now, it will not be shown again.<code>' + esc(body.secret) + '</code></div>';
   loadKeys();
 });
 
@@ -1625,7 +1632,7 @@ $('#keysTable').addEventListener('click', async (e) => {
     const res = await fetch('/v1/keys/' + btn.dataset.id + '/rotate', { method: 'POST' });
     const body = await res.json().catch(() => ({}));
     if (res.ok) {
-      $('#newKeyOut').innerHTML = '<div class="keyreveal">Rotated <b>' + esc(body.name) + '</b> — the old secret is now dead. New secret (shown once):<code>' + esc(body.secret) + '</code></div>';
+      $('#newKeyOut').innerHTML = '<div class="keyreveal">Rotated <b>' + esc(body.name) + '</b>, the old secret is now dead. New secret (shown once):<code>' + esc(body.secret) + '</code></div>';
       if (getApiKey() && confirm('Use this rotated key as the active console key too?')) {
         localStorage.setItem('sd.apiKey', body.secret); $('#apiKeyInput').value = body.secret; renderMaskedKey();
       }
@@ -1642,13 +1649,13 @@ $('#keysTable').addEventListener('click', async (e) => {
 /* ══════════════ Keys & usage (product-key test) ══════════════ */
 $('#testKeyBtn').addEventListener('click', async () => {
   const out = $('#usageOut');
-  if (!getApiKey()) { out.innerHTML = '<div class="report err">No key active — create one below or paste one up top.</div>'; return; }
+  if (!getApiKey()) { out.innerHTML = '<div class="report err">No key active, create one below or paste one up top.</div>'; return; }
   const { status, body } = await api('/v1/usage');
   if (status !== 200) { out.innerHTML = '<div class="report err">Key rejected (' + status + ').</div>'; return; }
   const rows = Object.entries(body.counters || {}).sort()
     .map(([k, v]) => '<tr><td><code>' + esc(k) + '</code></td><td style="text-align:right;font-variant-numeric:tabular-nums">' + v + '</td></tr>').join('');
   out.innerHTML =
-    '<div class="report ok">✓ Key valid — <b>' + esc(body.name) + '</b> · period ' + esc(body.period) + '</div>' +
+    '<div class="report ok">✓ Key valid, <b>' + esc(body.name) + '</b> · period ' + esc(body.period) + '</div>' +
     '<div class="tscroll"><table class="list"><thead><tr><th>Counter</th><th style="text-align:right">This period</th></tr></thead><tbody>' +
     (rows || '<tr><td colspan="2" style="color:var(--muted)">No usage yet this period.</td></tr>') + '</tbody></table></div>';
 });
@@ -1669,7 +1676,7 @@ async function loadBilling() {
     '<div class="meterlabel"><span>Template-generation tokens</span><span class="used">' + fmtTokens(q.usedTokens) + ' / ' + fmtTokens(q.includedTokens) + '</span></div>' +
     '<div class="meter' + (q.over ? ' over' : '') + '"><span style="width:' + pct + '%"></span></div>' +
     '<p style="font-size:0.78rem;color:var(--muted);margin:0.4rem 0 0">' +
-      (q.over ? 'Included tokens used up. ' + (q.overageActive ? 'Extra usage is on — you can keep generating.' : 'Turn on extra usage or upgrade to keep generating.')
+      (q.over ? 'Included tokens used up. ' + (q.overageActive ? 'Extra usage is on, you can keep generating.' : 'Turn on extra usage or upgrade to keep generating.')
               : fmtTokens(q.remainingTokens) + ' tokens left this period.') +
     (q.includedAssemblies != null ? ' · ' + q.usedAssemblies + ' / ' + q.includedAssemblies + ' assemblies' : ' · assemblies included') + '</p>';
 
@@ -1677,7 +1684,7 @@ async function loadBilling() {
   $('#overageArea').innerHTML = q.overageOffered
     ? '<label class="toggle"><input type="checkbox" id="overageToggle"' + (q.overageEnabled ? ' checked' : '') + '> Keep generating past my tokens (extra usage billed to my card at $' + q.overagePer1kUsd.toFixed(3) + '/1k)</label>' +
       '<p id="overageNote" style="font-size:0.78rem;color:var(--muted);margin:0.4rem 0 0">' + (b.checkoutConfigured ? '' : 'Saved as a preference now; activates once a card is on file.') + '</p>'
-    : '<p style="font-size:0.8rem;color:var(--muted);margin:0">This plan has no extra-usage option — upgrade for overage and more tokens.</p>';
+    : '<p style="font-size:0.8rem;color:var(--muted);margin:0">This plan has no extra-usage option, upgrade for overage and more tokens.</p>';
   const tog = $('#overageToggle');
   if (tog) tog.addEventListener('change', async () => {
     const r = await fetch('/v1/billing/overage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: tog.checked }) });
@@ -1686,7 +1693,7 @@ async function loadBilling() {
   });
 
   $('#checkoutArea').innerHTML = b.checkoutConfigured ? ''
-    : '<div class="report" style="background:var(--code-bg);color:var(--muted);margin-top:0.9rem">Checkout isn\'t live yet — founding beta is free. When Stripe is connected, the buttons below start real subscriptions and extra-usage billing.</div>';
+    : '<div class="report" style="background:var(--code-bg);color:var(--muted);margin-top:0.9rem">Checkout isn\'t live yet, founding beta is free. When Stripe is connected, the buttons below start real subscriptions and extra-usage billing.</div>';
 
   // Plan grid.
   $('#planGrid').innerHTML = b.plans.map((p) => {
@@ -1698,9 +1705,10 @@ async function loadBilling() {
       '<div class="price">' + (p.priceUsd > 0 ? '$' + p.priceUsd + '<small>/mo</small>' : '$0') + '</div>' +
       '<div class="rate">' + rate + (p.overagePer1kUsd != null ? ' · overage $' + p.overagePer1kUsd.toFixed(3) + '/1k' : '') + '</div>' +
       '<ul>' +
-        '<li>' + fmtTokens(p.includedTokens) + ' tokens (~' + p.approxGenerations + ' templates)</li>' +
-        '<li>' + (p.includedAssemblies != null ? p.includedAssemblies + ' site assemblies' : 'Unlimited assemblies') + '</li>' +
-        '<li>' + (p.overagePer1kUsd != null ? 'Extra usage available' : 'Hard cap (no surprise charges)') + '</li>' +
+        '<li>~' + fmtTokens(p.approxSites) + ' client sites/mo</li>' +
+        '<li>~' + p.approxDesigns + ' bespoke template designs</li>' +
+        '<li>' + fmtTokens(p.includedTokens) + ' tokens · unlimited builds &amp; previews</li>' +
+        '<li>' + (p.overagePer1kUsd != null ? 'Extra usage available (opt-in)' : 'Hard cap (no surprise charges)') + '</li>' +
       '</ul>' +
       '<div class="blurb">' + esc(p.blurb) + '</div>' +
       (isNow ? '<div class="isnow">Your plan</div>'

@@ -79,8 +79,9 @@ const sessionCookie = (token) =>
   `sd_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 3600}${SECURE_COOKIES ? '; Secure' : ''}`;
 const clearCookie = () =>
   `sd_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${SECURE_COOKIES ? '; Secure' : ''}`;
-// Two static roots: the public marketing site at /, the licensee console at /workbench/.
-const site = createStaticServer(path.join(HERE, '..', '..', 'app', 'site'));
+// The API server hosts the licensee Console at /workbench/. The public
+// marketing site is a separate deployment (built with Stardrive itself), so we
+// no longer bundle a marketing "face" here.
 const workbench = createStaticServer(path.join(HERE, '..', '..', 'app', 'workbench'));
 
 /** Bundled first (shared, not overridable), then the CALLER's own imports. */
@@ -627,12 +628,23 @@ const ROUTES = [
     // that has not answered its required content cannot build (pass force:true
     // to bypass for headless/programmatic callers).
     method: 'POST', pattern: '/v1/sites/:id/assemble', scope: 'sites', meter: 'sites.assemble',
-    handler: ({ params, body, key }) => {
+    handler: async ({ params, body, key }) => {
       const site = loadSite(params.id, key.account);
       const ready = siteReadiness(site);
       if (!ready.ready && body?.force !== true) {
         throw httpError(422, 'content_incomplete',
           `This site is not ready to ship — answer the required questions first (missing: ${ready.missing.map((m) => m.label).join(', ')}). The build is deliberately gated so nothing goes out half-finished.`);
+      }
+      // Auto-write the copy from the answers if the operator skipped the
+      // preview step, so a build is never thin just because they didn't press
+      // "Write the copy". Same quota gate as the Studio.
+      if (ready.ready && !site.copy) {
+        const account = accounts.getAccount(key.account) || { id: key.account, plan: 'beta' };
+        billing.checkStudioQuota(account, billing.usageSummary(account, listKeys, auth.usageFor, store));
+        const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
+        const result = await generateCopy({ siteName: site.config.siteName, facts: site.content || {}, modules });
+        site.copy = result.pack;
+        if (result.tokens) { try { auth.meter(key.id, 'studio.tokens', result.tokens); } catch { /* best-effort */ } }
       }
       const job = jobs.enqueue('assemble', site.id, key.account);
       site.jobs.push(job.id);
@@ -848,19 +860,17 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const match = matchRoute(ROUTES, req.method, url.pathname);
   if (!match) {
-    // Everything that isn't an API route is static (no auth — the pages are
-    // public; every API call the console makes needs a key). The marketing
-    // site owns /, the licensee console owns /workbench/.
-    if (req.method === 'GET' && url.pathname === '/workbench') {
+    // Non-API requests: the Console lives at /workbench/. The marketing site is
+    // hosted separately, so the root and anything else redirects into it.
+    if (url.pathname.startsWith('/workbench/')) {
+      if (workbench(req, res, url.pathname.slice('/workbench'.length))) return;
+      return fail(res, 404, 'not_found', `No ${req.method} ${url.pathname}.`);
+    }
+    if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/workbench')) {
       res.writeHead(302, { Location: '/workbench/' });
       return res.end();
     }
-    if (url.pathname.startsWith('/workbench/')) {
-      if (workbench(req, res, url.pathname.slice('/workbench'.length))) return;
-    } else if (site(req, res, url.pathname)) {
-      return;
-    }
-    return fail(res, 404, 'not_found', `No ${req.method} ${url.pathname}. GET /v1 lists the API surface; the site lives at /, the Workbench at /workbench/.`);
+    return fail(res, 404, 'not_found', `No ${req.method} ${url.pathname}. GET /v1 lists the API surface; the Console is at /workbench/.`);
   }
 
   const { route, params } = match;
