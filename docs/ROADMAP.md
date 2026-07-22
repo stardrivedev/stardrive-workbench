@@ -52,10 +52,29 @@ hermetic offline builds):
   Next.js project with the per-client name baked in.
 
 **Remaining for M2:**
-- Deploy with licensee Vercel/Turso/GitHub tokens (export already ships the repo).
+- ~~Deploy with licensee Vercel/Turso/GitHub tokens~~ — **SHIPPED 2026-07-22**:
+  one-click publish to Vercel (upload + deploy via the Vercel API, a
+  connected database auto-wired in as project env vars, no manual copying),
+  push to GitHub (any owner/repo, connect it to any host after), and a
+  vendor-neutral database connection (any libSQL-compatible endpoint, Turso
+  recommended but not required, self-hosted/no-auth endpoints supported).
+- **Vendor-neutral hosting (Ridhi, 2026-07-22): one-click publish is
+  currently Vercel-only.** She wants this NOT locked to Vercel: an agency
+  should be able to deploy just about anywhere, ideally everywhere, not only
+  Vercel-or-GitHub-then-connect-elsewhere. Scope: additional one-click deploy
+  targets (Netlify, Cloudflare Pages, Railway, Render are the obvious next
+  candidates) behind the same per-site/per-account connection pattern already
+  built for Vercel/GitHub/database, so an agency picks its host rather than
+  being steered to one. GitHub push already reaches "any host" in two steps
+  (push, then connect); this item is about collapsing that to one click for
+  more than just Vercel. See `docs/DIFFERENTIATION.md` for why this matters:
+  it's a named, honest gap versus our own "vendor-neutral" positioning.
 - Full browser QA tier (headless build + axe/Playwright) behind an opt-in flag.
 - Webhooks (`job.completed`, `job.failed`, `usage.threshold`, Stripe).
 - Turso-backed store swap; container packaging; CORS for the Workbench.
+- Vendor-neutral image storage for the CMS: uploads currently use Vercel
+  Blob specifically, so a CMS site hosted elsewhere has a broken upload
+  feature until this gets the same treatment as the database did.
 
 ## M3 — Sellable 1.0 (~6–12 sessions + owner tasks)
 - ~~The Workbench~~ — **v1 SHIPPED 2026-07-17**, served by the API itself at
