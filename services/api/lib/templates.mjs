@@ -16,9 +16,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateManifest, validateBundle, autofixTemplateFiles, repairTemplateSource } from '../../../packages/template-kit/index.mjs';
+import { validateManifest, validateBundle, autofixTemplateFiles, autofixManifest, repairTemplateSource } from '../../../packages/template-kit/index.mjs';
 
-export { validateManifest, validateBundle, autofixTemplateFiles, repairTemplateSource };
+export { validateManifest, validateBundle, autofixTemplateFiles, autofixManifest, repairTemplateSource };
 
 const DATA = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
 

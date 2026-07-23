@@ -9,6 +9,7 @@ import {
   validateBundle,
   lintTemplateFiles,
   autofixTemplateFiles,
+  autofixManifest,
   isSafeBundlePath,
   REQUIRED_SITE_FILES,
 } from '../index.mjs';
@@ -54,6 +55,44 @@ check('every problem reported', () => {
   const v = validateManifest({ name: 'Bad Name', version: 'v1', kind: 'zap', surprise: true });
   assert.strictEqual(v.ok, false);
   assert.strictEqual(v.errors.length >= 6, true);
+});
+
+console.log('manifest autofix:');
+check('autofixManifest normalizes a malformed generated manifest to pass validation', () => {
+  const broken = {
+    name: 'Signal Forge', version: 'v1', kind: 'website', description: 42,
+    surprise: true, // unknown top-level key
+    provides: {
+      routes: ['/', '/about', 5], // non-string filtered
+      nav: [{ label: 'About', href: '/about' }, { label: 'NoHref' }], // second dropped
+      adminPanels: [{ id: 'x', label: 'X', importPath: './x' }, { id: 'bad' }, 'nope'], // last two dropped
+      collections: [], mystery: 1, // unknown provides key dropped
+    },
+    copy: [{ from: 'files', to: '.', extra: 1 }], // bad shape -> reset
+    keywords: 'not-an-array', // dropped
+    env: [{ name: 'A', required: true, description: 'ok' }, { name: 'B' }], // second dropped
+  };
+  const { manifest, fixes } = autofixManifest(broken);
+  assert.ok(fixes.length > 0);
+  // The normalized manifest must now pass the real validator.
+  assert.deepStrictEqual(validateManifest(manifest).errors, [], 'normalized manifest is valid');
+  assert.strictEqual(manifest.name, 'signal-forge');
+  assert.strictEqual(manifest.version, '1.0.0');
+  assert.strictEqual(manifest.kind, 'site');
+  assert.strictEqual(manifest.provides.adminPanels.length, 1);
+  assert.strictEqual(manifest.provides.nav.length, 1);
+  assert.strictEqual('surprise' in manifest, false);
+  assert.strictEqual('mystery' in manifest.provides, false);
+  assert.deepStrictEqual(manifest.copy, [{ from: 'files', to: '.' }]);
+  assert.strictEqual('keywords' in manifest, false);
+  assert.strictEqual(manifest.env.length, 1);
+});
+check('autofixManifest leaves a valid manifest unchanged (no needless fixes)', () => {
+  const good = { name: 'ok-template', version: '1.0.0', kind: 'site', description: 'x',
+    provides: { routes: ['/'], nav: [], adminPanels: [], collections: [] }, copy: [{ from: 'files', to: '.' }] };
+  const { manifest, fixes } = autofixManifest(good);
+  assert.deepStrictEqual(fixes, []);
+  assert.deepStrictEqual(validateManifest(manifest).errors, []);
 });
 
 console.log('paths:');

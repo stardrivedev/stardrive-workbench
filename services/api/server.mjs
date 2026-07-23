@@ -19,7 +19,7 @@ import { createAuth, SCOPES } from './lib/auth.mjs';
 import { mintKey, listKeys, rotateKey, revokeKey } from './lib/keys.mjs';
 import { createAccounts } from './lib/accounts.mjs';
 import { createBilling } from './lib/billing.mjs';
-import { loadCatalog, createImportedStore, validateManifest, validateBundle, autofixTemplateFiles, summarize } from './lib/templates.mjs';
+import { loadCatalog, createImportedStore, validateManifest, validateBundle, autofixTemplateFiles, autofixManifest, summarize } from './lib/templates.mjs';
 import { createJobRunner } from './lib/jobs.mjs';
 import { relayChat, studioConfig, copyModel } from './lib/chat-proxy.mjs';
 import { createStaticServer } from './lib/static.mjs';
@@ -381,15 +381,17 @@ const ROUTES = [
     // warnings import and are kept on the record.
     method: 'POST', pattern: '/v1/templates', scope: 'templates', meter: 'templates.import', bodyLimit: 40_000_000,
     handler: ({ body, key }) => {
-      // Auto-repair the one deterministic hard error (reduced-opacity text
-      // tokens) so a good generation isn't bounced for a mechanical fix; the
-      // repair only raises contrast. Everything else still rejects honestly.
+      // Auto-repair the deterministic, mechanical mistakes an LLM generator
+      // makes so a good generation isn't bounced: normalize the manifest
+      // metadata, and repair the source files (contrast tokens, client/server
+      // component boundaries). Genuinely broken bundles still reject honestly.
       let bundle = body;
       let autofixes = [];
-      if (body && Array.isArray(body.files)) {
-        const repaired = autofixTemplateFiles(body.files);
-        bundle = { ...body, files: repaired.files };
-        autofixes = repaired.fixes;
+      if (body && typeof body === 'object') {
+        const mf = autofixManifest(body.manifest);
+        const repaired = Array.isArray(body.files) ? autofixTemplateFiles(body.files) : { files: body.files, fixes: [] };
+        bundle = { ...body, manifest: mf.manifest, files: repaired.files };
+        autofixes = [...mf.fixes.map((f) => `manifest: ${f}`), ...repaired.fixes];
       }
       const v = validateBundle(bundle);
       if (!v.ok) {

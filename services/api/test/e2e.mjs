@@ -594,11 +594,15 @@ await check('template-declared assetSlots surface as extra compartments', async 
   const extra = slots.body.slots.find((s) => s.id === 'menu-pages');
   assert.strictEqual(extra.declaredBy, 'aurora-slotted');
   assert.strictEqual(extra.target, 'public/assets/menu-pages/');
-  // And the reserved-id guard holds at import time.
+  // A reserved-id assetSlot is now NORMALIZED AWAY at import (the standard slot
+  // already exists, so it is harmless to drop) with a warning, rather than
+  // hard-rejected — part of making a generated template never fail on a
+  // mechanical metadata mistake.
   const badSlots = { ...auroraBundle, manifest: { ...auroraBundle.manifest, name: 'aurora-bad-slots', assetSlots: [{ id: 'logo', label: 'Logo' }] } };
-  const rejected = await call('POST', '/v1/templates', { key: fullKey, body: badSlots });
-  assert.strictEqual(rejected.status, 422);
-  assert.strictEqual(rejected.body.errors.some((e) => e.includes('standard compartment')), true);
+  const normalized = await call('POST', '/v1/templates', { key: fullKey, body: badSlots });
+  assert.strictEqual(normalized.status, 201);
+  assert.strictEqual((normalized.body.warnings || []).some((w) => /assetSlots/.test(w)), true);
+  await call('DELETE', '/v1/templates/aurora-bad-slots', { key: fullKey });
   await call('DELETE', '/v1/templates/aurora-slotted', { key: fullKey });
 });
 await check('GET /v1/sites lists only the caller\'s sites, newest first', async () => {

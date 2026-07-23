@@ -331,6 +331,79 @@ export function repairTemplateSource(text, { path = '' } = {}) {
 }
 
 /**
+ * Normalize a GENERATED manifest into a valid shape, so a good template is
+ * never rejected for a mechanical metadata mistake (the manifest is boilerplate
+ * the model fills in; the template's real value is its files). Required fields
+ * get safe defaults; malformed OPTIONAL fields are dropped; provides sub-lists
+ * keep only their valid entries (a Studio template's admin comes from the CMS
+ * module, so a stray/malformed adminPanel is safe to drop). Returns
+ * { manifest, fixes }. An entirely non-object manifest is returned untouched
+ * for the validator to report.
+ */
+export function autofixManifest(manifest) {
+  const fixes = [];
+  if (manifest == null || typeof manifest !== 'object' || Array.isArray(manifest)) return { manifest, fixes };
+  const m = { ...manifest };
+
+  for (const k of Object.keys(m)) {
+    if (!TOP_KEYS.has(k)) { delete m[k]; fixes.push(`dropped unknown manifest key "${k}"`); }
+  }
+  if (!isStr(m.name) || !/^[a-z0-9][a-z0-9-]*$/.test(m.name)) {
+    const slug = String(m.name || 'template').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    m.name = slug || 'template'; fixes.push('normalized manifest.name to a valid slug');
+  }
+  if (!isStr(m.version) || !/^\d+\.\d+\.\d+$/.test(m.version)) { m.version = '1.0.0'; fixes.push('set manifest.version to 1.0.0'); }
+  if (!KINDS.includes(m.kind)) { m.kind = 'site'; fixes.push('set manifest.kind to "site"'); }
+  if (!isStr(m.description)) { m.description = 'A website template.'; fixes.push('set a default manifest.description'); }
+  if (!Array.isArray(m.copy) || !m.copy.length ||
+      !m.copy.every((c) => c && isStr(c.from) && isStr(c.to) && Object.keys(c).every((k) => k === 'from' || k === 'to'))) {
+    m.copy = [{ from: 'files', to: '.' }]; fixes.push('reset manifest.copy to [{from:"files",to:"."}]');
+  }
+
+  // provides — the field the reported error lives in.
+  const p = (m.provides && typeof m.provides === 'object' && !Array.isArray(m.provides)) ? { ...m.provides } : {};
+  for (const k of Object.keys(p)) if (!PROVIDES_KEYS.has(k)) { delete p[k]; fixes.push(`dropped unknown provides key "${k}"`); }
+  p.routes = Array.isArray(p.routes) ? p.routes.filter(isStr) : [];
+  p.collections = Array.isArray(p.collections) ? p.collections.filter(isStr) : [];
+  if ('lib' in p) p.lib = Array.isArray(p.lib) ? p.lib.filter(isStr) : [];
+  const navBefore = Array.isArray(p.nav) ? p.nav.length : -1;
+  p.nav = (Array.isArray(p.nav) ? p.nav : []).filter((it) => it && isStr(it.label) && isStr(it.href)).map((it) => ({ label: it.label, href: it.href }));
+  if (navBefore >= 0 && navBefore !== p.nav.length) fixes.push(`normalized provides.nav (kept ${p.nav.length} of ${navBefore})`);
+  const apBefore = Array.isArray(p.adminPanels) ? p.adminPanels.length : -1;
+  p.adminPanels = (Array.isArray(p.adminPanels) ? p.adminPanels : []).filter((it) => it && isStr(it.id) && isStr(it.label) && isStr(it.importPath)).map((it) => ({ id: it.id, label: it.label, importPath: it.importPath }));
+  if (apBefore >= 0 && apBefore !== p.adminPanels.length) fixes.push(`normalized provides.adminPanels (kept ${p.adminPanels.length} of ${apBefore})`);
+  m.provides = p;
+
+  // Malformed OPTIONAL fields are simply dropped (they are all optional).
+  for (const k of ['keywords', 'optionalIntegrations']) if (k in m && !isStrArray(m[k])) { delete m[k]; fixes.push(`dropped malformed manifest.${k}`); }
+  for (const k of ['requires', 'npmDependencies', 'npmDevDependencies']) if (k in m && !isStrMap(m[k])) { delete m[k]; fixes.push(`dropped malformed manifest.${k}`); }
+  if ('clientFacingSummary' in m && !isStr(m.clientFacingSummary)) { delete m.clientFacingSummary; fixes.push('dropped malformed manifest.clientFacingSummary'); }
+  if ('env' in m) {
+    if (!Array.isArray(m.env)) { delete m.env; fixes.push('dropped malformed manifest.env'); }
+    else {
+      const before = m.env.length;
+      m.env = m.env.filter((e) => e && isStr(e.name) && typeof e.required === 'boolean' && isStr(e.description) && Object.keys(e).every((k) => ['name', 'required', 'description'].includes(k)));
+      if (m.env.length !== before) fixes.push(`normalized manifest.env (kept ${m.env.length} of ${before})`);
+    }
+  }
+  if ('postAssemble' in m && (m.postAssemble == null || typeof m.postAssemble !== 'object' || Array.isArray(m.postAssemble))) {
+    delete m.postAssemble; fixes.push('dropped malformed manifest.postAssemble');
+  }
+  if ('assetSlots' in m) {
+    if (!Array.isArray(m.assetSlots)) { delete m.assetSlots; fixes.push('dropped malformed manifest.assetSlots'); }
+    else {
+      const before = m.assetSlots.length;
+      m.assetSlots = m.assetSlots.filter((s) => s && typeof s === 'object' && !Array.isArray(s)
+        && isStr(s.id) && /^[a-z0-9][a-z0-9-]*$/.test(s.id) && !RESERVED_ASSET_SLOT_IDS.includes(s.id)
+        && Object.keys(s).every((k) => ASSET_SLOT_KEYS.includes(k)));
+      if (m.assetSlots.length !== before) fixes.push(`normalized manifest.assetSlots (kept ${m.assetSlots.length} of ${before})`);
+      if (!m.assetSlots.length) delete m.assetSlots;
+    }
+  }
+  return { manifest: m, fixes };
+}
+
+/**
  * Apply repairTemplateSource across a bundle's text files. Returns
  * { files, fixes } — callers auto-apply this at import so the stored template
  * is already correct.
