@@ -100,6 +100,21 @@ check('autofix repairs diluted TEXT tokens to full strength; a fixed bundle lint
   // The repaired files no longer trip the linter.
   assert.deepStrictEqual(lintTemplateFiles(fixed).errors, []);
 });
+check('autofix adds "use client" to a server file that uses event handlers (skips async/server-only)', () => {
+  const serverWithHandler = 'import Link from "next/link";\nexport default function Home(){ return <button onClick={() => {}} className="hidden" />; }\n';
+  const asyncServer = 'export default async function Page(){ const d = await fetch("x"); return <button onClick={() => {}} />; }\n';
+  const cssWithText = '.b{ content: "onClick={" }';
+  const { files: fixed, fixes } = autofixTemplateFiles([
+    { path: 'src/app/page.tsx', content: serverWithHandler },
+    { path: 'src/app/data/page.tsx', content: asyncServer },
+    { path: 'src/x.css', content: cssWithText },
+  ]);
+  const byPath = Object.fromEntries(fixed.map((f) => [f.path, f]));
+  assert.strictEqual(byPath['src/app/page.tsx'].content.startsWith('"use client";\n'), true, 'sync server file gets the directive');
+  assert.strictEqual(byPath['src/app/data/page.tsx'].content, asyncServer, 'async server component is left for Refine');
+  assert.strictEqual(byPath['src/x.css'].content, cssWithText, 'non-JS files never get "use client"');
+  assert.strictEqual(fixes.some((f) => /added "use client"/.test(f)), true);
+});
 check('autofix de-exports metadata from a "use client" component; server metadata is left alone', () => {
   const clientPage = '"use client";\nimport { useState } from "react";\nexport const metadata = { title: "X" };\nexport async function generateMetadata(){ return {}; }\nexport default function P(){ const [s] = useState(0); return null; }\n';
   const serverPage = 'import type { Metadata } from "next";\nexport const metadata: Metadata = { title: "Home" };\nexport default function H(){ return null; }\n';

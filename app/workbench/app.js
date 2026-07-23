@@ -30,12 +30,16 @@ files/ is a complete, standalone Next.js site that runs with
 "npm install && npm run dev" on its own:
 
 - Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS 3.
-- HARD RULE (a "use client" file that exports metadata FAILS the build):
-  any file with "use client" at the top (i.e. it uses useState/useEffect/
-  onClick/hooks) MUST NOT export "metadata" or "generateMetadata" — those are
-  server-only. Put page copy/interactivity in the client page, and set the
-  title via the metadata export in a SERVER file (the layout, or a sibling
-  server component). Never both in one file.
+- HARD RULE (these FAIL next build, and TS "ignore build errors" does NOT save
+  you): any file that uses a JSX event handler (onClick, onChange, onSubmit,
+  etc.) or a React hook (useState/useEffect) MUST have "use client" as its very
+  first line. A Server Component (no "use client") may NEVER write an event
+  handler or pass a function to a child. Do not leave stray/no-op handlers
+  (e.g. onClick={() => {}}) in a server file.
+- HARD RULE: a "use client" file MUST NOT export "metadata" or
+  "generateMetadata" (server-only). Set the page title via the metadata export
+  in a SERVER file (the layout or a sibling server component), never in the same
+  file as the interactivity.
 - tailwind.config.ts MUST set darkMode: "class" and MUST map the theme
   tokens verbatim in theme.extend.colors:
 

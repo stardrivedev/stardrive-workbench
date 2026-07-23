@@ -279,27 +279,46 @@ export function lintTemplateFiles(files) {
 const DILUTED_TW_FIX = /\btext-(muted|body|heading)\/\d+/g;
 const DILUTED_CSS_FIX = /(var\(\s*--text-[a-z-]+\s*\))\s*\/\s*[\d.]+%?/g;
 const USE_CLIENT_RE = /^\s*['"]use client['"]\s*;?/m;
+// A JSX event-handler prop (onClick={…}) forces a Client Component.
+const EVENT_HANDLER_RE = /\bon(?:Click|Change|Submit|Input|Focus|Blur|MouseEnter|MouseLeave|MouseDown|MouseUp|KeyDown|KeyUp|KeyPress|Scroll|Toggle|Drag|Drop|Wheel|TouchStart|TouchEnd)\s*=\s*\{/;
+// Signals a file cannot simply become a Client Component (a different conflict,
+// left for the Refine loop rather than risk a wrong auto-fix).
+const SERVER_ONLY_RE = /from\s+['"]server-only['"]|export\s+default\s+async\s+function/;
+const JS_PATH_RE = /\.(tsx?|jsx?|mjs)$/;
 
 /**
- * Deterministically repair the two mechanical, build-breaking mistakes an LLM
+ * Deterministically repair the mechanical, build-breaking mistakes an LLM
  * template generator reliably makes, so a good generation is never bounced for
- * a fix we can safely apply. Both only ever make the site MORE correct:
+ * a fix we can safely apply. Each only ever makes the site MORE correct:
  *   1. Text tokens at reduced opacity (text-muted/80, rgb(var(--text-…)/…)) —
  *      set to full strength (exactly what the rulebook prescribes; only raises
  *      contrast). Decorative alpha on ACCENT/BG tokens is untouched.
- *   2. A "use client" component exporting `metadata`/`generateMetadata` —
+ *   2. A file using JSX event handlers (onClick=…) that is NOT "use client" —
+ *      fails next build ("Event handlers cannot be passed to Client Component
+ *      props"). Add the directive (skipped for async/server-only files, a
+ *      different conflict).
+ *   3. A "use client" component exporting `metadata`/`generateMetadata` —
  *      disallowed by the Next.js App Router (a webpack error TypeScript's
- *      ignoreBuildErrors does NOT catch). De-exported (the client interactivity
- *      is what the page needs); the now-local const/function is harmless.
- * Returns { text, fixes } for a single source string.
+ *      ignoreBuildErrors does NOT catch). De-exported; the now-local
+ *      const/function is harmless.
+ * Steps 2→3 are ordered so a file that gains "use client" also drops any
+ * server-only metadata. Returns { text, fixes }. `opts.path` gates the
+ * JS-only repairs.
  */
-export function repairTemplateSource(text) {
+export function repairTemplateSource(text, { path = '' } = {}) {
   const fixes = [];
   let out = String(text);
+  const isJs = JS_PATH_RE.test(path);
+
   let dil = 0;
   out = out.replace(DILUTED_TW_FIX, (_m, g) => { dil += 1; return 'text-' + g; })
     .replace(DILUTED_CSS_FIX, (_m, g) => { dil += 1; return g; });
   if (dil) fixes.push(`set ${dil} reduced-opacity text token${dil > 1 ? 's' : ''} to full strength for contrast`);
+
+  if (isJs && !USE_CLIENT_RE.test(out) && EVENT_HANDLER_RE.test(out) && !SERVER_ONLY_RE.test(out)) {
+    out = '"use client";\n' + out;
+    fixes.push('added "use client" (the file uses event handlers, which require a Client Component)');
+  }
 
   if (USE_CLIENT_RE.test(out)) {
     let m = 0;
@@ -321,7 +340,7 @@ export function autofixTemplateFiles(files) {
   const out = (files || []).map((file) => {
     if (!file || typeof file.path !== 'string' || !TEXT_EXT_RE.test(file.path)) return file;
     const text = decodeFileContent(file);
-    const r = repairTemplateSource(text);
+    const r = repairTemplateSource(text, { path: file.path });
     if (!r.fixes.length || r.text === text) return file;
     for (const f of r.fixes) fixes.push(`${file.path}: ${f}`);
     const { contentBase64, ...rest } = file;

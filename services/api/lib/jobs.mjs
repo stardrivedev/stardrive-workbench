@@ -47,7 +47,7 @@ function repairAssembledDir(root) {
       if (!REPAIR_EXT_RE.test(e.name)) continue;
       let t;
       try { t = fs.readFileSync(p, 'utf-8'); } catch { continue; }
-      const r = repairTemplateSource(t);
+      const r = repairTemplateSource(t, { path: p });
       if (r.fixes.length && r.text !== t) { fs.writeFileSync(p, r.text); changed.push(path.relative(root, p).replace(/\\/g, '/')); }
     }
   };
