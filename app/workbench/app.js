@@ -192,11 +192,20 @@ files/src/app/layout.tsx  (section 6)
 files/src/config/assets.generated.ts
   export const siteAssets: Record<string, string[]> = {};
   THE CUSTOMER'S UPLOADED PHOTOS. At assembly the engine rewrites this file
-  with public URL paths keyed by compartment id: logo, hero, about,
-  gallery, team, misc (plus any assetSlots you declare). Your template
-  MUST consume it with graceful fallbacks so real uploads appear:
-  - hero: use siteAssets.hero?.[0] as the hero image when present; your
-    designed hero (gradients/shapes/type) is the fallback.
+  with public URL paths keyed by compartment id: logo, hero, hero-about,
+  hero-contact, hero-<page>, about, gallery, team, misc (plus any assetSlots
+  you declare). Your template MUST consume it with graceful fallbacks so real
+  uploads appear:
+  - HERO IS DESIGN, NEVER A PHOTO. Always design the hero as a text headline
+    with your own visual treatment (gradients / shapes / type). No hero image
+    is ever generated. When siteAssets.hero?.[0] is present, render it as the
+    HOME hero BACKGROUND behind the text (absolutely positioned, object-cover,
+    with a dark scrim so the headline stays legible); with none, the designed
+    hero shows as-is. Do NOT render the hero upload as a separate banner.
+  - Per-page hero backgrounds: for every other page, when
+    siteAssets["hero-<page>"]?.[0] is present (e.g. "hero-about",
+    "hero-contact", "hero-gallery", "hero-careers"), render it as that page's
+    header BACKGROUND behind the title; otherwise show the designed header.
   - logo: render <img src={siteAssets.logo[0]}> in the header when
     present; the styled text logo is the fallback. Size it well: around
     h-10 / h-11 with object-contain and a max-width (e.g. max-w-[200px])
@@ -1193,7 +1202,7 @@ async function openSiteDetail(siteId) {
       '<div id="siteContent" data-id="' + esc(id) + '"></div>', '') +
     // Step 2 — photos (encouraged, but skippable)
     step(2, 'Photos &amp; logo',
-      '<p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.6rem">Drop each file into the right compartment and it lands in its exact place, no paths to think about. Optional: the AI can generate a hero, and the logo can come later.</p>' +
+      '<p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.6rem">Drop each file into the right compartment and it lands in its exact place, no paths to think about. All optional: a hero image sits behind that page&rsquo;s designed hero text (leave it blank to keep the designed hero), and the logo can come later.</p>' +
       '<div id="siteAssets" data-id="' + esc(id) + '" class="grid2"></div>' +
       '<div style="margin-top:0.7rem"><button class="ghost" data-siteact="photos-skip" data-id="' + esc(id) + '">Continue without photos</button></div>',
       'Answer the essentials first, then add photos.') +
@@ -1278,9 +1287,6 @@ function serializeFact(kind, val) {
 function factInput(f, val) {
   const req = f.required ? ' <span style="color:var(--bad)">*</span>' : '';
   const help = f.help ? '<p style="font-size:0.76rem;color:var(--muted);margin:0.15rem 0 0.35rem">' + esc(f.help) + '</p>' : '';
-  if (f.kind === 'photos') {
-    return '<div class="field"><label>' + esc(f.label) + req + '</label>' + help + '<div style="font-size:0.8rem;color:var(--muted)">Add these in the <b>Gallery</b> compartment below.</div></div>';
-  }
   const v = esc(serializeFact(f.kind, val));
   const multiline = ['facts', 'list', 'topics', 'people', 'roles', 'products'].includes(f.kind);
   const ph = f.kind === 'people' ? 'One per line:  Name - Role'
@@ -1863,8 +1869,8 @@ const REF = [
     { m: 'GET', p: '/v1/sites/{id}', d: 'Site record: config, history, job summaries.', curl: `curl {BASE}/v1/sites/{siteId} -H "Authorization: Bearer {KEY}"` },
     { m: 'POST', p: '/v1/sites/{id}/change', d: 'Shallow config delta → re-assemble; history kept.',
       curl: `curl -X POST {BASE}/v1/sites/{siteId}/change \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"config":{"tagline":"A new line."}}'` },
-    { m: 'GET', p: '/v1/sites/{id}/assets', d: 'The site’s asset compartments (standard + template-declared) and what’s in them.', curl: `curl {BASE}/v1/sites/{siteId}/assets -H "Authorization: Bearer {KEY}"` },
-    { m: 'POST', p: '/v1/sites/{id}/assets/{slot}', d: 'Upload into a compartment (logo, favicon, hero, about, gallery, team, misc, …), slotted to its exact site path at the next assembly.',
+    { m: 'GET', p: '/v1/sites/{id}/assets', d: 'The site’s asset compartments (standard, per-page hero backgrounds for the pages this site has, and template-declared) and what’s in them.', curl: `curl {BASE}/v1/sites/{siteId}/assets -H "Authorization: Bearer {KEY}"` },
+    { m: 'POST', p: '/v1/sites/{id}/assets/{slot}', d: 'Upload into a compartment (logo, favicon, hero, about, gallery, team, misc; per-page hero backgrounds hero-about, hero-contact, hero-gallery, hero-careers, …), slotted to its exact site path at the next assembly.',
       curl: `curl -X POST {BASE}/v1/sites/{siteId}/assets/logo \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"filename":"logo.svg","contentBase64":"…"}'` },
     { m: 'DELETE', p: '/v1/sites/{id}/assets/{slot}/{assetId}', d: 'Remove an uploaded asset.', curl: `curl -X DELETE {BASE}/v1/sites/{siteId}/assets/logo/{assetId} -H "Authorization: Bearer {KEY}"` },
     { m: 'POST', p: '/v1/sites/{id}/assemble', d: 'Re-assemble with the current config + latest assets.', curl: `curl -X POST {BASE}/v1/sites/{siteId}/assemble -H "Authorization: Bearer {KEY}" -d '{}'` },
@@ -2043,7 +2049,7 @@ async function loadBilling() {
       '<div class="rate">' + perBuild + overBuild + '</div>' +
       '<ul>' +
         '<li>~' + p.approxBuilds + ' finished sites/mo</li>' +
-        '<li>' + (p.heroImage ? 'AI hero images on every build' : 'Designed template hero images') + '</li>' +
+        '<li>Designed hero on every page (upload your own to use as the background)</li>' +
         '<li>Unlimited builds, previews &amp; deploys</li>' +
         '<li>' + (p.overagePer1kUsd != null ? 'Extra sites available (opt-in)' : 'Hard cap (no surprise charges)') + '</li>' +
       '</ul>' +

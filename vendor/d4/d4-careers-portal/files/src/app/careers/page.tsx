@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { getJobs } from "@/modules/careers/data";
+import PageHeader from "@/components/ui/PageHeader";
 import ApplyForm from "./ApplyForm";
 
 export const metadata: Metadata = { title: "Careers" };
@@ -9,12 +10,14 @@ export default async function CareersPage() {
   const jobs = await getJobs();
 
   return (
-    <section className="mx-auto max-w-4xl px-4 py-20 sm:px-6">
-      <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Careers</h1>
-      <p className="mt-4 max-w-2xl text-muted">
-        Open positions are listed below. Apply directly and we&apos;ll get back to you.
-      </p>
-
+    <>
+      <PageHeader
+        eyebrow="Careers"
+        title="Careers"
+        subtitle="Open positions are listed below. Apply directly and we'll get back to you."
+        slot="hero-careers"
+      />
+      <section className="mx-auto max-w-4xl px-4 py-16 sm:px-6">
       {jobs.length === 0 ? (
         <div className="mt-12 rounded-md border border-heading/10 bg-surface px-6 py-8 text-sm text-muted">
           No open positions right now. Check back soon.
@@ -51,6 +54,7 @@ export default async function CareersPage() {
           ))}
         </div>
       )}
-    </section>
+      </section>
+    </>
   );
 }

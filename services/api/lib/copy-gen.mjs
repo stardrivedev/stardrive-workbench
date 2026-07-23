@@ -35,7 +35,16 @@ export function normalizePack(pack = {}, { siteName, facts = {} } = {}) {
   const p = pack || {};
   const services = strList(facts.services);
   const one = str(facts.whatYouDo);
-  const aboutParas = sentences(facts.aboutFacts);
+  const whoYouServe = str(facts.whoYouServe);
+  const differentiator = str(facts.differentiator);
+  const missionFact = str(facts.mission);
+  // Compose the About body from every fact the owner gave, not just aboutFacts,
+  // so the About page is substantial even from short answers.
+  const aboutParas = [
+    ...sentences(facts.aboutFacts),
+    whoYouServe ? `We proudly serve ${whoYouServe}.` : '',
+    differentiator ? `What sets us apart: ${differentiator}.` : '',
+  ].filter(Boolean);
 
   const home = p.home || {};
   const about = p.about || {};
@@ -43,7 +52,7 @@ export function normalizePack(pack = {}, { siteName, facts = {} } = {}) {
 
   const out = {
     tagline: str(p.tagline) || one || `${siteName}`,
-    description: str(p.description) || [one, services.length ? `We offer ${services.join(', ')}.` : ''].filter(Boolean).join(' '),
+    description: str(p.description) || [one, services.length ? `We offer ${services.join(', ')}.` : '', differentiator ? `${differentiator}.` : ''].filter(Boolean).join(' '),
     home: {
       heroHeadline: str(home.heroHeadline) || one || siteName,
       heroSubhead: str(home.heroSubhead) || (services.length ? `${services.slice(0, 3).join(' · ')}` : one),
@@ -54,7 +63,7 @@ export function normalizePack(pack = {}, { siteName, facts = {} } = {}) {
     about: {
       heading: str(about.heading) || `About ${siteName}`,
       paragraphs: (arr(about.paragraphs).map(str).filter(Boolean).length ? arr(about.paragraphs).map(str).filter(Boolean) : aboutParas),
-      mission: str(about.mission),
+      mission: str(about.mission) || missionFact,
     },
     services: (arr(p.services).length ? arr(p.services) : services.map((s) => ({ name: s, description: '' })))
       .map((s) => ({ name: str(s.name) || str(s), description: str(s.description) })).filter((s) => s.name),

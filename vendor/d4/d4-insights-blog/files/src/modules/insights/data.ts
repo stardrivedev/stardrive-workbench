@@ -1,9 +1,10 @@
 /** Server-only accessors for the articles collection. */
 import { readCollection, writeCollection } from "@/lib/cms/data-store";
+import { seedArticles } from "@/config/insights.generated";
 import type { Article } from "./types";
 
 export async function getArticles(): Promise<Article[]> {
-  const articles = await readCollection<Article[]>("articles", []);
+  const articles = await readCollection<Article[]>("articles", seedArticles);
   return [...articles].sort((a, b) => b.date.localeCompare(a.date));
 }
 

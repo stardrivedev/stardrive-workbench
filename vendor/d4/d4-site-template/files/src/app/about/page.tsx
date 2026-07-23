@@ -1,22 +1,19 @@
 import { siteAssets } from "@/config/assets.generated";
-import { siteContent } from "@/config/content.generated";
+import { getLiveContent } from "@/lib/site-content";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { siteConfig } from "@/config/site";
+import PageHeader from "@/components/ui/PageHeader";
 
 export const metadata: Metadata = { title: "About" };
 
-export default function AboutPage() {
+export default async function AboutPage() {
+  const siteContent = await getLiveContent();
   return (
-    <section className="mx-auto max-w-3xl px-4 py-24 sm:px-6">
-      <p className="flex items-center gap-3 text-sm font-medium uppercase tracking-widest text-accent">
-        <span aria-hidden className="h-px w-8 bg-accent" />
-        About us
-      </p>
-      <h1 className="mt-5 text-3xl font-semibold tracking-tight sm:text-5xl">
-        About {siteConfig.name}
-      </h1>
-      <div className="mt-10 space-y-6 leading-8">
+    <>
+      <PageHeader eyebrow="About us" title={`About ${siteConfig.name}`} slot="hero-about" />
+      <section className="mx-auto max-w-3xl px-4 py-16 sm:px-6">
+      <div className="space-y-6 leading-8">
         {siteContent.about.paragraphs.length > 0 ? (
           siteContent.about.paragraphs.map((para, i) => (
             <p key={i} className={i === 0 ? "text-lg text-heading/90" : undefined}>
@@ -57,6 +54,7 @@ export default function AboutPage() {
           Get in touch
         </Link>
       </div>
-    </section>
+      </section>
+    </>
   );
 }

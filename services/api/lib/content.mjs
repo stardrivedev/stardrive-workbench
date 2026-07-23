@@ -38,7 +38,13 @@ const ALWAYS = [
   { id: 'whatYouDo', group: 'identity', label: 'What does the business do?', kind: 'line', required: true,
     help: 'One plain sentence. The AI turns this into your headline and tagline.' },
   { id: 'aboutFacts', group: 'about', label: 'A few facts about the business', kind: 'facts', required: true,
-    help: 'Notes are fine: when it started, who it serves, what makes it different. The AI writes the About page from these.' },
+    help: 'Notes are fine: when it started, the story so far, how you work. The AI writes the About page from these.' },
+  { id: 'mission', group: 'about', label: 'Mission or the difference you make', kind: 'line', required: false,
+    help: 'One sentence. Highlighted on the About page.' },
+  { id: 'whoYouServe', group: 'about', label: 'Who you serve', kind: 'line', required: false,
+    help: 'Your ideal customers or audience, e.g. "busy families" or "B2B manufacturers".' },
+  { id: 'differentiator', group: 'about', label: 'What makes you different', kind: 'line', required: false,
+    help: 'The main reason customers choose you over the alternatives.' },
   { id: 'services', group: 'offerings', label: 'Main services or offerings', kind: 'list', required: true,
     help: 'List the handful of things you offer. The AI writes a short description for each.' },
   { id: 'contactEmail', group: 'contact', label: 'Contact email', kind: 'email', required: true,
@@ -69,10 +75,10 @@ const MODULE_FIELDS = {
     { id: 'articleTopics', group: 'blog', label: 'Article topics', kind: 'topics', required: true,
       help: 'A few topics to launch with. The AI drafts the opening posts.' },
   ],
-  'd4-gallery-editor': [
-    { id: 'galleryPhotos', group: 'gallery', label: 'Gallery photos', kind: 'photos', required: true,
-      help: 'Upload photos in the Gallery compartment — the gallery page needs at least one.' },
-  ],
+  // Gallery photos are NOT an intake requirement: they are uploaded in the
+  // Photos step (the `gallery` asset compartment), encouraged but skippable, so
+  // a gallery site is never blocked from building. An empty gallery hides its
+  // grid until photos are added.
 };
 
 /** The exact fields this site must/should answer, given its feature modules. */
@@ -166,7 +172,6 @@ export function hasValue(kind, value) {
     case 'people': return someObj(value, 'name');
     case 'roles': return someObj(value, 'title');
     case 'products': return someObj(value, 'name');
-    case 'photos': return false; // satisfied via assets, checked by the caller
     default: return isFilledString(value);
   }
 }
@@ -189,17 +194,17 @@ export function validateFacts(facts = {}, modules = []) {
 }
 
 /**
- * Compute readiness. `assetSlots` is the set of compartment ids that currently
- * hold at least one upload (so the gallery-photos requirement can be checked).
+ * Compute readiness. Only text facts gate a build now: photos (gallery, hero,
+ * etc.) are uploaded in the Photos step and are always optional, so nothing here
+ * depends on asset compartments. The options arg is accepted for call-site
+ * compatibility and otherwise unused.
  */
-export function readiness(facts = {}, modules = [], { assetSlots = [] } = {}) {
+export function readiness(facts = {}, modules = [], _opts = {}) {
   const fields = requirementsFor(modules);
-  const slots = new Set(assetSlots);
   const missing = [];
   for (const f of fields) {
     if (!f.required) continue;
-    const ok = f.kind === 'photos' ? slots.has('gallery') : hasValue(f.kind, facts[f.id]);
-    if (!ok) missing.push({ id: f.id, label: f.label, group: f.group });
+    if (!hasValue(f.kind, facts[f.id])) missing.push({ id: f.id, label: f.label, group: f.group });
   }
   const required = fields.filter((f) => f.required);
   const answered = required.length - missing.length;

@@ -1,10 +1,13 @@
 import type { Metadata } from "next";
 import { siteConfig } from "@/config/site";
+import { getLiveContent } from "@/lib/site-content";
+import PageHeader from "@/components/ui/PageHeader";
 import ContactForm from "./ContactForm";
 
 export const metadata: Metadata = { title: "Contact" };
 
-export default function ContactPage() {
+export default async function ContactPage() {
+  const content = await getLiveContent();
   const details = [
     siteConfig.contactEmail && {
       label: "Email",
@@ -16,19 +19,14 @@ export default function ContactPage() {
   ].filter(Boolean) as { label: string; value: string; href?: string }[];
 
   return (
-    <section className="mx-auto max-w-6xl px-4 py-24 sm:px-6">
-      <div className="max-w-2xl">
-        <p className="flex items-center gap-3 text-sm font-medium uppercase tracking-widest text-accent">
-          <span aria-hidden className="h-px w-8 bg-accent" />
-          Contact
-        </p>
-        <h1 className="mt-5 text-3xl font-semibold tracking-tight sm:text-5xl">
-          Let&apos;s talk
-        </h1>
-        <p className="mt-4 text-lg text-muted">
-          Send a message and we&apos;ll get back to you.
-        </p>
-      </div>
+    <>
+      <PageHeader
+        eyebrow="Contact"
+        title={content.contact.heading || "Let's talk"}
+        subtitle={content.contact.intro || "Send a message and we'll get back to you."}
+        slot="hero-contact"
+      />
+      <section className="mx-auto max-w-6xl px-4 py-16 sm:px-6">
 
       <div className="mt-12 grid gap-8 lg:grid-cols-[1fr_1.5fr] lg:gap-12">
         <div className="space-y-4">
@@ -60,6 +58,7 @@ export default function ContactPage() {
           <ContactForm />
         </div>
       </div>
-    </section>
+      </section>
+    </>
   );
 }

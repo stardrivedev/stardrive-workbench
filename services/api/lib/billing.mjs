@@ -19,8 +19,6 @@
  *      rate and a lower overage rate — so scaling up rewards the customer.
  *   3. Overage is opt-in and bills to the card on file, so a customer never
  *      hard-stops mid-project unless they choose to.
- *   4. AI hero-image generation is a Studio-and-up perk (it adds real image
- *      cost per build), so it rides the tiers where the margin carries it.
  *
  * Numbers are sane, profitable starting points to be tuned with beta data
  * and the chosen generation model (STARDRIVE_LLM_MODEL drives real cost).
@@ -31,37 +29,31 @@ const httpError = (status, code, message) => Object.assign(new Error(message), {
 
 // includedTokens sized so effective $/build descends up the tiers; overage
 // descends too and always sits above the tier's effective included rate.
-// heroImage marks the AI hero-image perk (Studio and up).
 export const PLANS = {
   beta: {
     label: 'Beta', order: 0, hidden: true, priceUsd: 0,
     includedTokens: 5_000_000, includedAssemblies: null, overagePer1kUsd: null,
-    heroImage: true,
     blurb: 'Free while pricing is finalized with founding licensees.',
   },
   free: {
     label: 'Free', order: 1, priceUsd: 0,
     includedTokens: 60_000, includedAssemblies: null, overagePer1kUsd: null,
-    heroImage: false,
     blurb: 'Kick the tires: three finished sites, no card required.',
   },
   starter: {
     label: 'Starter', order: 2, priceUsd: 39,
     includedTokens: 400_000, includedAssemblies: null, overagePer1kUsd: 0.125,
-    heroImage: false,
     blurb: 'Solo and freelance, around twenty finished sites a month.',
   },
   studio: {
     label: 'Studio', order: 3, priceUsd: 99, popular: true,
     includedTokens: 1_200_000, includedAssemblies: null, overagePer1kUsd: 0.100,
-    heroImage: true,
-    blurb: 'A working studio, with AI hero images on every build.',
+    blurb: 'A working studio building finished sites at scale.',
   },
   agency: {
     label: 'Agency', order: 4, priceUsd: 299,
     includedTokens: 5_000_000, includedAssemblies: null, overagePer1kUsd: 0.075,
-    heroImage: true,
-    blurb: 'High volume, the lowest per-site rate, AI hero images.',
+    blurb: 'High volume, the lowest per-site rate.',
   },
 };
 
@@ -90,7 +82,6 @@ export function planCatalog() {
       includedAssemblies: p.includedAssemblies,
       overagePer1kUsd: p.overagePer1kUsd,
       popular: Boolean(p.popular),
-      heroImage: Boolean(p.heroImage),
       blurb: p.blurb,
       approxDesigns: Math.round(p.includedTokens / TOKENS_PER_GENERATION),
       approxSites: Math.round(p.includedTokens / TOKENS_PER_SITE),
@@ -100,7 +91,8 @@ export function planCatalog() {
     }));
 }
 
-/** Does this account's plan include a named capability (e.g. 'heroImage')? */
+/** Does this account's plan include a named capability flag? (Generic helper;
+ *  no plan capabilities are gated at present.) */
 export function planAllows(account, feature) {
   return Boolean(planOf(account)[feature]);
 }

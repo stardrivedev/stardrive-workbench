@@ -24,7 +24,7 @@ import { execFileSync } from 'node:child_process';
 import { runFullQA, PREVIEW_FILE } from './qa-full.mjs';
 import { injectAssetDisplay } from './asset-injector.mjs';
 import { renderContentModule, PLACEHOLDER_PHRASES } from './content.mjs';
-import { generateHeroImage } from './image-gen.mjs';
+import { MODULE_SEEDS } from './seed.mjs';
 import { repairTemplateSource } from '../../../packages/template-kit/index.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -161,9 +161,6 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
       siteId,
       account: account ?? null,
       engine,
-      // AI hero-image generation is a plan perk; the server sets this per the
-      // account's plan. Defaults to true so headless/tests keep their behavior.
-      heroImage: opts.heroImage !== false,
       status: 'queued',
       logs: [],
       result: null,
@@ -321,29 +318,10 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
       if (urls.length) publicMap[slot] = urls;
     }
 
-    // No hero uploaded? Generate one from the business details so the home page
-    // still opens on real imagery. This is a Studio-plan perk (job.heroImage is
-    // set from the account's plan); other plans fall back to the template's
-    // designed hero. Degrades silently on any failure.
-    if (!publicMap.hero?.length && hasIntake && process.env.STARDRIVE_HERO_IMAGE !== 'off') {
-      if (job.heroImage === false) {
-        log(job, 'AI hero image is a Studio-plan feature; using the template\'s designed hero.');
-      } else {
-        try {
-          log(job, 'No hero uploaded, generating one from the business details…');
-          const img = await generateHeroImage({ siteName: site.config.siteName, facts, vibe: site.config.pairing || '' });
-          if (img) {
-            const rel = path.join('public', 'assets', 'hero', `ai-hero.${img.ext}`);
-            fs.mkdirSync(path.join(outDir, path.dirname(rel)), { recursive: true });
-            fs.writeFileSync(path.join(outDir, rel), img.buffer);
-            publicMap.hero = [`/assets/hero/ai-hero.${img.ext}`];
-            log(job, `Generated a hero image (${img.model}).`);
-          } else {
-            log(job, 'Hero image generation unavailable, using the template hero.');
-          }
-        } catch (e) { log(job, `Hero image generation skipped: ${e.message}`); }
-      }
-    }
+    // The hero is DESIGNED by the template (text + treatment), never a generated
+    // photo. An uploaded hero image (or a per-page hero-<page> upload) is used as
+    // a background behind the hero text; pages with no upload keep the designed
+    // hero. Nothing is generated here.
 
     fs.mkdirSync(path.join(outDir, 'src', 'config'), { recursive: true });
     fs.writeFileSync(path.join(outDir, 'src', 'config', 'assets.generated.ts'),
@@ -352,6 +330,20 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
     // The CONTENT CONTRACT: the finished copy the AI wrote from the intake, so
     // templates render real page bodies instead of hardcoded sample text.
     fs.writeFileSync(path.join(outDir, 'src', 'config', 'content.generated.ts'), renderContentModule(pack));
+
+    // Feature-module content seeds: careers/catalog/insights pages read these as
+    // their empty-DB fallback, so a fresh build opens with the AI-written rows
+    // instead of an empty state. Edits in /admin (a saved collection) override.
+    if (pack) {
+      for (const mod of modules) {
+        const seed = MODULE_SEEDS[mod];
+        if (!seed) continue;
+        const dest = path.join(outDir, seed.file);
+        if (!fs.existsSync(dest)) continue; // module not present → nothing to seed
+        fs.writeFileSync(dest, seed.render(pack));
+        log(job, `Seeded ${mod} page content from the AI copy.`);
+      }
+    }
 
     // Repair deterministic, build-breaking mistakes in AI-authored source
     // (reduced-opacity text tokens; server-only metadata exports in "use

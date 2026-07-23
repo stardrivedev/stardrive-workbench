@@ -35,6 +35,11 @@ const PROVIDES_KEYS = new Set(['routes', 'nav', 'adminPanels', 'collections', 'l
 // free (defined by the engine); a template may declare EXTRA slots via the
 // optional manifest `assetSlots` — but never redefine a standard id.
 export const RESERVED_ASSET_SLOT_IDS = ['logo', 'favicon', 'hero', 'about', 'gallery', 'team', 'misc'];
+/** True for any id the engine owns: a standard compartment, or the whole
+ *  `hero-` prefix (per-page hero backgrounds like hero-about the engine adds
+ *  from the site's selected pages). Templates declare only OTHER extra slots. */
+export const isReservedSlotId = (id) =>
+  RESERVED_ASSET_SLOT_IDS.includes(id) || (typeof id === 'string' && id.startsWith('hero-'));
 export const ASSET_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'svg', 'gif', 'ico'];
 const ASSET_SLOT_KEYS = ['id', 'label', 'description', 'accept', 'max'];
 
@@ -169,8 +174,8 @@ export function validateManifest(manifest) {
         if (!isStr(s.id) || !/^[a-z0-9][a-z0-9-]*$/.test(s.id)) {
           err(`assetSlots[${i}].id must be a lowercase slug.`);
         } else {
-          if (RESERVED_ASSET_SLOT_IDS.includes(s.id)) {
-            err(`assetSlots[${i}].id "${s.id}" is a standard compartment every site template already has — declare only EXTRA slots.`);
+          if (isReservedSlotId(s.id)) {
+            err(`assetSlots[${i}].id "${s.id}" is a compartment the engine already provides (standard slots, or any "hero-" per-page hero background) — declare only EXTRA slots.`);
           }
           if (seen.has(s.id)) err(`assetSlots[${i}].id "${s.id}" is declared twice.`);
           seen.add(s.id);
@@ -394,7 +399,7 @@ export function autofixManifest(manifest) {
     else {
       const before = m.assetSlots.length;
       m.assetSlots = m.assetSlots.filter((s) => s && typeof s === 'object' && !Array.isArray(s)
-        && isStr(s.id) && /^[a-z0-9][a-z0-9-]*$/.test(s.id) && !RESERVED_ASSET_SLOT_IDS.includes(s.id)
+        && isStr(s.id) && /^[a-z0-9][a-z0-9-]*$/.test(s.id) && !isReservedSlotId(s.id)
         && Object.keys(s).every((k) => ASSET_SLOT_KEYS.includes(k)));
       if (m.assetSlots.length !== before) fixes.push(`normalized manifest.assetSlots (kept ${m.assetSlots.length} of ${before})`);
       if (!m.assetSlots.length) delete m.assetSlots;

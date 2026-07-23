@@ -3,7 +3,7 @@
   "name": "d4-cms-core",
   "version": "1.0.0",
   "kind": "core",
-  "description": "Admin shell every content module plugs into: password login with optional TOTP 2FA, a dashboard that renders panels from the generated admin-panels registry, a libSQL-backed data store (src/lib/cms/data-store.ts, Turso in production / a local SQLite file in dev), a markdown renderer, and an authenticated image upload endpoint that stores files in Vercel Blob (falling back to public/uploads in dev).",
+  "description": "Admin shell every content module plugs into: password login with optional TOTP 2FA, a dashboard that renders panels from the generated admin-panels registry, a libSQL-backed data store (src/lib/cms/data-store.ts, Turso in production / a local SQLite file in dev), a markdown renderer, and an authenticated image upload endpoint that stores files in Vercel Blob (falling back to public/uploads in dev). Ships a built-in \"Pages\" editor for the site's own copy (home hero, services, about, contact, FAQ) and overrides the base template's src/lib/site-content.ts with a DB-backed getLiveContent() so those pages reflect owner edits without a rebuild.",
   "clientFacingSummary": "A private admin area where you sign in and edit your own site content, protected by a password and optional two-factor authentication.",
   "keywords": ["cms", "admin", "dashboard", "login", "2fa", "content management", "edit content"],
   "requires": {},
@@ -12,17 +12,23 @@
     "nav": [],
     "adminPanels": [
       {
+        "id": "content",
+        "label": "Pages",
+        "importPath": "@/components/cms/SiteContentPanel"
+      },
+      {
         "id": "inbox",
         "label": "Inbox",
         "importPath": "@/components/cms/InboxPanel"
       }
     ],
-    "collections": [],
+    "collections": ["content"],
     "lib": [
       "@/lib/cms/auth",
       "@/lib/cms/totp",
       "@/lib/cms/data-store",
       "@/lib/cms/markdown",
+      "@/lib/site-content",
       "@/components/cms/ImageDropzone"
     ]
   },
@@ -64,6 +70,6 @@
   },
   "copy": [{ "from": "files", "to": "." }],
   "postAssemble": {
-    "notes": "Content modules (careers, insights, catalog, gallery) import from @/lib/cms/* and register panels into src/config/admin-panels.generated.tsx, which the builder rewrites. This module must be selected whenever any of those modules are selected."
+    "notes": "Content modules (careers, insights, catalog, gallery) import from @/lib/cms/* and register panels into src/config/admin-panels.generated.tsx, which the builder rewrites. This module must be selected whenever any of those modules are selected. It also ships src/lib/site-content.ts, which overrides the base template's static accessor of the same path (module payloads copy after the base in registry order) with a DB-backed, editable version; base pages read their copy through getLiveContent(), so this override is what makes the built-in Pages editor take effect live."
   }
 }

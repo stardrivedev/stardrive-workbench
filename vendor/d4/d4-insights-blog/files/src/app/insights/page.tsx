@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { getArticles } from "@/modules/insights/data";
+import PageHeader from "@/components/ui/PageHeader";
 
 export const metadata: Metadata = { title: "Insights" };
 export const dynamic = "force-dynamic";
@@ -9,12 +10,14 @@ export default async function InsightsPage() {
   const articles = await getArticles();
 
   return (
-    <section className="mx-auto max-w-4xl px-4 py-20 sm:px-6">
-      <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Insights</h1>
-      <p className="mt-4 max-w-2xl text-muted">
-        Articles, updates, and news.
-      </p>
-
+    <>
+      <PageHeader
+        eyebrow="Insights"
+        title="Insights"
+        subtitle="Articles, updates, and news."
+        slot="hero-insights"
+      />
+      <section className="mx-auto max-w-4xl px-4 py-16 sm:px-6">
       {articles.length === 0 ? (
         <div className="mt-12 rounded-md border border-heading/10 bg-surface px-6 py-8 text-sm text-muted">
           Nothing published yet. Check back soon.
@@ -59,6 +62,7 @@ export default async function InsightsPage() {
           ))}
         </div>
       )}
-    </section>
+      </section>
+    </>
   );
 }

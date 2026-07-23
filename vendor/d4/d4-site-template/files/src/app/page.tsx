@@ -1,27 +1,41 @@
 import Link from "next/link";
-import { siteConfig, faq, logoWall } from "@/config/site";
+import { siteConfig, logoWall } from "@/config/site";
 import { siteAssets } from "@/config/assets.generated";
-import { siteContent } from "@/config/content.generated";
+import { getLiveContent } from "@/lib/site-content";
 import FaqAccordion from "@/components/ui/FaqAccordion";
 import LogoMarquee from "@/components/ui/LogoMarquee";
 
-export default function HomePage() {
+export default async function HomePage() {
+  const siteContent = await getLiveContent();
+  // An uploaded hero image (optional) sits BEHIND the designed hero text as a
+  // background; with none, the designed hero shows as-is. Never a generated photo.
+  const heroBg = siteAssets.hero?.[0];
   return (
     <>
       <section className="relative overflow-hidden">
-        <div aria-hidden className="pointer-events-none absolute inset-0">
-          <div className="absolute -top-32 right-[-12%] h-96 w-96 rounded-full bg-accent/10 blur-3xl" />
-          <div className="absolute -bottom-40 left-[-8%] h-80 w-80 rounded-full bg-accent/5 blur-3xl" />
-        </div>
+        {heroBg ? (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={heroBg} alt="" className="absolute inset-0 h-full w-full object-cover" />
+            <div aria-hidden className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/55 to-black/35" />
+          </>
+        ) : (
+          <div aria-hidden className="pointer-events-none absolute inset-0">
+            <div className="absolute -top-32 right-[-12%] h-96 w-96 rounded-full bg-accent/10 blur-3xl" />
+            <div className="absolute -bottom-40 left-[-8%] h-80 w-80 rounded-full bg-accent/5 blur-3xl" />
+          </div>
+        )}
         <div className="relative mx-auto max-w-6xl px-4 py-28 sm:px-6 sm:py-36">
-          <p className="flex items-center gap-3 text-sm font-medium uppercase tracking-widest text-accent">
-            <span aria-hidden className="h-px w-8 bg-accent" />
+          <p className={`flex items-center gap-3 text-sm font-medium uppercase tracking-widest ${heroBg ? "text-white/80" : "text-accent"}`}>
+            <span aria-hidden className={`h-px w-8 ${heroBg ? "bg-white/70" : "bg-accent"}`} />
             {siteConfig.name}
           </p>
-          <h1 className="mt-5 max-w-3xl text-4xl font-semibold leading-tight tracking-tight sm:text-6xl">
-            {siteConfig.tagline}
+          <h1 className={`mt-5 max-w-3xl text-4xl font-semibold leading-tight tracking-tight sm:text-6xl ${heroBg ? "text-white drop-shadow" : ""}`}>
+            {siteContent.tagline || siteConfig.tagline}
           </h1>
-          <p className="mt-6 max-w-2xl text-lg leading-8 text-muted">{siteConfig.description}</p>
+          <p className={`mt-6 max-w-2xl text-lg leading-8 ${heroBg ? "text-white/90 drop-shadow" : "text-muted"}`}>
+            {siteContent.description || siteConfig.description}
+          </p>
           <div className="mt-10 flex flex-wrap gap-4">
             <Link
               href="/contact"
@@ -43,26 +57,13 @@ export default function HomePage() {
             </Link>
             <Link
               href="/about"
-              className="rounded-md border border-heading/15 px-6 py-3 text-sm font-medium text-heading transition-colors hover:border-accent hover:text-accent"
+              className={`rounded-md border px-6 py-3 text-sm font-medium transition-colors ${heroBg ? "border-white/40 text-white hover:border-white" : "border-heading/15 text-heading hover:border-accent hover:text-accent"}`}
             >
               Learn more
             </Link>
           </div>
         </div>
       </section>
-
-      {siteAssets.hero?.[0] && (
-        <section aria-label="Featured imagery" className="border-t border-heading/10">
-          <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={siteAssets.hero[0]}
-              alt=""
-              className="max-h-[420px] w-full rounded-2xl border border-heading/10 object-cover"
-            />
-          </div>
-        </section>
-      )}
 
       {logoWall.items.length > 0 && (
         <LogoMarquee title={logoWall.title} items={logoWall.items} />
@@ -94,7 +95,7 @@ export default function HomePage() {
         </section>
       )}
 
-      {faq.length > 0 && (
+      {siteContent.faq.length > 0 && (
         <section className="border-t border-heading/10">
           <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6">
             <p className="flex items-center gap-3 text-sm font-medium uppercase tracking-widest text-accent">
@@ -105,7 +106,7 @@ export default function HomePage() {
               Answers before you ask
             </h2>
             <div className="mt-8">
-              <FaqAccordion faqs={faq} />
+              <FaqAccordion faqs={siteContent.faq.map((f) => ({ q: f.question, a: f.answer }))} />
             </div>
           </div>
         </section>

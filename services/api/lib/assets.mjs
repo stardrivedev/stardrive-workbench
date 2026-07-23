@@ -24,12 +24,36 @@ export const MAX_ASSET_BYTES = 8_000_000;
 export const STANDARD_SLOTS = [
   { id: 'logo', label: 'Logo', description: 'Primary logo. SVG or transparent PNG works best.', accept: ['svg', 'png', 'webp'], max: 1, target: 'public/assets/brand/' },
   { id: 'favicon', label: 'Favicon', description: 'Browser-tab icon. Square; ICO, PNG, or SVG.', accept: ['ico', 'png', 'svg'], max: 1, target: 'src/app/' },
-  { id: 'hero', label: 'Hero images', description: 'The big opening imagery on the home page.', accept: ['jpg', 'jpeg', 'png', 'webp'], max: 3, target: 'public/assets/hero/' },
+  { id: 'hero', label: 'Home hero background', description: 'One image that sits behind your home page hero text. Leave blank to keep the designed hero.', accept: ['jpg', 'jpeg', 'png', 'webp'], max: 1, target: 'public/assets/hero/' },
   { id: 'about', label: 'About / story photos', description: 'Photos for the about page.', accept: ['jpg', 'jpeg', 'png', 'webp'], max: 6, target: 'public/assets/about/' },
   { id: 'gallery', label: 'Gallery', description: 'Portfolio or product shots.', accept: ['jpg', 'jpeg', 'png', 'webp', 'gif'], max: 24, target: 'public/assets/gallery/' },
   { id: 'team', label: 'Team photos', description: 'Headshots and team imagery.', accept: ['jpg', 'jpeg', 'png', 'webp'], max: 12, target: 'public/assets/team/' },
   { id: 'misc', label: 'Everything else', description: 'Any other imagery the site should have on hand.', accept: [...ASSET_EXTS], max: 12, target: 'public/assets/misc/' },
 ];
+
+// Optional per-page hero backgrounds (one image behind each page's header),
+// offered only for the pages a site has. `module: null` means the page always
+// exists (about/contact); otherwise the page comes from that feature module.
+const PAGE_HEROES = [
+  { id: 'hero-about', label: 'About hero background', module: null },
+  { id: 'hero-contact', label: 'Contact hero background', module: null },
+  { id: 'hero-gallery', label: 'Gallery hero background', module: 'd4-gallery-editor' },
+  { id: 'hero-careers', label: 'Careers hero background', module: 'd4-careers-portal' },
+  { id: 'hero-catalog', label: 'Catalog hero background', module: 'd4-catalog' },
+  { id: 'hero-insights', label: 'Insights hero background', module: 'd4-insights-blog' },
+];
+
+function pageHeroSlots(modules = []) {
+  const set = new Set(modules || []);
+  return PAGE_HEROES.filter((h) => !h.module || set.has(h.module)).map((h) => ({
+    id: h.id,
+    label: h.label,
+    description: "Optional image behind this page's header. Leave blank to keep the designed header.",
+    accept: ['jpg', 'jpeg', 'png', 'webp'],
+    max: 1,
+    target: `public/assets/${h.id}/`,
+  }));
+}
 
 const MIME = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
@@ -42,8 +66,12 @@ export function createAssets(store) {
   const indexRel = (siteId) => `assets/${siteId}/index.json`;
   const fileAbs = (siteId, slot, stored) => store.path('assets', siteId, slot, stored);
 
-  /** Standard slots + the template's declared extras (targets derived). */
-  function slotsFor(manifest) {
+  /**
+   * Standard slots + per-page hero backgrounds (for the pages this site has) +
+   * the template's declared extras. Every page can take one optional background
+   * image behind its designed header; pages with none keep the designed header.
+   */
+  function slotsFor(manifest, modules = []) {
     const extras = (manifest?.assetSlots ?? []).map((s) => ({
       id: s.id,
       label: s.label,
@@ -53,7 +81,16 @@ export function createAssets(store) {
       target: `public/assets/${s.id}/`,
       declaredBy: manifest.name,
     }));
-    return [...STANDARD_SLOTS, ...extras];
+    // Per-page hero backgrounds, inserted right after the home hero slot so all
+    // heroes read together. Offered for the pages the site actually has.
+    const heroIdx = STANDARD_SLOTS.findIndex((s) => s.id === 'hero');
+    const heroes = pageHeroSlots(modules);
+    const standard = [
+      ...STANDARD_SLOTS.slice(0, heroIdx + 1),
+      ...heroes,
+      ...STANDARD_SLOTS.slice(heroIdx + 1),
+    ];
+    return [...standard, ...extras];
   }
 
   function state(siteId) {

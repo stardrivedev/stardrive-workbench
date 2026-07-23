@@ -94,9 +94,23 @@ hermetic offline builds):
   4-step progressive-disclosure flow (Essentials -> Photos -> Build ->
   Publish) with a visible stepper; locked steps hide their body until their
   prerequisite is met, so a user is never overwhelmed and always sees which
-  step they are on. Photos are encouraged but skippable (the AI fills the
-  hero). Front-end only, derived from readiness/assets/build state already
-  fetched.
+  step they are on. Photos are encouraged but skippable; the template's
+  designed hero is the fallback (no image is generated) and an uploaded image,
+  when present, becomes the hero background. Front-end only, derived from
+  readiness/assets/build state already fetched.
+- **Batch Building (Agency tier — planned).** The highest tier queues N
+  template+site builds and runs them in one go through the model provider's
+  **Batch API** (roughly half the token cost, async completion within ~24h).
+  The user submits a batch, closes the laptop, and returns to every build
+  done, QA'd, and ready to publish. This is the Agency tier's flagship perk:
+  it trades interactivity for cost + volume, which is exactly the agency
+  use case (many client sites, not one at a time). Completion rides the
+  existing webhooks seam (`job.completed`/`job.failed`, M2) plus email, so a
+  batch notifies when it lands. Interactive single builds stay on the live
+  model; batch is a separate, opt-in submission path. Requires: a batch job
+  kind + store, provider Batch-API adapter in `chat-proxy.mjs`, poll/callback
+  reconciliation, and a Batch tab in the Workbench. Deferred until after the
+  single-build flow is proven with beta licensees.
 - **Customer-facing side v1 SHIPPED 2026-07-17**: the public marketing site
   at `/` (app/site — deliberate night-sky identity, how-it-works, pillars,
   Studio story, honest private-beta pricing card, FAQ incl. the

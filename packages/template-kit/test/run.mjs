@@ -253,6 +253,7 @@ check('assetSlots: valid extra compartments pass; every bad shape is named', () 
     ...GOOD_MANIFEST,
     assetSlots: [
       { id: 'logo', label: 'Logo' },                      // reserved standard id
+      { id: 'hero-about', label: 'About hero' },          // reserved hero- prefix
       { id: 'Menu Pages', label: 'Menu' },                // not a slug
       { id: 'ok-slot', label: '' },                       // empty label
       { id: 'ok-slot2', label: 'X', accept: ['exe'] },    // bad ext
@@ -264,13 +265,23 @@ check('assetSlots: valid extra compartments pass; every bad shape is named', () 
   };
   const v = validateManifest(bad);
   assert.strictEqual(v.ok, false);
-  assert.strictEqual(v.errors.some((e) => e.includes('standard compartment')), true);
+  assert.strictEqual(v.errors.some((e) => e.includes('the engine already provides')), true);
+  assert.strictEqual(v.errors.filter((e) => e.includes('the engine already provides')).length, 2, 'both logo and hero-about are reserved');
   assert.strictEqual(v.errors.some((e) => e.includes('lowercase slug')), true);
   assert.strictEqual(v.errors.some((e) => e.includes('label is required')), true);
   assert.strictEqual(v.errors.some((e) => e.includes('subset of')), true);
   assert.strictEqual(v.errors.some((e) => e.includes('integer 1–50')), true);
   assert.strictEqual(v.errors.some((e) => e.includes('unknown key "mystery"')), true);
   assert.strictEqual(v.errors.some((e) => e.includes('declared twice')), true);
+
+  // autofixManifest drops a reserved hero- slot instead of rejecting the bundle.
+  const fixed = autofixManifest({
+    ...GOOD_MANIFEST,
+    assetSlots: [{ id: 'hero-gallery', label: 'Gallery hero' }, { id: 'press-logos', label: 'Press' }],
+  });
+  assert.deepStrictEqual(validateManifest(fixed.manifest).errors, [], 'normalized manifest is valid');
+  assert.strictEqual((fixed.manifest.assetSlots || []).some((s) => s.id === 'hero-gallery'), false, 'hero- slot dropped');
+  assert.strictEqual((fixed.manifest.assetSlots || []).some((s) => s.id === 'press-logos'), true, 'valid extra kept');
 });
 
 if (failures) {

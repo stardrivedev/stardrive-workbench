@@ -108,22 +108,15 @@ function loadSite(id, account) {
   return site;
 }
 
-/** Enqueue an assemble job, gating the AI hero-image perk on the account plan. */
+/** Enqueue an assemble job for a site. */
 function enqueueAssemble(siteId, accountId) {
-  const account = accounts.getAccount(accountId) || { id: accountId, plan: 'beta' };
-  return jobs.enqueue('assemble', siteId, accountId, { heroImage: billing.planAllows(account, 'heroImage') });
+  return jobs.enqueue('assemble', siteId, accountId);
 }
 
-/** Compartment ids that currently hold at least one upload (for readiness). */
-function filledAssetSlots(siteId) {
-  const state = assets.state(siteId) || {};
-  return Object.keys(state).filter((slot) => (state[slot] || []).length > 0);
-}
-
-/** Readiness for a site given its facts, modules, and uploaded assets. */
+/** Readiness for a site given its facts and modules (text answers only). */
 function siteReadiness(site) {
   const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
-  return readiness(site.content || {}, modules, { assetSlots: filledAssetSlots(site.id) });
+  return readiness(site.content || {}, modules);
 }
 
 function resolveMappingBody(body, key) {
@@ -538,7 +531,7 @@ const ROUTES = [
     handler: ({ params, key }) => {
       const site = loadSite(params.id, key.account);
       const entry = getTemplate(key.account, site.templateId);
-      return { status: 200, body: { slots: assets.slotsFor(entry?.manifest), assets: assets.state(site.id) } };
+      return { status: 200, body: { slots: assets.slotsFor(entry?.manifest, site.config.modules), assets: assets.state(site.id) } };
     },
   },
   {
@@ -546,7 +539,7 @@ const ROUTES = [
     handler: ({ params, body, key }) => {
       const site = loadSite(params.id, key.account);
       const entry = getTemplate(key.account, site.templateId);
-      const slotDef = assets.slotsFor(entry?.manifest).find((s) => s.id === String(params.slot));
+      const slotDef = assets.slotsFor(entry?.manifest, site.config.modules).find((s) => s.id === String(params.slot));
       if (!slotDef) throw httpError(422, 'unknown_slot', `No compartment "${params.slot}" on this site — GET /v1/sites/${site.id}/assets lists them.`);
       if (typeof body?.filename !== 'string' || !body.filename.trim() || typeof body?.contentBase64 !== 'string') {
         throw httpError(400, 'bad_request', 'Body must be { filename, contentBase64 }.');
