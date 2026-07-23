@@ -278,29 +278,54 @@ export function lintTemplateFiles(files) {
 // Global-flag variants of the diluted-text patterns, for repair.
 const DILUTED_TW_FIX = /\btext-(muted|body|heading)\/\d+/g;
 const DILUTED_CSS_FIX = /(var\(\s*--text-[a-z-]+\s*\))\s*\/\s*[\d.]+%?/g;
+const USE_CLIENT_RE = /^\s*['"]use client['"]\s*;?/m;
 
 /**
- * Deterministically repair the ONE hard error the linter flags: text tokens
- * used at reduced opacity. The fix is unambiguous and only ever RAISES contrast
- * (full-strength --text-muted is exactly what the rulebook prescribes for
- * secondary text), so callers can auto-apply it at import instead of bouncing a
- * generation back for a purely mechanical change. Decorative alpha on ACCENT/BG
- * tokens is untouched (the linter allows it). Returns { files, fixes }.
+ * Deterministically repair the two mechanical, build-breaking mistakes an LLM
+ * template generator reliably makes, so a good generation is never bounced for
+ * a fix we can safely apply. Both only ever make the site MORE correct:
+ *   1. Text tokens at reduced opacity (text-muted/80, rgb(var(--text-…)/…)) —
+ *      set to full strength (exactly what the rulebook prescribes; only raises
+ *      contrast). Decorative alpha on ACCENT/BG tokens is untouched.
+ *   2. A "use client" component exporting `metadata`/`generateMetadata` —
+ *      disallowed by the Next.js App Router (a webpack error TypeScript's
+ *      ignoreBuildErrors does NOT catch). De-exported (the client interactivity
+ *      is what the page needs); the now-local const/function is harmless.
+ * Returns { text, fixes } for a single source string.
+ */
+export function repairTemplateSource(text) {
+  const fixes = [];
+  let out = String(text);
+  let dil = 0;
+  out = out.replace(DILUTED_TW_FIX, (_m, g) => { dil += 1; return 'text-' + g; })
+    .replace(DILUTED_CSS_FIX, (_m, g) => { dil += 1; return g; });
+  if (dil) fixes.push(`set ${dil} reduced-opacity text token${dil > 1 ? 's' : ''} to full strength for contrast`);
+
+  if (USE_CLIENT_RE.test(out)) {
+    let m = 0;
+    out = out
+      .replace(/\bexport\s+const\s+(metadata|generateMetadata)\b/g, (_x, g) => { m += 1; return 'const ' + g; })
+      .replace(/\bexport\s+(async\s+)?function\s+generateMetadata\b/g, (_x, a) => { m += 1; return (a || '') + 'function generateMetadata'; });
+    if (m) fixes.push(`removed ${m} server-only metadata export${m > 1 ? 's' : ''} from a "use client" component`);
+  }
+  return { text: out, fixes };
+}
+
+/**
+ * Apply repairTemplateSource across a bundle's text files. Returns
+ * { files, fixes } — callers auto-apply this at import so the stored template
+ * is already correct.
  */
 export function autofixTemplateFiles(files) {
   const fixes = [];
   const out = (files || []).map((file) => {
     if (!file || typeof file.path !== 'string' || !TEXT_EXT_RE.test(file.path)) return file;
     const text = decodeFileContent(file);
-    if (!DILUTED_TW_RE.test(text) && !DILUTED_CSS_RE.test(text)) return file;
-    let n = 0;
-    const fixed = text
-      .replace(DILUTED_TW_FIX, (_m, g) => { n += 1; return 'text-' + g; })
-      .replace(DILUTED_CSS_FIX, (_m, g) => { n += 1; return g; });
-    if (n === 0) return file;
-    fixes.push(`${file.path}: set ${n} reduced-opacity text token${n > 1 ? 's' : ''} to full strength for contrast`);
+    const r = repairTemplateSource(text);
+    if (!r.fixes.length || r.text === text) return file;
+    for (const f of r.fixes) fixes.push(`${file.path}: ${f}`);
     const { contentBase64, ...rest } = file;
-    return { ...rest, content: fixed };
+    return { ...rest, content: r.text };
   });
   return { files: out, fixes };
 }

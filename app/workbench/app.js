@@ -30,6 +30,12 @@ files/ is a complete, standalone Next.js site that runs with
 "npm install && npm run dev" on its own:
 
 - Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS 3.
+- HARD RULE (a "use client" file that exports metadata FAILS the build):
+  any file with "use client" at the top (i.e. it uses useState/useEffect/
+  onClick/hooks) MUST NOT export "metadata" or "generateMetadata" — those are
+  server-only. Put page copy/interactivity in the client page, and set the
+  title via the metadata export in a SERVER file (the layout, or a sibling
+  server component). Never both in one file.
 - tailwind.config.ts MUST set darkMode: "class" and MUST map the theme
   tokens verbatim in theme.extend.colors:
 
@@ -909,6 +915,17 @@ $('#view-studio')?.addEventListener('click', (e) => {
   if (b.dataset.genact === 'preview-live') previewGeneratedLive(b.dataset.site);
 });
 
+/** Pull the real reason a build failed from the job's QA report (the failing
+ *  checks + their captured detail, e.g. the next-build error tail), falling
+ *  back to the last log line. */
+function buildFailureDetail(jobBody) {
+  const failed = (jobBody?.result?.qa?.checks || []).filter((c) => c.status === 'fail');
+  if (failed.length) {
+    return failed.map((c) => c.name + (c.detail ? ':\n' + c.detail : '')).join('\n\n');
+  }
+  return jobBody?.logs?.at(-1)?.line || 'The build failed; open the build history for details.';
+}
+
 async function previewGeneratedDesign() {
   const box = $('#genPreview');
   const spin = (msg) => { box.innerHTML = '<div class="report ok" style="display:flex;align-items:center;gap:0.5rem"><span class="spin"></span><span>' + esc(msg) + '</span></div>'; };
@@ -930,7 +947,16 @@ async function previewGeneratedDesign() {
     try { j = await api('/v1/jobs/' + built.body.jobId); } catch { continue; }
     if (j.status !== 200) continue;
     if (j.body.status === 'done') { showGenPreview(siteId); return; }
-    if (j.body.status === 'failed') { box.innerHTML = '<div class="report err">Preview build failed: ' + esc(j.body.logs?.at(-1)?.line || 'see the site build history') + '</div>'; return; }
+    if (j.body.status === 'failed') {
+      const detail = buildFailureDetail(j.body);
+      box.innerHTML = '<div class="report err"><b>The design did not build.</b> Here is what the build reported:<br>' +
+        '<pre style="white-space:pre-wrap;margin:0.5rem 0;font-size:0.78rem;max-height:14rem;overflow:auto">' + esc(detail).slice(0, 6000) + '</pre>' +
+        'The fix request is filled into <b>Want changes?</b> below, press <b>Refine</b> and the AI will correct the template.</div>';
+      // Queue the exact error for the model, mirroring the import-error loop.
+      $('#chatText').value = 'The generated template failed to build with the error below. Fix the affected file(s) and re-send ONLY the changed files (keep everything else):\n\n' + detail;
+      const rw = $('#refineWrap'); if (rw) rw.hidden = false;
+      return;
+    }
     spin('Building the preview (' + (Math.round((Date.now() - started) / 6000) / 10) + ' min)…');
   }
 }
@@ -1387,10 +1413,11 @@ async function buildSite(siteId) {
     if (j.body.status === 'done' || j.body.status === 'failed') {
       openSiteDetail(siteId);
       loadSites();
+      const failDetail = j.body.status === 'failed' ? buildFailureDetail(j.body) : '';
       setTimeout(() => {
         $('#siteActOut').innerHTML = j.body.status === 'done'
           ? '<div class="report ok">✓ Built and checked, the preview above is the real site' + (j.body.result?.preview ? ', photos included' : '') + '.</div>'
-          : '<div class="report err">Build failed: ' + esc(j.body.logs?.at(-1)?.line || 'see jobs') + '</div>';
+          : '<div class="report err"><b>Build failed.</b> What the build reported:<br><pre style="white-space:pre-wrap;margin:0.4rem 0;font-size:0.78rem;max-height:14rem;overflow:auto">' + esc(failDetail).slice(0, 6000) + '</pre></div>';
       }, 400);
       return;
     }

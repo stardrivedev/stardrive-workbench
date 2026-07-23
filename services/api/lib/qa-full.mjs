@@ -60,7 +60,17 @@ const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const SHELL = process.platform === 'win32';
 export const PREVIEW_FILE = '.stardrive-preview.png';
 
-const tail = (e) => String(e?.stdout || e?.stderr || e?.message || '').trim().split('\n').filter(Boolean).slice(-4).join(' ').slice(0, 600);
+// Capture the ACTUAL failure: combine stdout+stderr (next build writes the
+// error to either), strip ANSI colour codes, and prefer the window around the
+// real compile/module error over the trailing progress lines.
+const tail = (e) => {
+  const raw = [String(e?.stdout || ''), String(e?.stderr || '')].join('\n');
+  const lines = raw.replace(/\x1b\[[0-9;]*m/g, '').split('\n').filter((l) => l.trim());
+  if (!lines.length) return String(e?.message || '').slice(0, 1500);
+  const errIdx = lines.findIndex((l) => /Failed to compile|Module not found|Type error|SyntaxError|is disallowed|Error:|webpack errors|Cannot find/i.test(l));
+  const window = errIdx >= 0 ? lines.slice(errIdx, errIdx + 14) : lines.slice(-14);
+  return window.join('\n').slice(0, 1500);
+};
 
 async function waitForServer(url, timeoutMs) {
   const start = Date.now();

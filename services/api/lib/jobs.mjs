@@ -25,8 +25,35 @@ import { runFullQA, PREVIEW_FILE } from './qa-full.mjs';
 import { injectAssetDisplay } from './asset-injector.mjs';
 import { renderContentModule, PLACEHOLDER_PHRASES } from './content.mjs';
 import { generateHeroImage } from './image-gen.mjs';
+import { repairTemplateSource } from '../../../packages/template-kit/index.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Deterministically repair the mechanical, build-breaking mistakes an LLM
+// template generator reliably makes (reduced-opacity text tokens; server-only
+// metadata exports in "use client" components), across the ASSEMBLED tree, so
+// even a template imported before those repairs existed still builds. Runs
+// right before the compile gate.
+const REPAIR_EXT_RE = /\.(tsx?|jsx?|mjs|css|mdx)$/;
+function repairAssembledDir(root) {
+  const changed = [];
+  const walk = (dir) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name === '.next' || e.name === '.git') continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) { walk(p); continue; }
+      if (!REPAIR_EXT_RE.test(e.name)) continue;
+      let t;
+      try { t = fs.readFileSync(p, 'utf-8'); } catch { continue; }
+      const r = repairTemplateSource(t);
+      if (r.fixes.length && r.text !== t) { fs.writeFileSync(p, r.text); changed.push(path.relative(root, p).replace(/\\/g, '/')); }
+    }
+  };
+  walk(root);
+  return changed;
+}
 
 const BUILD_CONFIG_KEYS = ['siteName', 'tagline', 'description', 'contactEmail', 'phone', 'address', 'pairing', 'nav', 'announcement', 'quote', 'socialLinks', 'darkMode', 'themeDark', 'theme'];
 
@@ -325,6 +352,16 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
     // The CONTENT CONTRACT: the finished copy the AI wrote from the intake, so
     // templates render real page bodies instead of hardcoded sample text.
     fs.writeFileSync(path.join(outDir, 'src', 'config', 'content.generated.ts'), renderContentModule(pack));
+
+    // Repair deterministic, build-breaking mistakes in AI-authored source
+    // (reduced-opacity text tokens; server-only metadata exports in "use
+    // client" components) before the compile gate — so a template never fails
+    // the build for a mechanical reason we can safely fix, even if it was
+    // imported before these repairs existed.
+    try {
+      const repaired = repairAssembledDir(outDir);
+      if (repaired.length) log(job, `Auto-repaired ${repaired.length} generated file(s) before build: ${repaired.slice(0, 4).join(', ')}${repaired.length > 4 ? '…' : ''}`);
+    } catch (e) { log(job, `Source auto-repair skipped: ${e.message}`); }
 
     // Keep the build from failing on cosmetic type/lint issues in AI-authored
     // code (runtime QA is the real correctness gate).

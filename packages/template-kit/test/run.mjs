@@ -100,6 +100,22 @@ check('autofix repairs diluted TEXT tokens to full strength; a fixed bundle lint
   // The repaired files no longer trip the linter.
   assert.deepStrictEqual(lintTemplateFiles(fixed).errors, []);
 });
+check('autofix de-exports metadata from a "use client" component; server metadata is left alone', () => {
+  const clientPage = '"use client";\nimport { useState } from "react";\nexport const metadata = { title: "X" };\nexport async function generateMetadata(){ return {}; }\nexport default function P(){ const [s] = useState(0); return null; }\n';
+  const serverPage = 'import type { Metadata } from "next";\nexport const metadata: Metadata = { title: "Home" };\nexport default function H(){ return null; }\n';
+  const { files: fixed, fixes } = autofixTemplateFiles([
+    { path: 'src/app/studio/page.tsx', content: clientPage },
+    { path: 'src/app/page.tsx', content: serverPage },
+  ]);
+  const byPath = Object.fromEntries(fixed.map((f) => [f.path, f]));
+  // client file: both server-only exports de-exported
+  assert.strictEqual(/export\s+const\s+metadata/.test(byPath['src/app/studio/page.tsx'].content), false);
+  assert.strictEqual(/export\s+(async\s+)?function\s+generateMetadata/.test(byPath['src/app/studio/page.tsx'].content), false);
+  assert.strictEqual(byPath['src/app/studio/page.tsx'].content.includes('const metadata'), true);
+  // server file: untouched (valid metadata export stays)
+  assert.strictEqual(byPath['src/app/page.tsx'].content, serverPage);
+  assert.strictEqual(fixes.some((f) => /server-only metadata/.test(f)), true);
+});
 
 console.log('bundle:');
 check('a complete site bundle validates (with no warnings)', () => {
