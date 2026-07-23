@@ -8,6 +8,7 @@ import {
   validateManifest,
   validateBundle,
   lintTemplateFiles,
+  autofixTemplateFiles,
   isSafeBundlePath,
   REQUIRED_SITE_FILES,
 } from '../index.mjs';
@@ -80,6 +81,24 @@ check('hardcoded colors warn; token consumption does not; theme.css exempt', () 
   assert.strictEqual(errors.length, 0);
   assert.strictEqual(warnings.length, 1);
   assert.strictEqual(warnings[0].startsWith('src/a.tsx:1'), true);
+});
+check('autofix repairs diluted TEXT tokens to full strength; a fixed bundle lints clean', () => {
+  const files = [
+    { path: 'src/x.tsx', content: '<p className="text-muted/80">a</p><span className="text-body/70">b</span>' },
+    { path: 'src/app/globals.css', content: '.a{color:rgb(var(--text-muted) / 0.7)} .b{color:hsl(var(--text-heading)/.5)}' },
+    { path: 'src/keep.css', content: 'background: rgb(var(--accent) / 0.1);' }, // decorative accent alpha: untouched
+    { path: 'public/logo.png', contentBase64: Buffer.from('x').toString('base64') },
+  ];
+  const { files: fixed, fixes } = autofixTemplateFiles(files);
+  assert.strictEqual(fixes.length, 2, 'two text files were repaired');
+  const byPath = Object.fromEntries(fixed.map((f) => [f.path, f]));
+  assert.strictEqual(byPath['src/x.tsx'].content.includes('text-muted/80'), false);
+  assert.strictEqual(byPath['src/x.tsx'].content.includes('text-body/70'), false);
+  assert.strictEqual(byPath['src/x.tsx'].content.includes('text-muted'), true);
+  assert.strictEqual(byPath['src/app/globals.css'].content.includes('rgb(var(--text-muted))'), true);
+  assert.strictEqual(byPath['src/keep.css'].content, 'background: rgb(var(--accent) / 0.1);', 'accent alpha untouched');
+  // The repaired files no longer trip the linter.
+  assert.deepStrictEqual(lintTemplateFiles(fixed).errors, []);
 });
 
 console.log('bundle:');

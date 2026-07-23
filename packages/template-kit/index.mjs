@@ -275,6 +275,36 @@ export function lintTemplateFiles(files) {
   return { errors, warnings };
 }
 
+// Global-flag variants of the diluted-text patterns, for repair.
+const DILUTED_TW_FIX = /\btext-(muted|body|heading)\/\d+/g;
+const DILUTED_CSS_FIX = /(var\(\s*--text-[a-z-]+\s*\))\s*\/\s*[\d.]+%?/g;
+
+/**
+ * Deterministically repair the ONE hard error the linter flags: text tokens
+ * used at reduced opacity. The fix is unambiguous and only ever RAISES contrast
+ * (full-strength --text-muted is exactly what the rulebook prescribes for
+ * secondary text), so callers can auto-apply it at import instead of bouncing a
+ * generation back for a purely mechanical change. Decorative alpha on ACCENT/BG
+ * tokens is untouched (the linter allows it). Returns { files, fixes }.
+ */
+export function autofixTemplateFiles(files) {
+  const fixes = [];
+  const out = (files || []).map((file) => {
+    if (!file || typeof file.path !== 'string' || !TEXT_EXT_RE.test(file.path)) return file;
+    const text = decodeFileContent(file);
+    if (!DILUTED_TW_RE.test(text) && !DILUTED_CSS_RE.test(text)) return file;
+    let n = 0;
+    const fixed = text
+      .replace(DILUTED_TW_FIX, (_m, g) => { n += 1; return 'text-' + g; })
+      .replace(DILUTED_CSS_FIX, (_m, g) => { n += 1; return g; });
+    if (n === 0) return file;
+    fixes.push(`${file.path}: set ${n} reduced-opacity text token${n > 1 ? 's' : ''} to full strength for contrast`);
+    const { contentBase64, ...rest } = file;
+    return { ...rest, content: fixed };
+  });
+  return { files: out, fixes };
+}
+
 // ── Bundle validation (the import gate) ──────────────────────────────────
 
 export function validateBundle(bundle) {

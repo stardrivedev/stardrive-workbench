@@ -19,7 +19,7 @@ import { createAuth, SCOPES } from './lib/auth.mjs';
 import { mintKey, listKeys, rotateKey, revokeKey } from './lib/keys.mjs';
 import { createAccounts } from './lib/accounts.mjs';
 import { createBilling } from './lib/billing.mjs';
-import { loadCatalog, createImportedStore, validateManifest, validateBundle, summarize } from './lib/templates.mjs';
+import { loadCatalog, createImportedStore, validateManifest, validateBundle, autofixTemplateFiles, summarize } from './lib/templates.mjs';
 import { createJobRunner } from './lib/jobs.mjs';
 import { relayChat, studioConfig, copyModel } from './lib/chat-proxy.mjs';
 import { createStaticServer } from './lib/static.mjs';
@@ -381,15 +381,26 @@ const ROUTES = [
     // warnings import and are kept on the record.
     method: 'POST', pattern: '/v1/templates', scope: 'templates', meter: 'templates.import', bodyLimit: 40_000_000,
     handler: ({ body, key }) => {
-      const v = validateBundle(body);
+      // Auto-repair the one deterministic hard error (reduced-opacity text
+      // tokens) so a good generation isn't bounced for a mechanical fix; the
+      // repair only raises contrast. Everything else still rejects honestly.
+      let bundle = body;
+      let autofixes = [];
+      if (body && Array.isArray(body.files)) {
+        const repaired = autofixTemplateFiles(body.files);
+        bundle = { ...body, files: repaired.files };
+        autofixes = repaired.fixes;
+      }
+      const v = validateBundle(bundle);
       if (!v.ok) {
-        return { status: 422, body: { error: { code: 'invalid_bundle', message: 'Template bundle rejected.' }, errors: v.errors, warnings: v.warnings } };
+        return { status: 422, body: { error: { code: 'invalid_bundle', message: 'Template bundle rejected.' }, errors: v.errors, warnings: [...autofixes, ...v.warnings] } };
       }
-      if (catalog.has(body.manifest.name)) {
-        throw httpError(409, 'name_conflict', `"${body.manifest.name}" is a first-party catalog name — imported templates cannot shadow the bundled catalog.`);
+      if (catalog.has(bundle.manifest.name)) {
+        throw httpError(409, 'name_conflict', `"${bundle.manifest.name}" is a first-party catalog name — imported templates cannot shadow the bundled catalog.`);
       }
-      const { name, existed } = imported.put(key.account, body, v.warnings);
-      return { status: existed ? 200 : 201, body: { name, source: 'imported', warnings: v.warnings } };
+      const warnings = [...autofixes, ...v.warnings];
+      const { name, existed } = imported.put(key.account, bundle, warnings);
+      return { status: existed ? 200 : 201, body: { name, source: 'imported', warnings } };
     },
   },
   {
