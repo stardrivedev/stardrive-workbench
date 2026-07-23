@@ -10,8 +10,8 @@
  *
  * Configuration (all optional except the key, which gates the feature):
  *   STARDRIVE_LLM_KEY        the provider secret (unset → Studio is dormant)
- *   STARDRIVE_LLM_PROVIDER   "openai" (default; ChatGPT 5.6 Sol) | "anthropic"
- *   STARDRIVE_LLM_MODEL      model id (defaults: gpt-5.6-sol / claude-sonnet-5)
+ *   STARDRIVE_LLM_PROVIDER   "openai" (default; ChatGPT 5.6 Terra) | "anthropic"
+ *   STARDRIVE_LLM_MODEL      model id (defaults: gpt-5.6-terra / claude-sonnet-5)
  *   STARDRIVE_LLM_BASE_URL   override host (OpenAI-compatible endpoints)
  *   STARDRIVE_LLM_MAX_TOKENS integer cap (default 16000)
  */
@@ -19,12 +19,12 @@
 const TIMEOUT_MS = 300_000; // template generations are long
 const httpError = (status, code, message) => Object.assign(new Error(message), { status, code });
 
-const DEFAULT_MODEL = { anthropic: 'claude-sonnet-5', openai: 'gpt-5.6-sol' };
+const DEFAULT_MODEL = { anthropic: 'claude-sonnet-5', openai: 'gpt-5.6-terra' };
 
 /** Public, secret-free view of how the Studio is configured (for the UI). */
 export function studioConfig() {
-  // Operator decision (2026-07-20): OpenAI is the default provider; the
-  // Studio runs on ChatGPT 5.6 Sol unless env overrides.
+  // Operator decision (2026-07-22): OpenAI is the default provider; the
+  // Studio runs on ChatGPT 5.6 Terra unless env overrides.
   const provider = process.env.STARDRIVE_LLM_PROVIDER === 'anthropic' ? 'anthropic' : 'openai';
   return {
     configured: Boolean(process.env.STARDRIVE_LLM_KEY),
