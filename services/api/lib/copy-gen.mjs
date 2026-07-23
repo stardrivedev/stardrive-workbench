@@ -131,9 +131,27 @@ function extractJson(text) {
   return JSON.parse(t);
 }
 
+/** The exact copywriter prompt for one site — shared by the interactive path
+ *  (aiPack below) and Batch Building's batched copy requests. */
+export function copyPromptFor({ siteName, facts = {}, modules = [] }) {
+  return {
+    system: `You are a senior website copywriter. Write finished, ready-to-publish copy for a small business website. ${SCHEMA_HINT}`,
+    user: `Business name: ${siteName}\nSelected feature pages: ${(modules || []).join(', ') || 'none beyond home/about/contact'}\n\nFacts provided by the owner:\n${JSON.stringify(facts, null, 2)}`,
+  };
+}
+
+/** A model's copy response → a complete normalized pack. Malformed output
+ *  degrades to the deterministic heuristic pack — copy never fails a build. */
+export function packFromText(text, { siteName, facts = {} } = {}) {
+  try {
+    return normalizePack(extractJson(text), { siteName, facts });
+  } catch {
+    return normalizePack({}, { siteName, facts });
+  }
+}
+
 async function aiPack({ siteName, facts, modules }) {
-  const system = `You are a senior website copywriter. Write finished, ready-to-publish copy for a small business website. ${SCHEMA_HINT}`;
-  const user = `Business name: ${siteName}\nSelected feature pages: ${(modules || []).join(', ') || 'none beyond home/about/contact'}\n\nFacts provided by the owner:\n${JSON.stringify(facts, null, 2)}`;
+  const { system, user } = copyPromptFor({ siteName, facts, modules });
   // The copywriter runs on a lighter model than the Studio's template generator.
   const { content, model, tokens } = await relayChat({ system, messages: [{ role: 'user', content: user }], model: copyModel() });
   return { raw: extractJson(content), model, tokens };

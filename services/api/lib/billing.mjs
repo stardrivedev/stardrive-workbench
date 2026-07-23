@@ -33,6 +33,7 @@ export const PLANS = {
   beta: {
     label: 'Beta', order: 0, hidden: true, priceUsd: 0,
     includedTokens: 5_000_000, includedAssemblies: null, overagePer1kUsd: null,
+    batch: true, // operator/testing plan gets every capability
     blurb: 'Free while pricing is finalized with founding licensees.',
   },
   free: {
@@ -53,7 +54,10 @@ export const PLANS = {
   agency: {
     label: 'Agency', order: 4, priceUsd: 299,
     includedTokens: 5_000_000, includedAssemblies: null, overagePer1kUsd: 0.075,
-    blurb: 'High volume, the lowest per-site rate.',
+    // Batch Building: queue many builds, run them overnight on the provider's
+    // Batch API, come back to finished sites. The Agency tier's flagship perk.
+    batch: true,
+    blurb: 'High volume, the lowest per-site rate, overnight Batch Building.',
   },
 };
 
@@ -82,6 +86,7 @@ export function planCatalog() {
       includedAssemblies: p.includedAssemblies,
       overagePer1kUsd: p.overagePer1kUsd,
       popular: Boolean(p.popular),
+      batch: Boolean(p.batch),
       blurb: p.blurb,
       approxDesigns: Math.round(p.includedTokens / TOKENS_PER_GENERATION),
       approxSites: Math.round(p.includedTokens / TOKENS_PER_SITE),
@@ -146,6 +151,7 @@ export function createBilling(accounts) {
     return {
       plan: account.plan,
       planLabel: plan.label,
+      batch: Boolean(plan.batch), // Batch Building available on this plan?
       checkoutConfigured: configured(),
       currency: 'usd',
       usage,

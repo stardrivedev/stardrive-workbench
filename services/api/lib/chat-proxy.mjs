@@ -131,3 +131,103 @@ export async function relayChat({ system, messages, model: modelOverride } = {})
     clearTimeout(timer);
   }
 }
+
+/* ══════════════ Batch API (Batch Building) ══════════════
+ * The provider's Batch API runs many chat requests asynchronously (~24h
+ * window) at roughly half the token price — the engine behind the Agency
+ * tier's Batch Building. OpenAI-only (like image generation was); the
+ * relay above stays the interactive path.
+ *
+ * Testability: pass a fake provider object to createBatchProvider callers
+ * (see lib/batches.mjs) — this real one is the default. */
+
+function requireOpenAI() {
+  const key = process.env.STARDRIVE_LLM_KEY;
+  if (!key) {
+    throw httpError(501, 'studio_unconfigured', 'Batch Building needs the operator model key (STARDRIVE_LLM_KEY).');
+  }
+  if (studioConfig().provider !== 'openai') {
+    throw httpError(501, 'batch_unsupported', 'Batch Building currently requires the OpenAI provider.');
+  }
+  const base = String(process.env.STARDRIVE_LLM_BASE_URL || 'https://api.openai.com').replace(/\/$/, '');
+  return { key, base };
+}
+
+async function providerJson(res, what) {
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw httpError(502, 'provider_error', data?.error?.message || `${what} returned ${res.status}.`);
+  return data;
+}
+
+/**
+ * The real provider Batch API adapter. Each request:
+ *   { customId, model, system?, messages, maxTokens? }
+ * submit() → { providerBatchId }; poll() → { status, counts, outputFileId,
+ * errorFileId }; outputs(fileId) → { [customId]: { content?, error? } }.
+ */
+export function realBatchProvider() {
+  return {
+    async submit(requests) {
+      const { key, base } = requireOpenAI();
+      const jsonl = requests.map((r) => JSON.stringify({
+        custom_id: r.customId,
+        method: 'POST',
+        url: '/v1/chat/completions',
+        body: {
+          model: r.model,
+          max_completion_tokens: r.maxTokens || Number(process.env.STARDRIVE_LLM_MAX_TOKENS) || 48000,
+          messages: [...(r.system ? [{ role: 'system', content: r.system }] : []), ...r.messages],
+        },
+      })).join('\n');
+      // Upload the JSONL as a batch input file (multipart), then open the batch.
+      const form = new FormData();
+      form.append('purpose', 'batch');
+      form.append('file', new Blob([jsonl], { type: 'application/jsonl' }), 'batch.jsonl');
+      const up = await providerJson(await fetch(`${base}/v1/files`, {
+        method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: form,
+      }), 'File upload');
+      const batch = await providerJson(await fetch(`${base}/v1/batches`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input_file_id: up.id, endpoint: '/v1/chat/completions', completion_window: '24h' }),
+      }), 'Batch create');
+      return { providerBatchId: batch.id };
+    },
+
+    async poll(providerBatchId) {
+      const { key, base } = requireOpenAI();
+      const b = await providerJson(await fetch(`${base}/v1/batches/${providerBatchId}`, {
+        headers: { Authorization: `Bearer ${key}` },
+      }), 'Batch status');
+      return {
+        status: b.status, // validating | in_progress | finalizing | completed | failed | expired | cancelled
+        counts: b.request_counts || {},
+        outputFileId: b.output_file_id || null,
+        errorFileId: b.error_file_id || null,
+      };
+    },
+
+    async outputs(fileId) {
+      const { key, base } = requireOpenAI();
+      const res = await fetch(`${base}/v1/files/${fileId}/content`, { headers: { Authorization: `Bearer ${key}` } });
+      if (!res.ok) throw httpError(502, 'provider_error', `File content returned ${res.status}.`);
+      const text = await res.text();
+      const out = {};
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue;
+        let row;
+        try { row = JSON.parse(line); } catch { continue; }
+        const id = row.custom_id;
+        if (!id) continue;
+        const body = row.response?.body;
+        const content = body?.choices?.[0]?.message?.content;
+        if (typeof content === 'string' && content.length) {
+          out[id] = { content, tokens: tokensOf(body.usage) };
+        } else {
+          out[id] = { error: row.error?.message || body?.error?.message || `finish: ${body?.choices?.[0]?.finish_reason || 'no output'}` };
+        }
+      }
+      return out;
+    },
+  };
+}

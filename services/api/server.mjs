@@ -32,6 +32,7 @@ import { tarGzDir } from './lib/archive.mjs';
 import { pushToGitHub } from './lib/deploy.mjs';
 import { deployToVercel } from './lib/deploy-vercel.mjs';
 import { createEmail } from './lib/email.mjs';
+import { createBatches } from './lib/batches.mjs';
 import { runMapping, validateMapping } from '../../packages/field-mapping/index.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -67,6 +68,16 @@ const jobs = createJobRunner(store, { engine: ENGINE, assets, engineDir: ENGINE_
 const connections = createConnections(store, VAR_DIR);
 const email = createEmail();
 const livePreview = createLivePreview(); // per-site `next start` on localhost
+
+// Batch Building (Agency tier): overnight bulk builds via the provider Batch
+// API. Reconcile on boot (open batches resume across restarts — the provider
+// batch keeps running server-side regardless) and once a minute after.
+const batches = createBatches(store, {
+  runner: jobs, imported, catalog, accounts, email,
+  authMeter: (keyId, name, n) => auth.meter(keyId, name, n),
+});
+setTimeout(() => batches.reconcile().catch(() => {}), 3_000).unref?.();
+setInterval(() => batches.reconcile().catch(() => {}), 60_000).unref?.();
 
 function parseCookies(req) {
   const out = {};
@@ -950,6 +961,44 @@ const ROUTES = [
       auth.meter(key.id, 'studio.generations');
       if (result.tokens) auth.meter(key.id, 'studio.tokens', result.tokens);
       return { status: 200, body: result };
+    },
+  },
+
+  // ── Batch Building (Agency tier) ────────────────────────────────────────
+  // Queue many builds, run them in one go on the provider Batch API (~half
+  // the token cost, async up to 24h), come back to finished sites. Failed
+  // builds are isolated and recoverable (generate-now / requeue).
+  {
+    method: 'POST', pattern: '/v1/batches', scope: 'sites', meter: 'batches.submit', bodyLimit: 2_000_000,
+    handler: async ({ body, key }) => {
+      const account = accounts.getAccount(key.account) || { id: key.account, plan: 'beta' };
+      if (!billing.planAllows(account, 'batch')) {
+        throw httpError(403, 'plan_required', 'Batch Building is an Agency-plan feature — upgrade to queue overnight builds.');
+      }
+      billing.checkStudioQuota(account, billing.usageSummary(account, listKeys, auth.usageFor, store));
+      const batch = await batches.submit(key.account, key.id, body?.builds);
+      return { status: 202, body: { batchId: batch.id, status: batch.status, count: batch.builds.length } };
+    },
+  },
+  {
+    method: 'GET', pattern: '/v1/batches', scope: 'sites',
+    handler: ({ key }) => ({ status: 200, body: { batches: batches.list(key.account), backlog: batches.backlogList(key.account) } }),
+  },
+  {
+    method: 'GET', pattern: '/v1/batches/:id', scope: 'sites',
+    handler: ({ params, key }) => ({ status: 200, body: batches.detail(key.account, assertUuid(params.id, 'batch id')) }),
+  },
+  {
+    method: 'POST', pattern: '/v1/batches/:id/builds/:cid/requeue', scope: 'sites',
+    handler: ({ params, key }) => ({ status: 200, body: batches.requeue(key.account, assertUuid(params.id, 'batch id'), String(params.cid)) }),
+  },
+  {
+    method: 'POST', pattern: '/v1/batches/:id/builds/:cid/generate-now', scope: 'sites',
+    handler: ({ params, key }) => {
+      const account = accounts.getAccount(key.account) || { id: key.account, plan: 'beta' };
+      // Live regeneration spends interactive tokens; same quota gate as the Studio.
+      billing.checkStudioQuota(account, billing.usageSummary(account, listKeys, auth.usageFor, store));
+      return { status: 202, body: batches.generateNow(key.account, assertUuid(params.id, 'batch id'), String(params.cid)) };
     },
   },
 

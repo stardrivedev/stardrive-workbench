@@ -724,6 +724,27 @@ await check('studio fair-use: an oversized request is capped (413) before any mo
   assert.strictEqual(long.body.error.code, 'conversation_too_long');
 });
 
+// ── Batch Building (Agency perk) ─────────────────────────────────────────
+console.log('batch building:');
+await check('batch endpoints: empty list, honest 501 while unconfigured, 404 isolation', async () => {
+  // The list is account-scoped and starts empty (batches + backlog shape).
+  const ls = await call('GET', '/v1/batches', { key: fullKey });
+  assert.strictEqual(ls.status, 200);
+  assert.deepStrictEqual(ls.body, { batches: [], backlog: [] });
+  // Submitting with no operator model key: the plan gate passes (beta has
+  // batch), then the provider seam answers an honest 501 — never a fake queue.
+  const sub = await call('POST', '/v1/batches', { key: fullKey, body: {
+    builds: [{ name: 'Batch Test Co', siteName: 'Batch Test Co', prompt: 'A simple site.' }],
+  } });
+  assert.strictEqual(sub.status, 501);
+  assert.strictEqual(sub.body.error.code, 'studio_unconfigured');
+  // Unknown batch id → 404; malformed id → 400.
+  const miss = await call('GET', '/v1/batches/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', { key: fullKey });
+  assert.strictEqual(miss.status, 404);
+  const badId = await call('GET', '/v1/batches/not-a-uuid', { key: fullKey });
+  assert.strictEqual(badId.status, 400);
+});
+
 // ── Usage metering ───────────────────────────────────────────────────────
 console.log('usage:');
 await check('per-key counters reflect this suite', async () => {

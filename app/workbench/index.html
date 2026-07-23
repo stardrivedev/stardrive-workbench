@@ -47,6 +47,7 @@
 
     <div class="nav-group">Step 2 · Build &amp; ship a site</div>
     <a class="nav-item" href="#/sites" data-view="sites"><span class="glyph">▤</span> Sites</a>
+    <a class="nav-item" href="#/batch" data-view="batch" id="navBatch" hidden><span class="glyph">⏱</span> Batch Building</a>
 
     <div class="nav-group">Settings</div>
     <a class="nav-item" href="#/connections" data-view="connections"><span class="glyph">⇄</span> Hosting</a>
@@ -250,6 +251,26 @@
       </div>
     </section>
 
+    <!-- ═══ Batch Building (Agency) ═══ -->
+    <section class="view" id="view-batch">
+      <p class="lede"><b>Agency perk.</b> Queue a whole set of client sites at once, submit them together, and come back later, everything designed, copy-written, and ready to publish. Runs overnight on the model provider's Batch API at roughly half the cost of building one at a time; we email you when a batch is done.</p>
+      <div class="card">
+        <h2>Build list</h2>
+        <p style="font-size:0.82rem;color:var(--muted);margin:0 0 0.8rem">Add one row per site. Each gets its own template design and its own AI-written copy.</p>
+        <div id="batchBuildRows"></div>
+        <div style="display:flex;gap:0.6rem;margin-top:0.8rem;flex-wrap:wrap;align-items:center">
+          <button class="ghost" id="batchAddRow" type="button">+ Add a build</button>
+          <button class="primary" id="batchSubmitBtn" type="button">Submit batch</button>
+          <span id="batchSubmitNote" style="font-size:0.82rem;color:var(--muted)"></span>
+        </div>
+        <div id="batchSubmitOut" style="margin-top:0.6rem"></div>
+      </div>
+      <div class="card">
+        <h2>Your batches</h2>
+        <div id="batchList"><p style="color:var(--muted);font-size:0.85rem">No batches submitted yet.</p></div>
+      </div>
+    </section>
+
     <!-- ═══ Connections ═══ -->
     <section class="view" id="view-connections">
       <p class="lede">Your hosting, your accounts, your site. Connect your own Vercel, Turso, and GitHub credentials and every deploy goes to infrastructure <b>you</b> own, on whatever plan tier you choose, Stardrive never owns your website. <b>Set them once and every client site you build publishes here automatically</b>, no re-entering, ideal when you host for your clients. Only override on a site when that client hosts it themselves. Tokens are encrypted at rest, never shown again after saving, and only ever receive the assembled site: no part of the Stardrive engine is ever pushed to your accounts.</p>
@@ -359,6 +380,7 @@
     </section>
   </main>
 </div>
+<script src="/workbench/studio-prompt.js"></script>
 <script src="/workbench/app.js"></script>
 </body>
 </html>
