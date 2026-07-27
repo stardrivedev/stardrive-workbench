@@ -253,15 +253,35 @@
 
     <!-- ═══ Batch Building (Agency) ═══ -->
     <section class="view" id="view-batch">
-      <p class="lede"><b>Agency perk.</b> Queue a whole set of client sites at once, submit them together, and come back later, everything designed, copy-written, and ready to publish. Runs overnight on the model provider's Batch API at roughly half the cost of building one at a time; we email you when a batch is done.</p>
+      <p class="lede"><b>Agency perk.</b> Queue a whole set of client sites at once, submit them together, and come back later, everything designed, copy-written, and ready to publish. Each build answers the same questions a site built one at a time does, so what comes back is finished, not a shell. Runs overnight on the model provider's Batch API at roughly half the cost of building one at a time; we email you when a batch is done.</p>
       <div class="card">
-        <h2>Build list</h2>
-        <p style="font-size:0.82rem;color:var(--muted);margin:0 0 0.8rem">Add one row per site. Each gets its own template design and its own AI-written copy.</p>
-        <div id="batchBuildRows"></div>
-        <div style="display:flex;gap:0.6rem;margin-top:0.8rem;flex-wrap:wrap;align-items:center">
-          <button class="ghost" id="batchAddRow" type="button">+ Add a build</button>
+        <div class="batch-head">
+          <div>
+            <h2 style="margin:0">Build list</h2>
+            <p id="batchHeadNote" style="font-size:0.82rem;color:var(--muted);margin:0.25rem 0 0">Add one row per client site. Each gets its own design, its own written copy, and its own photos.</p>
+          </div>
+          <div class="batch-head-actions">
+            <button class="ghost" id="batchAddRow" type="button">+ Add a build</button>
+            <button class="ghost" id="batchPasteToggle" type="button">Paste a list</button>
+            <button class="ghost danger" id="batchClear" type="button">Clear list</button>
+          </div>
+        </div>
+        <div id="batchBacklogNote" style="margin-top:0.7rem"></div>
+        <div id="batchPaste" class="card" style="margin-top:0.8rem" hidden>
+          <h3 style="margin-top:0">Paste a list from your spreadsheet</h3>
+          <p style="font-size:0.82rem;color:var(--body);margin:0 0 0.5rem">One client per line, columns separated by tabs (paste straight from a sheet) or by <code>|</code>. Add a header row to name the columns in any order; otherwise this order is assumed:</p>
+          <p style="font-size:0.78rem;color:var(--muted);font-family:var(--mono);margin:0 0 0.6rem">name | business name | design brief | what they do | services (a;b;c) | contact email | about facts</p>
+          <textarea id="batchPasteText" rows="4" style="width:100%;font-size:0.85rem" placeholder="Solstice Bakery | Solstice Bakery | a family bakery known for sourdough | We bake bread fresh every morning | Sourdough;Pastries;Cakes | hello@solstice.example | Opened in 2019, family run, everything baked on site"></textarea>
+          <div style="display:flex;gap:0.6rem;margin-top:0.6rem;flex-wrap:wrap">
+            <button class="primary" id="batchPasteGo" type="button">Add these builds</button>
+          </div>
+          <div id="batchPasteOut" style="margin-top:0.6rem"></div>
+        </div>
+        <div id="batchBuildRows" style="margin-top:0.8rem"></div>
+        <div style="display:flex;gap:0.6rem;margin-top:0.9rem;flex-wrap:wrap;align-items:center">
           <button class="primary" id="batchSubmitBtn" type="button">Submit batch</button>
-          <span id="batchSubmitNote" style="font-size:0.82rem;color:var(--muted)"></span>
+          <span id="batchSaveState" style="font-size:0.8rem;color:var(--muted)"></span>
+          <span id="batchSubmitNote" style="font-size:0.82rem;color:var(--muted)">Your list saves as you type, so a big stack can be filled in over time.</span>
         </div>
         <div id="batchSubmitOut" style="margin-top:0.6rem"></div>
       </div>

@@ -13,40 +13,79 @@
  * "generate now" (run that one build immediately on the live model) or
  * "requeue" it into a per-account backlog that pre-fills the next batch.
  *
- * File-backed like everything else: batches/{id}.json, backlog under
- * batches/backlog/{account}.json — restarts resume cleanly (the provider
- * batch keeps running server-side regardless).
+ * A batch build carries the SAME intake an interactive build does, because a
+ * batched site ships to a client exactly like a hand-built one:
+ *   - the design brief (Studio),
+ *   - the feature set → engine modules (Sites),
+ *   - the full FACT set content.mjs requires for those modules (Sites step 1),
+ *   - the client's photos and logo (Sites step 2), staged per draft row and
+ *     adopted onto the site the moment it is created.
+ * Submission is READINESS-GATED per build for the same reason the interactive
+ * assemble is: nothing half-finished ships, and here it also protects the
+ * operator from spending a whole overnight run on a thin site.
+ *
+ * A DRAFT (batches/draft/{account}.json) holds the build list between visits,
+ * so a 20-site stack can be filled in over a day, from any browser, without
+ * losing work; submitting consumes it. File-backed like everything else:
+ * batches/{id}.json, backlog under batches/backlog/{account}.json — restarts
+ * resume cleanly (the provider batch keeps running server-side regardless).
  */
 import crypto from 'node:crypto';
 import { studioConfig, copyModel, relayChat, realBatchProvider } from './chat-proxy.mjs';
 import { designSystemPrompt, parseGeneratedBundle, modulesForFeatures, FEATURES } from './studio-bundle.mjs';
 import { copyPromptFor, packFromText, generateCopy } from './copy-gen.mjs';
 import { validateBundle, autofixManifest, autofixTemplateFiles } from './templates.mjs';
+import { readiness, validateFacts } from './content.mjs';
 
 const httpError = (status, code, message) => Object.assign(new Error(message), { status, code });
 
 export const MAX_BATCH_BUILDS = 20;
 const FEATURE_IDS = new Set(FEATURES.map((f) => f.id));
 const TERMINAL = new Set(['ready', 'failed', 'requeued']);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Validate one build spec from the wire → the stored spec shape. */
+// The guided design brief — the same questions the Studio asks interactively,
+// kept field-by-field so a row can be reopened and edited, not just re-read as
+// the prose prompt they compose into.
+const BRIEF_KEYS = ['business', 'vibe', 'colors', 'audience', 'extra'];
+const pickBrief = (raw) => {
+  const src = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const out = {};
+  for (const k of BRIEF_KEYS) {
+    const v = String(src[k] ?? '').trim().slice(0, 2000);
+    if (v) out[k] = v;
+  }
+  return out;
+};
+
+/** Validate one build spec from the wire → the stored spec shape. Throws on a
+ *  malformed row; incomplete CONTENT is reported by preflight(), not here, so
+ *  the operator sees every unanswered question at once. */
 function normalizeSpec(raw, i) {
   const bad = (m) => { throw httpError(422, 'bad_build', `builds[${i}]: ${m}`); };
   if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) bad('must be an object.');
   const name = String(raw.name ?? '').trim();
   const siteName = String(raw.siteName ?? '').trim();
   const prompt = String(raw.prompt ?? '').trim();
+  const tagline = String(raw.tagline ?? '').trim();
   if (!name) bad('name (the template name) is required.');
   if (!siteName) bad('siteName is required.');
   if (!prompt || prompt.length > 20_000) bad('prompt is required (max 20k chars).');
   const features = Array.isArray(raw.features) ? raw.features.filter((f) => FEATURE_IDS.has(f)) : [];
   const facts = raw.facts != null && typeof raw.facts === 'object' && !Array.isArray(raw.facts) ? raw.facts : {};
-  return { name, siteName, prompt, features, facts };
+  // A row that staged photos carries its row id so they can be adopted onto
+  // the site this build creates.
+  const rowId = UUID_RE.test(String(raw.rowId ?? '')) ? String(raw.rowId) : null;
+  // The guided brief the prompt was composed from, kept so a retry (or a
+  // duplicated row) reopens with the same answers rather than raw prose.
+  const brief = pickBrief(raw.brief);
+  return { rowId, name, siteName, tagline, prompt, brief, features, facts };
 }
 
-export function createBatches(store, { runner, imported, catalog, accounts, email, authMeter, provider = null, relay = relayChat } = {}) {
+export function createBatches(store, { runner, imported, catalog, accounts, email, authMeter, assets = null, provider = null, relay = relayChat } = {}) {
   const batchPath = (id) => `batches/${id}.json`;
   const backlogPath = (account) => `batches/backlog/${account}.json`;
+  const draftPath = (account) => `batches/draft/${account}.json`;
   const providerOf = () => provider || realBatchProvider();
 
   const save = (b) => { b.updatedAt = new Date().toISOString(); store.writeJson(batchPath(b.id), b); };
@@ -56,16 +95,66 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
     try { if (batch.keyId && authMeter) authMeter(batch.keyId, name, n); } catch { /* metering never breaks a build */ }
   }
 
-  /* ── submit ─────────────────────────────────────────────────────────── */
+  /* ── preflight: is every build actually shippable? ───────────────────── */
 
-  async function submit(account, keyId, rawBuilds) {
+  /**
+   * Check the whole build list BEFORE a single provider token is spent, and
+   * report every problem at once (not just the first) so the operator fixes
+   * the stack in one pass. Same readiness rule as the interactive assemble.
+   * Returns { specs, problems } — problems carry the row index so the UI can
+   * point at the exact card. `specs` only lines up with the input when
+   * `problems` is empty (a malformed row contributes a problem, not a spec),
+   * which is exactly when submit() uses it.
+   */
+  function preflight(rawBuilds) {
     if (!Array.isArray(rawBuilds) || !rawBuilds.length) {
       throw httpError(400, 'bad_request', 'Body must be { builds: [ { name, prompt, siteName, features?, facts? }, … ] }.');
     }
     if (rawBuilds.length > MAX_BATCH_BUILDS) {
       throw httpError(422, 'too_many_builds', `A batch holds at most ${MAX_BATCH_BUILDS} builds (got ${rawBuilds.length}).`);
     }
-    const specs = rawBuilds.map(normalizeSpec);
+    const specs = [];
+    const problems = [];
+    rawBuilds.forEach((raw, i) => {
+      let spec;
+      try {
+        spec = normalizeSpec(raw, i);
+      } catch (e) {
+        problems.push({ index: i, name: String(raw?.name ?? '').trim(), missing: [], message: e.message });
+        return;
+      }
+      specs.push(spec);
+      const modules = modulesForFeatures(spec.features);
+      const shape = validateFacts(spec.facts, modules);
+      if (!shape.ok) {
+        problems.push({ index: i, name: spec.name, missing: [], message: shape.errors.join(' ') });
+        return;
+      }
+      const r = readiness(spec.facts, modules);
+      if (!r.ready) {
+        const labels = r.missing.map((m) => m.label);
+        problems.push({
+          index: i,
+          name: spec.name,
+          missing: labels,
+          message: `Still needs: ${labels.join(', ')}.`,
+        });
+      }
+    });
+    return { specs, problems };
+  }
+
+  /* ── submit ─────────────────────────────────────────────────────────── */
+
+  async function submit(account, keyId, rawBuilds) {
+    const { specs, problems } = preflight(rawBuilds);
+    if (problems.length) {
+      throw Object.assign(
+        httpError(422, 'builds_incomplete',
+          `${problems.length} build(s) are missing required answers, so nothing was submitted. Batch runs cost real tokens and take hours, so every build is checked first.`),
+        { builds: problems }
+      );
+    }
     const requests = [];
     const builds = specs.map((s, i) => {
       const modules = modulesForFeatures(s.features);
@@ -129,7 +218,11 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
       id: crypto.randomUUID(),
       account: batch.account,
       templateId: name,
-      config: { siteName: build.siteName, modules: build.modules },
+      config: {
+        siteName: build.siteName,
+        ...(build.tagline ? { tagline: build.tagline } : {}),
+        modules: build.modules,
+      },
       parse: null,
       content: build.facts,
       copy: pack,
@@ -138,6 +231,11 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
+    // Photos staged on the draft row move onto the real site BEFORE the
+    // assemble runs, so the first build already carries the client's images.
+    if (assets && build.rowId) {
+      try { build.photos = assets.adopt(build.rowId, site.id); } catch { /* photos never sink a build */ }
+    }
     const job = runner.enqueue('assemble', site.id, batch.account);
     site.jobs.push(job.id);
     store.writeJson(`sites/${site.id}.json`, site);
@@ -254,7 +352,13 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
     return { batch, build };
   }
 
-  const specOf = (b) => ({ name: b.name, siteName: b.siteName, prompt: b.prompt, features: b.features, facts: b.facts });
+  // Everything a retry needs, including the row id so photos staged for the
+  // original attempt (never adopted, because it never reached a site) are
+  // still there when the build runs again.
+  const specOf = (b) => ({
+    rowId: b.rowId || null, name: b.name, siteName: b.siteName, tagline: b.tagline || '',
+    prompt: b.prompt, brief: b.brief || {}, features: b.features, facts: b.facts,
+  });
 
   /** "Add to next batch": the failed build's spec joins the account backlog. */
   function requeue(account, batchId, customId) {
@@ -301,6 +405,7 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
   const buildView = (b) => ({
     customId: b.customId, name: b.name, siteName: b.siteName, status: b.status,
     stage: b.stage, error: b.error, templateName: b.templateName, siteId: b.siteId, jobId: b.jobId,
+    photos: b.photos || 0, features: b.features || [],
   });
 
   function list(account) {
@@ -326,5 +431,95 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
 
   const backlogList = (account) => store.readJson(backlogPath(account), []);
 
-  return { submit, reconcile, list, detail, requeue, generateNow, backlogList, MAX_BATCH_BUILDS };
+  /* ── the draft build list ───────────────────────────────────────────── */
+  // A stack of 20 client sites is not filled in one sitting. The draft is the
+  // build list itself, saved server-side as the operator types, so the work
+  // survives a reload, a closed laptop, or a different machine — and so a
+  // row's staged photos have a stable id to hang off before any site exists.
+
+  const clip = (v, n) => String(v ?? '').slice(0, n).trim();
+
+  /** One wire row → the stored draft row. Deliberately permissive: a draft is
+   *  work in progress, so nothing here rejects an unfinished row. */
+  function draftRow(raw) {
+    const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    return {
+      rowId: UUID_RE.test(String(o.rowId ?? '')) ? String(o.rowId) : crypto.randomUUID(),
+      name: clip(o.name, 200),
+      siteName: clip(o.siteName, 200),
+      tagline: clip(o.tagline, 300),
+      prompt: clip(o.prompt, 20_000),
+      brief: pickBrief(o.brief),
+      features: Array.isArray(o.features) ? o.features.filter((f) => FEATURE_IDS.has(f)) : [],
+      facts: o.facts && typeof o.facts === 'object' && !Array.isArray(o.facts) ? o.facts : {},
+    };
+  }
+
+  const readDraft = (account) => {
+    const rows = store.readJson(draftPath(account), []);
+    return Array.isArray(rows) ? rows : [];
+  };
+
+  /** Rows + the same readiness verdict the submit gate will apply, so the UI
+   *  never has to re-implement content.mjs to show what a row still needs. */
+  function draftView(account, rows = readDraft(account)) {
+    const withState = rows.map((r) => {
+      const modules = modulesForFeatures(r.features || []);
+      const ready = readiness(r.facts || {}, modules);
+      const blocked = [];
+      if (!r.name) blocked.push('Template name');
+      if (!r.siteName) blocked.push('Business name');
+      if (!r.prompt) blocked.push('Design brief');
+      return {
+        ...r,
+        modules,
+        photos: assets ? Object.values(assets.state(r.rowId)).reduce((n, items) => n + items.length, 0) : 0,
+        readiness: { ...ready, blocked, submittable: ready.ready && !blocked.length },
+      };
+    });
+    return {
+      rows: withState,
+      backlog: backlogList(account),
+      counts: { total: withState.length, ready: withState.filter((r) => r.readiness.submittable).length },
+      max: MAX_BATCH_BUILDS,
+    };
+  }
+
+  function saveDraft(account, rawRows) {
+    if (!Array.isArray(rawRows)) throw httpError(400, 'bad_request', 'Body must be { rows: [ … ] }.');
+    if (rawRows.length > MAX_BATCH_BUILDS) {
+      throw httpError(422, 'too_many_builds', `A batch holds at most ${MAX_BATCH_BUILDS} builds (got ${rawRows.length}).`);
+    }
+    const rows = rawRows.map(draftRow);
+    // A removed row takes its staged photos with it, so uploads never leak.
+    const keep = new Set(rows.map((r) => r.rowId));
+    for (const old of readDraft(account)) {
+      if (!keep.has(old.rowId) && UUID_RE.test(String(old.rowId)) && assets) assets.discard(old.rowId);
+    }
+    store.writeJson(draftPath(account), rows);
+    return draftView(account, rows);
+  }
+
+  /** One draft row by id — the scope check for staging photo uploads. */
+  function draftRowById(account, rowId) {
+    const row = readDraft(account).find((r) => r.rowId === rowId);
+    if (!row) throw httpError(404, 'not_found', `Build row ${rowId} is not in your draft — save the list first.`);
+    return row;
+  }
+
+  const clearDraft = (account) => { store.deleteJson(draftPath(account)); };
+
+  /** Submit the saved draft (the normal path from the Workbench). */
+  async function submitDraft(account, keyId) {
+    const rows = readDraft(account);
+    if (!rows.length) throw httpError(400, 'bad_request', 'Your build list is empty — add at least one build.');
+    const batch = await submit(account, keyId, rows);
+    clearDraft(account); // staged photos are NOT discarded: they are being adopted
+    return batch;
+  }
+
+  return {
+    submit, submitDraft, preflight, reconcile, list, detail, requeue, generateNow,
+    backlogList, draftView, saveDraft, draftRowById, clearDraft, MAX_BATCH_BUILDS,
+  };
 }

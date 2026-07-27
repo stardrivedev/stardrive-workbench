@@ -12,7 +12,10 @@
  *
  * Binary files live under var/assets/<siteId>/<slot>/; metadata in
  * var/assets/<siteId>/index.json. Access is always through the site record,
- * so account scoping is inherited from loadSite().
+ * so account scoping is inherited from loadSite(). One exception by design:
+ * a Batch Building draft row stages its photos under the ROW id before any
+ * site exists (scoped by the account's draft) and `adopt()` moves them onto
+ * the real site id at creation.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -146,6 +149,41 @@ export function createAssets(store) {
     return true;
   }
 
+  /**
+   * Move one bucket's uploads onto another id, merging into whatever is
+   * already there. Batch Building stages a draft row's photos under the ROW's
+   * id (the site does not exist until the provider returns), then adopts them
+   * onto the real site id the moment it is created, so an overnight build
+   * ships the client's real images on its very first assembly.
+   */
+  function adopt(fromId, toId) {
+    const staged = state(fromId);
+    if (!Object.keys(staged).length) return 0;
+    const target = state(toId);
+    let moved = 0;
+    for (const [slotId, items] of Object.entries(staged)) {
+      const kept = [];
+      for (const a of items) {
+        const src = fileAbs(fromId, slotId, a.stored);
+        if (!fs.existsSync(src)) continue;
+        const dest = fileAbs(toId, slotId, a.stored);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.renameSync(src, dest);
+        kept.push(a);
+        moved += 1;
+      }
+      if (kept.length) target[slotId] = [...(target[slotId] ?? []), ...kept];
+    }
+    store.writeJson(indexRel(toId), target);
+    discard(fromId);
+    return moved;
+  }
+
+  /** Drop a whole bucket (a staging row was removed, or a draft was submitted). */
+  function discard(id) {
+    fs.rmSync(store.path('assets', id), { recursive: true, force: true });
+  }
+
   /** slot → [{filename, target}] — what the assembler slots where. */
   function slotting(siteId) {
     const out = {};
@@ -170,5 +208,5 @@ export function createAssets(store) {
     return count;
   }
 
-  return { slotsFor, state, add, find, remove, slotting, materialize };
+  return { slotsFor, state, add, find, remove, adopt, discard, slotting, materialize };
 }

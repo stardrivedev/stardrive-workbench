@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { VarStore } from '../lib/store.mjs';
 import { createJobRunner } from '../lib/jobs.mjs';
+import { createAssets } from '../lib/assets.mjs';
 import { loadCatalog, createImportedStore } from '../lib/templates.mjs';
 import { createBatches, MAX_BATCH_BUILDS } from '../lib/batches.mjs';
 import { REQUIRED_SITE_FILES } from '../../../packages/template-kit/index.mjs';
@@ -23,6 +24,15 @@ const store = new VarStore(varDir);
 const runner = createJobRunner(store, { engine: 'dry' });
 const catalog = loadCatalog();
 const imported = createImportedStore(store);
+const assets = createAssets(store);
+
+/** The answers content.mjs requires of every site (no feature modules). */
+const FULL_FACTS = {
+  whatYouDo: 'We bake bread every morning.',
+  aboutFacts: 'Family run since 2019. Everything is baked on site.',
+  services: ['Sourdough', 'Pastries'],
+  contactEmail: 'hello@solstice.example',
+};
 
 let failures = 0;
 const check = (name, fn) => Promise.resolve().then(fn).then(
@@ -75,7 +85,7 @@ const fakeRelay = async () => { liveCalls++; return { content: cannedDesign('liv
 
 const metered = [];
 const batches = createBatches(store, {
-  runner, imported, catalog,
+  runner, imported, catalog, assets,
   accounts: { getAccount: () => ({ id: 'acct-1', plan: 'agency', email: null }) },
   email: { send: () => ({ sent: false }) },
   authMeter: (keyId, name, n = 1) => metered.push([name, n]),
@@ -99,8 +109,8 @@ console.log('batch building (fake provider):');
 
 await check('submit: 2 builds -> 4 provider requests (design on Studio model + copy on copywriter model each)', async () => {
   const b = await batches.submit(ACCT, 'key-1', [
-    { name: 'Solstice Bakery', siteName: 'Solstice Bakery', prompt: 'A warm bakery site.', features: ['contact-form', 'faq'], facts: { whatYouDo: 'We bake bread' } },
-    { name: 'North Forge', siteName: 'North Forge Metalworks', prompt: 'An industrial metals site.', features: [], facts: {} },
+    { name: 'Solstice Bakery', siteName: 'Solstice Bakery', tagline: 'Baked daily', prompt: 'A warm bakery site.', features: ['contact-form', 'faq'], facts: FULL_FACTS },
+    { name: 'North Forge', siteName: 'North Forge Metalworks', prompt: 'An industrial metals site.', features: [], facts: FULL_FACTS },
   ]);
   assert.strictEqual(b.builds.length, 2);
   assert.strictEqual(b.status, 'in_progress');
@@ -138,6 +148,8 @@ await check('provider completes: good build -> ready; broken design -> failed, i
   const site = store.readJson(`sites/${d.builds[0].siteId}.json`);
   assert.strictEqual(site.copy.tagline, 'Canned tagline', 'batched copy pack landed on the site');
   assert.strictEqual(site.config.siteName, 'Solstice Bakery');
+  assert.strictEqual(site.config.tagline, 'Baked daily', 'tagline carried into the site config');
+  assert.deepStrictEqual(site.content, FULL_FACTS, 'the full intake landed on the site, not just a name');
   assert.strictEqual(d.builds[1].stage, 'design');
   assert.match(d.builds[1].error, /model refused/);
   assert.strictEqual(metered.some(([n]) => n === 'studio.generations'), true, 'generation metered');
@@ -156,6 +168,7 @@ await check('requeue: failed build spec joins the backlog; batch finishes', asyn
 await check('a new submit consumes matching backlog entries', async () => {
   fake.pollStatus = 'in_progress';
   const specs = batches.backlogList(ACCT);
+  assert.deepStrictEqual(specs[0].facts, FULL_FACTS, 'a requeued spec keeps its answers');
   await batches.submit(ACCT, 'key-1', specs);
   assert.strictEqual(batches.backlogList(ACCT).length, 0, 'backlog consumed');
   globalThis.__batchId2 = batches.list(ACCT)[0].id;
@@ -177,7 +190,99 @@ await check('generate-now: a failed build regenerates on the live model to ready
 await check('validation: empty, oversized, and malformed submissions are rejected', async () => {
   await assert.rejects(() => batches.submit(ACCT, 'k', []), /builds/);
   await assert.rejects(() => batches.submit(ACCT, 'k', Array.from({ length: MAX_BATCH_BUILDS + 1 }, (_, i) => ({ name: `t${i}`, siteName: 's', prompt: 'p' }))), /at most/);
-  await assert.rejects(() => batches.submit(ACCT, 'k', [{ siteName: 's', prompt: 'p' }]), /name/);
+  const bad = batches.preflight([{ siteName: 's', prompt: 'p', facts: FULL_FACTS }]);
+  assert.match(bad.problems[0].message, /name/, 'a row with no template name is reported, not thrown past');
+});
+
+await check('readiness gate: an incomplete build blocks the WHOLE submit and every gap is listed', async () => {
+  const before = batches.list(ACCT).length;
+  const providerCalls = fake.submitted.length;
+  const err = await batches.submit(ACCT, 'key-1', [
+    { name: 'Good One', siteName: 'Good One', prompt: 'p', features: [], facts: FULL_FACTS },
+    { name: 'Thin One', siteName: 'Thin One', prompt: 'p', features: [], facts: { whatYouDo: 'We do things' } },
+  ]).then(() => null, (e) => e);
+  assert.ok(err, 'submit rejected');
+  assert.strictEqual(err.code, 'builds_incomplete');
+  assert.strictEqual(err.builds.length, 1, 'only the thin build is reported');
+  assert.strictEqual(err.builds[0].index, 1);
+  // The three unanswered required questions, by their intake labels.
+  assert.deepStrictEqual(err.builds[0].missing.sort(), [
+    'A few facts about the business', 'Contact email', 'Main services or offerings',
+  ]);
+  assert.strictEqual(batches.list(ACCT).length, before, 'nothing was submitted, not even the good build');
+  assert.strictEqual(fake.submitted.length, providerCalls, 'no provider batch was opened, so no tokens were spent');
+});
+
+await check('readiness gate: a feature module pulls in its own required questions', async () => {
+  const withCareers = batches.preflight([
+    { name: 'Hiring Co', siteName: 'Hiring Co', prompt: 'p', features: ['careers'], facts: FULL_FACTS },
+  ]);
+  assert.deepStrictEqual(withCareers.problems[0].missing, ['Open roles'], 'careers demands its roles');
+  const answered = batches.preflight([
+    { name: 'Hiring Co', siteName: 'Hiring Co', prompt: 'p', features: ['careers'],
+      facts: { ...FULL_FACTS, roles: [{ title: 'Welder', summary: 'Fabrication work.' }] } },
+  ]);
+  assert.strictEqual(answered.problems.length, 0, 'answered, so it passes');
+});
+
+await check('readiness gate: a malformed email is caught before the run, not after', async () => {
+  const p = batches.preflight([
+    { name: 'Typo Co', siteName: 'Typo Co', prompt: 'p', features: [], facts: { ...FULL_FACTS, contactEmail: 'not-an-email' } },
+  ]);
+  assert.match(p.problems[0].message, /email/i);
+});
+
+await check('draft: the build list saves, reports what each row still needs, and submits', async () => {
+  const rowId = '11111111-2222-4333-8444-555555555555';
+  let view = batches.saveDraft(ACCT, [
+    { rowId, name: 'Draft Co', siteName: 'Draft Co', prompt: 'A calm site.', features: ['careers'], facts: FULL_FACTS },
+  ]);
+  assert.strictEqual(view.rows.length, 1);
+  assert.strictEqual(view.rows[0].rowId, rowId, 'the row id is stable, photos can stage against it');
+  assert.deepStrictEqual(view.rows[0].modules, ['d4-careers-portal']);
+  assert.strictEqual(view.rows[0].readiness.submittable, false, 'careers still needs its roles');
+  assert.deepStrictEqual(view.rows[0].readiness.missing.map((m) => m.label), ['Open roles']);
+  assert.strictEqual(view.counts.ready, 0);
+
+  // A photo staged against the row before any site exists.
+  const logoSlot = assets.slotsFor(null, ['d4-careers-portal']).find((s) => s.id === 'logo');
+  assets.add(rowId, logoSlot, 'logo.svg', Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'));
+
+  view = batches.saveDraft(ACCT, [
+    { ...view.rows[0], facts: { ...FULL_FACTS, roles: [{ title: 'Welder', summary: 'Fabrication.' }] } },
+  ]);
+  assert.strictEqual(view.rows[0].readiness.submittable, true, 'answered, so the row is submittable');
+  assert.strictEqual(view.rows[0].photos, 1, 'the staged photo is counted on the row');
+  assert.strictEqual(view.counts.ready, 1);
+
+  fake.pollStatus = 'in_progress';
+  const b = await batches.submitDraft(ACCT, 'key-1');
+  assert.strictEqual(b.builds.length, 1);
+  assert.strictEqual(b.builds[0].rowId, rowId, 'the build remembers the row its photos are staged under');
+  assert.strictEqual(batches.draftView(ACCT).rows.length, 0, 'submitting consumes the draft');
+  globalThis.__draftBatch = b.id;
+  globalThis.__draftRow = rowId;
+});
+
+await check('draft photos are adopted onto the site the build creates', async () => {
+  fake.pollStatus = 'completed';
+  fake.results = { 'b0-design': { content: cannedDesign('draft'), tokens: 10 }, 'b0-copy': { content: cannedCopy, tokens: 5 } };
+  const ok = await waitFor(() => batches.detail(ACCT, globalThis.__draftBatch).builds[0].status === 'ready');
+  assert.strictEqual(ok, true, 'the drafted build lands ready');
+  const build = batches.detail(ACCT, globalThis.__draftBatch).builds[0];
+  assert.strictEqual(build.photos, 1, 'one photo moved onto the site');
+  assert.strictEqual((assets.state(build.siteId).logo || []).length, 1, 'the logo is on the site, ready for assembly');
+  assert.deepStrictEqual(assets.state(globalThis.__draftRow), {}, 'the staging bucket is emptied');
+});
+
+await check('draft: dropping a row takes its staged photos with it', () => {
+  const rowId = '99999999-8888-4777-8666-555555555555';
+  batches.saveDraft(ACCT, [{ rowId, name: 'Doomed', siteName: 'Doomed', prompt: 'p', features: [], facts: {} }]);
+  const slot = assets.slotsFor(null, []).find((s) => s.id === 'logo');
+  assets.add(rowId, slot, 'logo.svg', Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'));
+  assert.strictEqual((assets.state(rowId).logo || []).length, 1);
+  batches.saveDraft(ACCT, []);
+  assert.deepStrictEqual(assets.state(rowId), {}, 'no orphaned uploads left behind');
 });
 
 await check('account isolation: another account cannot read or act on the batch', async () => {

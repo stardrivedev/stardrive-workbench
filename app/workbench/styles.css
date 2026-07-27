@@ -382,3 +382,48 @@ button.primary.glow { animation: glowpulse 1.5s ease-in-out infinite; }
 .sstep-locked { display: none; font-size: 0.85rem; color: var(--muted); padding: 0.1rem 0 0.6rem; }
 .sstep.locked > .sstep-body { display: none; }
 .sstep.locked > .sstep-locked { display: block; }
+
+/* ── Batch Building: the build list ── */
+.batch-head { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; }
+.batch-head-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+/* One row per client site: collapsed to a summary, expanded to the full
+   intake. Only one is open at a time, so a stack of twenty stays readable. */
+.brow { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); margin-top: 0.6rem; overflow: hidden; }
+.brow.open { border-color: var(--accent); }
+.brow-head {
+  display: flex; align-items: center; gap: 0.7rem; width: 100%; text-align: left;
+  background: none; border: 0; cursor: pointer; padding: 0.7rem 0.85rem; font: inherit; color: var(--ink);
+}
+.brow-head:hover { background: var(--code-bg); }
+.brow-n {
+  flex: none; width: 1.55rem; height: 1.55rem; border-radius: 50%; display: grid; place-items: center;
+  font-size: 0.78rem; font-weight: 700; background: var(--code-bg); color: var(--muted); border: 1px solid var(--line);
+}
+.brow.open .brow-n { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.brow-titles { display: grid; gap: 0.1rem; min-width: 0; }
+.brow-title { font-weight: 600; font-size: 0.94rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brow-sub { font-size: 0.76rem; color: var(--muted); }
+.brow-state { margin-left: auto; flex: none; font-size: 0.72rem; font-weight: 600; padding: 0.15rem 0.6rem; border-radius: 999px; }
+.brow-state.ok { color: var(--good); background: var(--good-soft); }
+.brow-state.warn { color: var(--warn); background: var(--warn-soft); }
+.brow-caret { flex: none; color: var(--muted); font-size: 0.8rem; }
+.brow-body { padding: 0.2rem 0.85rem 0.9rem; border-top: 1px solid var(--line); }
+.brow-foot { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.9rem; padding-top: 0.7rem; border-top: 1px solid var(--line); }
+.brow-foot button { font-size: 0.78rem; }
+
+.btabs { display: flex; gap: 0.35rem; flex-wrap: wrap; margin: 0.7rem 0 0.9rem; }
+.btabs button {
+  font: inherit; font-size: 0.8rem; padding: 0.3rem 0.7rem; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--muted); cursor: pointer;
+}
+.btabs button:hover { border-color: var(--accent); color: var(--accent); }
+.btabs button.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+.bsub { font-size: 0.9rem; color: var(--ink); margin: 1rem 0 0.1rem; }
+.bhint { font-size: 0.8rem; color: var(--muted); margin: 0.2rem 0 0.6rem; }
+.chips { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.fdot { color: var(--accent); font-weight: 700; }
+.bpreview { margin-top: 0.8rem; }
+.bpreview summary { cursor: pointer; font-size: 0.8rem; color: var(--muted); }
+.bpreview p { font-size: 0.82rem; color: var(--body); margin: 0.45rem 0 0; padding: 0.55rem 0.7rem; background: var(--code-bg); border-radius: 8px; }

@@ -726,15 +726,26 @@ await check('studio fair-use: an oversized request is capped (413) before any mo
 
 // ── Batch Building (Agency perk) ─────────────────────────────────────────
 console.log('batch building:');
+// Everything content.mjs requires of a site with no feature modules. A batch
+// build carries the same intake an interactive one does, so a submit without
+// these is refused before any token is spent.
+const BATCH_FACTS = {
+  whatYouDo: 'We build simple things.',
+  aboutFacts: 'Started in 2020, two people, still hands on.',
+  services: ['Consulting'],
+  contactEmail: 'hello@batch.example',
+};
+
 await check('batch endpoints: empty list, honest 501 while unconfigured, 404 isolation', async () => {
   // The list is account-scoped and starts empty (batches + backlog shape).
   const ls = await call('GET', '/v1/batches', { key: fullKey });
   assert.strictEqual(ls.status, 200);
   assert.deepStrictEqual(ls.body, { batches: [], backlog: [] });
   // Submitting with no operator model key: the plan gate passes (beta has
-  // batch), then the provider seam answers an honest 501 — never a fake queue.
+  // batch), the readiness gate passes (every question answered), and then the
+  // provider seam answers an honest 501 — never a fake queue.
   const sub = await call('POST', '/v1/batches', { key: fullKey, body: {
-    builds: [{ name: 'Batch Test Co', siteName: 'Batch Test Co', prompt: 'A simple site.' }],
+    builds: [{ name: 'Batch Test Co', siteName: 'Batch Test Co', prompt: 'A simple site.', facts: BATCH_FACTS }],
   } });
   assert.strictEqual(sub.status, 501);
   assert.strictEqual(sub.body.error.code, 'studio_unconfigured');
@@ -743,6 +754,63 @@ await check('batch endpoints: empty list, honest 501 while unconfigured, 404 iso
   assert.strictEqual(miss.status, 404);
   const badId = await call('GET', '/v1/batches/not-a-uuid', { key: fullKey });
   assert.strictEqual(badId.status, 400);
+});
+
+await check('batch intake: a build missing required answers is refused before any model spend', async () => {
+  const sub = await call('POST', '/v1/batches', { key: fullKey, body: {
+    builds: [{ name: 'Thin Co', siteName: 'Thin Co', prompt: 'A simple site.', facts: { whatYouDo: 'Things.' } }],
+  } });
+  assert.strictEqual(sub.status, 422, 'gated before the provider seam is reached at all');
+  assert.strictEqual(sub.body.error.code, 'builds_incomplete');
+  assert.strictEqual(sub.body.builds[0].index, 0);
+  assert.strictEqual(sub.body.builds[0].missing.length, 3, 'every unanswered question is named at once');
+});
+
+await check('batch draft: rows save with readiness, photos stage per row, an empty draft cannot submit', async () => {
+  const empty = await call('GET', '/v1/batches/draft', { key: fullKey });
+  assert.strictEqual(empty.status, 200);
+  assert.deepStrictEqual(empty.body.rows, []);
+  assert.strictEqual(empty.body.max, 20);
+
+  const saved = await call('PUT', '/v1/batches/draft', { key: fullKey, body: {
+    rows: [{ name: 'Draft Co', siteName: 'Draft Co', prompt: 'A calm site.', features: ['careers'], facts: BATCH_FACTS }],
+  } });
+  assert.strictEqual(saved.status, 200);
+  const row = saved.body.rows[0];
+  assert.deepStrictEqual(row.modules, ['d4-careers-portal']);
+  assert.strictEqual(row.readiness.submittable, false, 'careers has not listed its roles yet');
+  assert.deepStrictEqual(row.readiness.missing.map((m) => m.label), ['Open roles']);
+
+  // A photo staged against the row, before the site it belongs to exists.
+  const up = await call('POST', `/v1/batches/draft/rows/${row.rowId}/assets/logo`, {
+    key: fullKey,
+    body: { filename: 'logo.svg', contentBase64: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>').toString('base64') },
+  });
+  assert.strictEqual(up.status, 201);
+  const listed = await call('GET', `/v1/batches/draft/rows/${row.rowId}/assets`, { key: fullKey });
+  assert.strictEqual(listed.body.assets.logo.length, 1);
+  const reread = await call('GET', '/v1/batches/draft', { key: fullKey });
+  assert.strictEqual(reread.body.rows[0].photos, 1, 'the row reports its staged photo');
+
+  // Another licensee cannot see or touch that row.
+  const foreign = await call('GET', `/v1/batches/draft/rows/${row.rowId}/assets`, { key: otherAccountKey });
+  assert.strictEqual(foreign.status, 404);
+
+  const cleared = await call('DELETE', '/v1/batches/draft', { key: fullKey });
+  assert.strictEqual(cleared.status, 200);
+  const gone = await call('POST', '/v1/batches', { key: fullKey, body: {} });
+  assert.strictEqual(gone.status, 400, 'an empty draft cannot be submitted');
+});
+
+await check('content fields: the intake schema for a build that has no site yet', async () => {
+  const base = await call('GET', '/v1/content/fields', { key: fullKey });
+  assert.strictEqual(base.status, 200);
+  assert.deepStrictEqual(base.body.modules, []);
+  assert.strictEqual(base.body.fields.filter((f) => f.required).length, 4, 'four questions every site must answer');
+  assert.ok(base.body.groups.identity, 'the group labels come with it');
+  const careers = await call('GET', '/v1/content/fields?features=careers', { key: fullKey });
+  assert.deepStrictEqual(careers.body.modules, ['d4-careers-portal']);
+  assert.ok(careers.body.fields.some((f) => f.id === 'roles' && f.required), 'the module adds its own required question');
 });
 
 // ── Usage metering ───────────────────────────────────────────────────────

@@ -5,7 +5,7 @@
 // The rulebook + delivery format + feature catalog live in studio-prompt.js,
 // shared verbatim with the API server (Batch Building generates against the
 // exact same contract). Loaded before this script by index.html.
-const { RULEBOOK_PROMPT, STUDIO_FORMAT, FEATURES, featureBlockFor } = globalThis.STUDIO_PROMPTS;
+const { RULEBOOK_PROMPT, STUDIO_FORMAT, FEATURES, featureBlockFor, modulesForFeatures } = globalThis.STUDIO_PROMPTS;
 
 /* ══════════════ Small utilities ══════════════ */
 const $ = (sel) => document.querySelector(sel);
@@ -63,14 +63,20 @@ const TITLES = {
   reference: 'API reference', keys: 'API keys', billing: 'Plan & usage', rulebook: 'Rulebook',
 };
 function route() {
-  const view = (location.hash.replace('#/', '') || 'home').split('?')[0];
+  const [view, qs] = (location.hash.replace('#/', '') || 'home').split('?');
   const v = TITLES[view] ? view : 'home';
+  const params = new URLSearchParams(qs || '');
   document.querySelectorAll('.view').forEach((el) => el.classList.toggle('active', el.id === 'view-' + v));
   document.querySelectorAll('.nav-item').forEach((el) => el.classList.toggle('active', el.dataset.view === v));
   $('#viewTitle').textContent = TITLES[v];
   if (v === 'home') loadHome();
   if (v === 'templates') loadTemplates();
-  if (v === 'sites') { loadSites(); loadSiteTemplateOptions(); }
+  if (v === 'sites') {
+    loadSites();
+    loadSiteTemplateOptions();
+    // #/sites?site=<id> — how a finished batch build opens straight up.
+    if (params.get('site')) openSiteDetail(params.get('site'));
+  }
   if (v === 'batch') loadBatchView();
   if (v === 'connections') loadConnections();
   if (v === 'keys') { renderMaskedKey(); loadKeys(); }
@@ -161,6 +167,7 @@ $('#authForm').addEventListener('submit', async (e) => {
     }
     showApp(body.account);
     renderMaskedKey();
+    revealBatchNav(); // plan-gated nav, otherwise it only appeared after a reload
     // New customers land on the guided Home; returning users on their last view.
     if (authMode === 'signup') location.hash = '#/home';
     route();
@@ -443,19 +450,28 @@ function genBusy(on) {
   if (s) s.disabled = on || !studioEnabled;
 }
 
+/** The guided brief → the design prompt. One composer, so a build queued in
+ *  Batch Building asks the model for exactly what the Studio would. */
+function composeBrief({ business = '', vibe = '', colors = '', audience = '', extra = '' } = {}) {
+  if (!business.trim()) return '';
+  const parts = ['Design a website template for ' + business.trim() + '.'];
+  if (vibe.trim()) parts.push('Overall vibe: ' + vibe.trim() + '.');
+  if (colors.trim()) parts.push('Colors: ' + colors.trim() + '.');
+  if (audience.trim()) parts.push('Audience: ' + audience.trim() + '.');
+  if (extra.trim()) parts.push(extra.trim());
+  return parts.join(' ');
+}
+
 $('#genBtn')?.addEventListener('click', () => {
   const business = $('#brBusiness').value.trim();
   if (!business) { $('#brBusiness').focus(); setGenResult('<div class="report err">Tell us what kind of business it is to get started.</div>'); return; }
-  const colors = $('#brColors').value.trim();
-  const audience = $('#brAudience').value.trim();
-  const extra = $('#brExtra').value.trim();
-  const vibe = [currentVibe, $('#brVibeCustom').value.trim()].filter(Boolean).join('; ');
-  const parts = ['Design a website template for ' + business + '.'];
-  if (vibe) parts.push('Overall vibe: ' + vibe + '.');
-  if (colors) parts.push('Colors: ' + colors + '.');
-  if (audience) parts.push('Audience: ' + audience + '.');
-  if (extra) parts.push(extra);
-  runGeneration(parts.join(' '), true);
+  runGeneration(composeBrief({
+    business,
+    vibe: [currentVibe, $('#brVibeCustom').value.trim()].filter(Boolean).join('; '),
+    colors: $('#brColors').value.trim(),
+    audience: $('#brAudience').value.trim(),
+    extra: $('#brExtra').value.trim(),
+  }), true);
 });
 
 $('#sendBtn').addEventListener('click', () => {
@@ -1271,28 +1287,41 @@ async function loadSitePreviewAndQa(site) {
     '</ul></details>';
 }
 
+/** One upload compartment. Shared by the Sites photo step and the Batch
+ *  Building row, which differ only in which endpoint the buttons talk to
+ *  (`attrs` names the data-attributes each one's handlers listen for). */
+function assetSlotCard(slot, items, attrs) {
+  return '<div class="card">' +
+    '<h3 style="margin-top:0">' + esc(slot.label) + ' <span style="color:var(--muted);font-weight:400;font-size:0.78rem">' + items.length + ' / ' + slot.max + (slot.declaredBy ? ' · from ' + esc(slot.declaredBy) : '') + '</span></h3>' +
+    '<p style="font-size:0.8rem;color:var(--muted);margin:0.2rem 0 0.6rem">' + esc(slot.description) + ' <span style="font-family:var(--mono);font-size:0.72rem">→ ' + esc(slot.target) + '</span></p>' +
+    (items.length ? '<ul style="list-style:none;margin:0 0 0.6rem;padding:0;display:grid;gap:0.35rem">' + items.map((a) =>
+      '<li style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem"><code>' + esc(a.filename) + '</code>' +
+      '<span style="color:var(--muted)">' + Math.max(1, Math.round(a.bytes / 1024)) + ' KB</span>' +
+      '<button class="ghost danger" ' + attrs.del + '="' + esc(a.id) + '" data-slot="' + esc(slot.id) + '" style="margin-left:auto;padding:0.1rem 0.5rem;font-size:0.72rem">Remove</button></li>').join('') + '</ul>' : '') +
+    (items.length < slot.max
+      ? '<input type="file" ' + attrs.upload + '="' + esc(slot.id) + '" accept="' + slot.accept.map((e) => '.' + e).join(',') + '" style="font-size:0.78rem;max-width:100%">'
+      : '<div style="font-size:0.78rem;color:var(--muted)">Compartment full.</div>') +
+  '</div>';
+}
+
+/** A picked file as base64, ready for an upload endpoint. */
+function fileAsBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(',')[1]);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+}
+
 async function loadSiteAssets(siteId) {
   const root = $('#siteAssets');
   if (!root) return;
   const { status, body } = await api('/v1/sites/' + siteId + '/assets');
   if (status !== 200) { root.innerHTML = '<div class="report err">Could not load assets (' + status + ').</div>'; return; }
-  root.innerHTML = '';
-  for (const slot of body.slots) {
-    const items = body.assets[slot.id] || [];
-    const card = document.createElement('div');
-    card.className = 'card';
-    card.innerHTML =
-      '<h3 style="margin-top:0">' + esc(slot.label) + ' <span style="color:var(--muted);font-weight:400;font-size:0.78rem">' + items.length + ' / ' + slot.max + (slot.declaredBy ? ' · from ' + esc(slot.declaredBy) : '') + '</span></h3>' +
-      '<p style="font-size:0.8rem;color:var(--muted);margin:0.2rem 0 0.6rem">' + esc(slot.description) + ' <span style="font-family:var(--mono);font-size:0.72rem">→ ' + esc(slot.target) + '</span></p>' +
-      (items.length ? '<ul style="list-style:none;margin:0 0 0.6rem;padding:0;display:grid;gap:0.35rem">' + items.map((a) =>
-        '<li style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem"><code>' + esc(a.filename) + '</code>' +
-        '<span style="color:var(--muted)">' + Math.max(1, Math.round(a.bytes / 1024)) + ' KB</span>' +
-        '<button class="ghost danger" data-assetdel="' + esc(a.id) + '" data-slot="' + esc(slot.id) + '" style="margin-left:auto;padding:0.1rem 0.5rem;font-size:0.72rem">Remove</button></li>').join('') + '</ul>' : '') +
-      (items.length < slot.max
-        ? '<input type="file" data-upload="' + esc(slot.id) + '" accept="' + slot.accept.map((e) => '.' + e).join(',') + '" style="font-size:0.78rem;max-width:100%">'
-        : '<div style="font-size:0.78rem;color:var(--muted)">Compartment full.</div>');
-    root.appendChild(card);
-  }
+  root.innerHTML = body.slots
+    .map((slot) => assetSlotCard(slot, body.assets[slot.id] || [], { upload: 'data-upload', del: 'data-assetdel' }))
+    .join('');
   if (stepState && stepState.siteId === siteId) {
     stepState.hasPhotos = body.slots.some((slot) => (body.assets[slot.id] || []).length > 0);
     refreshSiteSteps();
@@ -1305,12 +1334,7 @@ $('#view-sites').addEventListener('change', async (e) => {
   const siteId = $('#siteAssets').dataset.id;
   const file = input.files[0];
   if (file.size > 8_000_000) { alert('Files must be at most 8 MB.'); input.value = ''; return; }
-  const b64 = await new Promise((res, rej) => {
-    const r = new FileReader();
-    r.onload = () => res(String(r.result).split(',')[1]);
-    r.onerror = rej;
-    r.readAsDataURL(file);
-  });
+  const b64 = await fileAsBase64(file);
   const { status, body } = await api('/v1/sites/' + siteId + '/assets/' + input.dataset.upload, {
     method: 'POST', body: { filename: file.name, contentBase64: b64 },
   });
@@ -1492,9 +1516,16 @@ const REF = [
     { m: 'POST', p: '/v1/sites/{id}/assemble', d: 'Re-assemble with the current config + latest assets.', curl: `curl -X POST {BASE}/v1/sites/{siteId}/assemble -H "Authorization: Bearer {KEY}" -d '{}'` },
     { m: 'POST', p: '/v1/sites/{id}/deploy', d: 'Push the finished site to GitHub (this request > this site\'s saved target > your account default).', curl: `curl -X POST {BASE}/v1/sites/{siteId}/deploy -H "Authorization: Bearer {KEY}" -d '{}'` },
     { m: 'POST', p: '/v1/sites/{id}/deploy/vercel', d: 'One-click publish to Vercel and get a live URL (token: request > site > account default). Auto-wires a connected database as Vercel env vars.', curl: `curl -X POST {BASE}/v1/sites/{siteId}/deploy/vercel -H "Authorization: Bearer {KEY}" -d '{}'` },
-    { m: 'POST', p: '/v1/batches', d: 'Batch Building (Agency): queue up to 20 builds in one overnight run on the provider Batch API — each build gets a template design + AI copy, then assembles to a ready site.',
-      curl: `curl -X POST {BASE}/v1/batches \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"builds":[{"name":"Solstice Bakery","siteName":"Solstice Bakery","prompt":"A warm bakery site.","features":["contact-form"],"facts":{"whatYouDo":"We bake bread"}}]}'` },
+    { m: 'GET', p: '/v1/content/fields', d: 'The intake questions a build with these features would have to answer, before any site exists. ?features=blog,careers or ?modules=d4-insights-blog.',
+      curl: `curl "{BASE}/v1/content/fields?features=careers" -H "Authorization: Bearer {KEY}"` },
+    { m: 'POST', p: '/v1/batches', d: 'Batch Building (Agency): queue up to 20 builds in one overnight run on the provider Batch API — each build gets a template design + AI copy, then assembles to a ready site. Send { builds: [ … ] }, or an empty body to submit your saved draft. Every build is readiness-checked FIRST: if any is missing required answers, nothing is submitted and 422 lists them per build.',
+      curl: `curl -X POST {BASE}/v1/batches \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"builds":[{"name":"Solstice Bakery","siteName":"Solstice Bakery","prompt":"A warm bakery site.","features":["contact-form"],"facts":{"whatYouDo":"We bake bread","aboutFacts":"Family run since 2019","services":["Sourdough"],"contactEmail":"hi@solstice.example"}}]}'` },
     { m: 'GET', p: '/v1/batches', d: 'Your batches (newest first) plus the backlog of builds queued for the next cycle.', curl: `curl {BASE}/v1/batches -H "Authorization: Bearer {KEY}"` },
+    { m: 'GET', p: '/v1/batches/draft', d: 'The saved build list: every row with its modules, staged photo count, and what it still needs before it can be submitted.', curl: `curl {BASE}/v1/batches/draft -H "Authorization: Bearer {KEY}"` },
+    { m: 'PUT', p: '/v1/batches/draft', d: 'Save the build list. Rows keep their rowId; a dropped row takes its staged photos with it.',
+      curl: `curl -X PUT {BASE}/v1/batches/draft \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"rows":[{"name":"Solstice Bakery","siteName":"Solstice Bakery","prompt":"A warm bakery site.","features":["contact-form"],"facts":{}}]}'` },
+    { m: 'POST', p: '/v1/batches/draft/rows/{rowId}/assets/{slot}', d: 'Stage a photo or logo for a queued build. Adopted onto that build\'s site the moment the batch creates it, so the overnight build already has it.',
+      curl: `curl -X POST {BASE}/v1/batches/draft/rows/{rowId}/assets/logo \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"filename":"logo.svg","contentBase64":"…"}'` },
     { m: 'GET', p: '/v1/batches/{id}', d: 'One batch with per-build status (generating/assembling/ready/failed + stage and reason).', curl: `curl {BASE}/v1/batches/{id} -H "Authorization: Bearer {KEY}"` },
     { m: 'POST', p: '/v1/batches/{id}/builds/{cid}/generate-now', d: 'Rerun one FAILED build immediately on the live model.', curl: `curl -X POST {BASE}/v1/batches/{id}/builds/b0/generate-now -H "Authorization: Bearer {KEY}"` },
     { m: 'POST', p: '/v1/batches/{id}/builds/{cid}/requeue', d: 'Move one FAILED build\'s spec into the backlog for your next batch.', curl: `curl -X POST {BASE}/v1/batches/{id}/builds/b0/requeue -H "Authorization: Bearer {KEY}"` },
@@ -1711,62 +1742,306 @@ const BATCH_STATUS_LABEL = {
   failed: '✗ Needs attention', requeued: 'Queued for next batch',
 };
 
-function batchRowHtml(spec = {}) {
-  const feats = new Set(spec.features || ['contact-form']);
-  return '<div class="card" data-batchrow style="margin-top:0.7rem">' +
-    '<div class="grid2">' +
-      '<div class="field"><label>Template name <span style="color:var(--bad)">*</span></label><input data-bf="name" value="' + esc(spec.name || '') + '" placeholder="e.g. Solstice Bakery"></div>' +
-      '<div class="field"><label>Business / site name <span style="color:var(--bad)">*</span></label><input data-bf="siteName" value="' + esc(spec.siteName || '') + '" placeholder="e.g. Solstice Bakery"></div>' +
+/* ── The build list ──────────────────────────────────────────────────── */
+// One row per client site, carrying everything an interactive build carries:
+// the design brief the Studio would ask for, the feature set, the full fact
+// intake Sites gates on, and the client's photos. The list is a server-saved
+// DRAFT, so a stack of twenty can be filled in over a day from any machine,
+// and so every row has a stable id its photos can be staged against before
+// the site it belongs to exists.
+
+let batchDraft = { rows: [], backlog: [], max: 20 };
+const batchFieldCache = new Map(); // modules key → the intake schema for them
+let batchOpenRow = null;           // only one row is expanded at a time
+let batchSaveTimer = null;
+let batchDirty = false;            // edits not yet written to the saved draft
+
+const uuid = () => (crypto.randomUUID
+  ? crypto.randomUUID()
+  : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : ((r & 0x3) | 0x8)).toString(16);
+  }));
+
+const batchRow = (id) => batchDraft.rows.find((r) => r.rowId === id);
+const rowModules = (row) => modulesForFeatures(row.features || []);
+const fieldsKey = (mods) => [...mods].sort().join(',') || 'base';
+
+/** The questions a build with these features has to answer — the same schema
+ *  the per-site intake renders from (content.mjs), fetched once per mix. */
+async function ensureRowFields(row) {
+  const mods = rowModules(row);
+  const key = fieldsKey(mods);
+  if (!batchFieldCache.has(key)) {
+    const { status, body } = await api('/v1/content/fields?modules=' + encodeURIComponent(mods.join(',')));
+    batchFieldCache.set(key, status === 200 ? body : { groups: {}, fields: [] });
+  }
+  return batchFieldCache.get(key);
+}
+const rowFields = (row) => batchFieldCache.get(fieldsKey(rowModules(row))) || { groups: {}, fields: [] };
+
+/** Mirrors content.mjs hasValue, for instant per-row feedback. The server
+ *  re-checks every row at submit, so this is a hint and never the gate. */
+function factAnswered(kind, v) {
+  const filled = (x) => typeof x === 'string' && x.trim().length > 0;
+  switch (kind) {
+    case 'list': case 'topics': return Array.isArray(v) && v.some(filled);
+    case 'people': return Array.isArray(v) && v.some((x) => x && filled(x.name));
+    case 'roles': return Array.isArray(v) && v.some((x) => x && filled(x.title));
+    case 'products': return Array.isArray(v) && v.some((x) => x && filled(x.name));
+    default: return filled(v);
+  }
+}
+
+/** What this row still needs before it can go into a batch. */
+function rowState(row) {
+  const required = rowFields(row).fields.filter((f) => f.required);
+  const missing = required.filter((f) => !factAnswered(f.kind, row.facts?.[f.id]));
+  const blocked = [];
+  if (!String(row.name || '').trim()) blocked.push('a template name');
+  if (!String(row.siteName || '').trim()) blocked.push('a business name');
+  if (!String(row.prompt || '').trim()) blocked.push('a design brief');
+  return {
+    required: required.length, answered: required.length - missing.length,
+    missing, blocked, ok: !missing.length && !blocked.length,
+  };
+}
+
+const newBatchRow = (seed = {}) => ({
+  rowId: uuid(), name: '', siteName: '', tagline: '', prompt: '', brief: {},
+  // Carry the Studio's current feature selection, the same way the Sites
+  // assemble form does, so a stack of similar sites starts from one choice.
+  features: [...enabledFeatures], facts: {}, photos: 0, ...seed,
+});
+
+/* ── saving ──────────────────────────────────────────────────────────── */
+
+function setSaveState(text) {
+  const el = $('#batchSaveState');
+  if (el) el.textContent = text;
+}
+
+async function saveBatchDraft({ now = false } = {}) {
+  clearTimeout(batchSaveTimer);
+  const put = async () => {
+    const { status, body } = await api('/v1/batches/draft', { method: 'PUT', body: { rows: batchDraft.rows } });
+    if (status !== 200) { setSaveState('Could not save the list (' + status + ').'); return false; }
+    batchDirty = false;
+    batchDraft.backlog = body.backlog || [];
+    batchDraft.max = body.max || batchDraft.max;
+    for (const saved of body.rows || []) {
+      const r = batchRow(saved.rowId);
+      if (r) r.photos = saved.photos;
+    }
+    setSaveState('Saved');
+    renderBatchSummary();
+    return true;
+  };
+  if (now) return put();
+  batchDirty = true;
+  setSaveState('Saving…');
+  batchSaveTimer = setTimeout(put, 700);
+  return true;
+}
+
+/* ── rendering ───────────────────────────────────────────────────────── */
+
+function renderBatchSummary() {
+  const total = batchDraft.rows.length;
+  const ready = batchDraft.rows.filter((r) => rowState(r).ok).length;
+  const note = $('#batchHeadNote');
+  if (note) {
+    note.innerHTML = total
+      ? '<b>' + ready + ' of ' + total + '</b> build' + (total === 1 ? '' : 's') + ' ready to submit' +
+        (ready < total ? ', the rest still need answers.' : '. Submit whenever you are ready.')
+      : 'Add one row per client site. Each gets its own design, its own written copy, and its own photos.';
+  }
+  const btn = $('#batchSubmitBtn');
+  if (btn) btn.textContent = total ? 'Submit batch (' + total + ')' : 'Submit batch';
+  const backlog = $('#batchBacklogNote');
+  if (backlog) {
+    backlog.innerHTML = batchDraft.backlog.length
+      ? '<div class="report" style="background:var(--code-bg);color:var(--body)">' +
+        '<b>' + batchDraft.backlog.length + ' build(s)</b> from a previous batch are waiting to be retried. ' +
+        '<button class="ghost" id="batchBacklogAdd" type="button" style="font-size:0.78rem;padding:0.2rem 0.6rem">Add them to this list</button></div>'
+      : '';
+  }
+}
+
+function rowPillHtml(st) {
+  const tag = (cls, text) => '<span data-role="pill" class="brow-state ' + cls + '">' + text + '</span>';
+  if (st.ok) return tag('ok', '✓ Ready');
+  if (st.blocked.length) return tag('warn', 'Needs ' + esc(st.blocked[0]));
+  return tag('warn', st.answered + ' of ' + st.required + ' essentials');
+}
+
+function updateRowPill(rowId) {
+  const row = batchRow(rowId);
+  const card = document.querySelector('[data-batchrow="' + rowId + '"]');
+  if (!row || !card) return;
+  const st = rowState(row);
+  card.querySelector('[data-role="pill"]').outerHTML = rowPillHtml(st);
+  card.classList.toggle('incomplete', !st.ok);
+  const title = card.querySelector('[data-role="title"]');
+  if (title) title.textContent = row.name || row.siteName || 'Untitled build';
+  const sub = card.querySelector('[data-role="sub"]');
+  if (sub) sub.textContent = rowSubtitle(row);
+  const tab = card.querySelector('[data-btab="content"]');
+  if (tab) tab.textContent = 'The essentials (' + st.answered + '/' + st.required + ')';
+  renderBatchSummary();
+}
+
+function rowSubtitle(row) {
+  const bits = [];
+  if (row.siteName && row.name && row.siteName !== row.name) bits.push(row.siteName);
+  const feats = (row.features || []).length;
+  bits.push(feats + ' feature' + (feats === 1 ? '' : 's'));
+  if (row.photos) bits.push(row.photos + ' photo' + (row.photos === 1 ? '' : 's'));
+  return bits.join(' · ');
+}
+
+const VIBE_CHIPS = (selected) => VIBES.map((v) =>
+  '<button type="button" class="chip-btn' + (v === selected ? ' on' : '') + '" data-bvibe="' + esc(v) + '">' + esc(v) + '</button>').join('');
+
+function rowDesignPane(row) {
+  const b = row.brief || {};
+  return '<div class="grid2">' +
+      '<div class="field"><label>Template name <span style="color:var(--bad)">*</span></label>' +
+        '<input data-bf="name" value="' + esc(row.name || '') + '" placeholder="e.g. Solstice Bakery"></div>' +
+      '<div class="field"><label>Business / site name <span style="color:var(--bad)">*</span></label>' +
+        '<input data-bf="siteName" value="' + esc(row.siteName || '') + '" placeholder="e.g. Solstice Bakery"></div>' +
     '</div>' +
-    '<div class="field"><label>Design brief <span style="color:var(--bad)">*</span></label>' +
-      '<textarea data-bf="prompt" rows="2" placeholder="What kind of business, the vibe, colors, anything that shapes the design.">' + esc(spec.prompt || '') + '</textarea></div>' +
+    '<div class="field"><label>Tagline <span style="color:var(--muted);font-weight:400">(optional)</span></label>' +
+      '<input data-bf="tagline" value="' + esc(row.tagline || '') + '" placeholder="A short line under the name"></div>' +
+    '<h4 class="bsub">The design brief</h4>' +
+    '<p class="bhint">The same questions the Studio asks. They become the instruction the model designs from.</p>' +
+    '<div class="field"><label>What kind of business is it? <span style="color:var(--bad)">*</span></label>' +
+      '<textarea data-bbrief="business" rows="2" placeholder="e.g. a family bakery in Portland known for sourdough">' + esc(b.business || '') + '</textarea></div>' +
+    '<div class="field"><label>Overall vibe</label><div class="chips" data-role="vibes">' + VIBE_CHIPS(b.vibe) + '</div></div>' +
     '<div class="grid2">' +
-      '<div class="field"><label>What does the business do?</label><input data-bf="whatYouDo" value="' + esc(spec.facts?.whatYouDo || '') + '" placeholder="One plain sentence, the AI writes the copy from it"></div>' +
-      '<div class="field"><label>Contact email</label><input data-bf="contactEmail" type="email" value="' + esc(spec.facts?.contactEmail || '') + '" placeholder="hello@business.com"></div>' +
+      '<div class="field"><label>Colors</label><input data-bbrief="colors" value="' + esc(b.colors || '') + '" placeholder="e.g. warm cream and deep green"></div>' +
+      '<div class="field"><label>Audience</label><input data-bbrief="audience" value="' + esc(b.audience || '') + '" placeholder="e.g. local families"></div>' +
     '</div>' +
-    '<div class="field"><label>Main services (one per line)</label>' +
-      '<textarea data-bf="services" rows="2">' + esc(Array.isArray(spec.facts?.services) ? spec.facts.services.join('\n') : '') + '</textarea></div>' +
-    '<div class="field"><label>Features</label><div class="featurelist">' +
-      FEATURES.map((f) => '<label class="feature' + (feats.has(f.id) ? ' on' : '') + '"><input type="checkbox" data-bfeat="' + f.id + '"' + (feats.has(f.id) ? ' checked' : '') + '> ' + esc(f.label) + '</label>').join('') +
-    '</div></div>' +
-    '<button class="ghost danger" data-bact="removerow" type="button" style="font-size:0.78rem">Remove this build</button>' +
+    '<div class="field"><label>Anything else</label>' +
+      '<textarea data-bbrief="extra" rows="2" placeholder="Anything else that should shape the design.">' + esc(b.extra || '') + '</textarea></div>' +
+    '<details class="bpreview"><summary>What the model will be asked</summary>' +
+      '<p data-role="prompt">' + esc(row.prompt || 'Answer "what kind of business is it" above.') + '</p></details>';
+}
+
+function rowFeaturePane(row) {
+  const on = new Set(row.features || []);
+  const mods = rowModules(row);
+  return '<p class="bhint">Ticked features are built into the design. The ones marked with a dot also add a real engine module (a database-backed page the owner can edit), and they decide which questions the essentials ask for.</p>' +
+    '<div class="featurelist">' + FEATURES.map((f) =>
+      '<label class="feature' + (on.has(f.id) ? ' on' : '') + '"><input type="checkbox" data-bfeat="' + f.id + '"' + (on.has(f.id) ? ' checked' : '') + '> ' +
+      esc(f.label) + (f.module ? ' <span class="fdot" title="Adds an engine module">•</span>' : '') + '</label>').join('') + '</div>' +
+    '<p class="bhint" data-role="modnote">' + (mods.length
+      ? 'Engine modules for this build: <b>' + mods.map(esc).join('</b>, <b>') + '</b>.'
+      : 'No engine modules, this build ships as a designed site.') + '</p>' +
+    '<button class="ghost" data-bact="featuresToAll" type="button" style="font-size:0.78rem">Apply these features to every build</button>';
+}
+
+function rowContentPane(row) {
+  const schema = rowFields(row);
+  if (!schema.fields.length) return '<p class="bhint">Loading the questions…</p>';
+  const byGroup = {};
+  for (const f of schema.fields) (byGroup[f.group] = byGroup[f.group] || []).push(f);
+  return '<p class="bhint">Answer the starred questions and the AI writes finished copy for every page of this site, no placeholders. Exactly the intake a site built one at a time gets.</p>' +
+    Object.entries(byGroup).map(([g, fields]) =>
+      '<div class="card" style="margin-top:0.6rem"><h3 style="margin-top:0">' + esc(schema.groups[g] || g) + '</h3>' +
+      fields.map((f) => factInput(f, row.facts?.[f.id])).join('') + '</div>').join('');
+}
+
+function rowPhotosPane() {
+  return '<p class="bhint">Optional, and the reason a batched site ships as finished as a hand-built one: drop each file into its compartment now and it is already in place when the build runs overnight. Leave a compartment empty to keep the designed look.</p>' +
+    '<div class="grid2" data-role="photos"><p class="bhint">Loading…</p></div>';
+}
+
+function batchRowCardHtml(row, i) {
+  const st = rowState(row);
+  const open = batchOpenRow === row.rowId;
+  return '<div class="brow' + (open ? ' open' : '') + (st.ok ? '' : ' incomplete') + '" data-batchrow="' + esc(row.rowId) + '">' +
+    '<button class="brow-head" type="button" data-bact="toggle" aria-expanded="' + (open ? 'true' : 'false') + '">' +
+      '<span class="brow-n">' + (i + 1) + '</span>' +
+      '<span class="brow-titles"><span class="brow-title" data-role="title">' + esc(row.name || row.siteName || 'Untitled build') + '</span>' +
+      '<span class="brow-sub" data-role="sub">' + esc(rowSubtitle(row)) + '</span></span>' +
+      rowPillHtml(st) +
+      '<span class="brow-caret">' + (open ? '▾' : '▸') + '</span>' +
+    '</button>' +
+    (open
+      ? '<div class="brow-body">' +
+          '<div class="btabs">' +
+            '<button type="button" class="on" data-btab="design">Design</button>' +
+            '<button type="button" data-btab="features">Features</button>' +
+            '<button type="button" data-btab="content">The essentials (' + st.answered + '/' + st.required + ')</button>' +
+            '<button type="button" data-btab="photos">Photos &amp; logo</button>' +
+          '</div>' +
+          '<div data-bpane="design">' + rowDesignPane(row) + '</div>' +
+          '<div data-bpane="features" hidden>' + rowFeaturePane(row) + '</div>' +
+          '<div data-bpane="content" hidden>' + rowContentPane(row) + '</div>' +
+          '<div data-bpane="photos" hidden>' + rowPhotosPane() + '</div>' +
+          '<div class="brow-foot">' +
+            '<button class="ghost" data-bact="duplicate" type="button">Duplicate this build</button>' +
+            '<button class="ghost danger" data-bact="removerow" type="button">Remove this build</button>' +
+          '</div>' +
+        '</div>'
+      : '') +
   '</div>';
 }
 
-function readBatchRows() {
-  return [...document.querySelectorAll('[data-batchrow]')].map((row) => {
-    const val = (k) => row.querySelector('[data-bf="' + k + '"]')?.value.trim() || '';
-    const facts = {};
-    if (val('whatYouDo')) facts.whatYouDo = val('whatYouDo');
-    if (val('contactEmail')) facts.contactEmail = val('contactEmail');
-    const services = val('services').split('\n').map((s) => s.trim()).filter(Boolean);
-    if (services.length) facts.services = services;
-    return {
-      name: val('name'), siteName: val('siteName'), prompt: val('prompt'),
-      features: [...row.querySelectorAll('input[data-bfeat]:checked')].map((c) => c.dataset.bfeat),
-      facts,
-    };
-  });
+function renderBatchRows() {
+  const root = $('#batchBuildRows');
+  if (!root) return;
+  root.innerHTML = batchDraft.rows.length
+    ? batchDraft.rows.map(batchRowCardHtml).join('')
+    : '<p class="bhint" style="margin:0.4rem 0">No builds queued yet. Add one, or paste a list from your spreadsheet.</p>';
+  renderBatchSummary();
+  if (batchOpenRow) loadRowPhotos(batchOpenRow);
 }
+
+/** The open row's photo compartments (its own staging bucket, keyed by row).
+ *  Which compartments exist depends on the row's features, so any unsaved edit
+ *  is flushed first — otherwise a just-toggled module's page-hero slot would be
+ *  missing from the list the operator is looking at. */
+async function loadRowPhotos(rowId) {
+  const pane = document.querySelector('[data-batchrow="' + rowId + '"] [data-role="photos"]');
+  if (!pane) return;
+  if (batchDirty) await saveBatchDraft({ now: true });
+  const { status, body } = await api('/v1/batches/draft/rows/' + rowId + '/assets');
+  if (status !== 200) {
+    pane.innerHTML = '<div class="report err">' + esc(body.error?.message || 'Could not load the compartments (' + status + ').') + '</div>';
+    return;
+  }
+  pane.innerHTML = body.slots
+    .map((slot) => assetSlotCard(slot, body.assets[slot.id] || [], { upload: 'data-brupload', del: 'data-brassetdel' }))
+    .join('');
+  const row = batchRow(rowId);
+  if (row) {
+    row.photos = Object.values(body.assets).reduce((n, items) => n + items.length, 0);
+    updateRowPill(rowId);
+  }
+}
+
+/* ── loading the view ────────────────────────────────────────────────── */
 
 let batchPollTimer = null;
 async function loadBatchView() {
-  const { status, body } = await api('/v1/batches');
+  const { status, body } = await api('/v1/batches/draft');
   if (status !== 200) {
-    $('#batchList').innerHTML = '<div class="report err">' + esc(body.error?.message || 'Save an API key (top right) to use Batch Building.') + '</div>';
+    $('#batchBuildRows').innerHTML = '<div class="report err">' + esc(body.error?.message || 'Save an API key (top right) to use Batch Building.') + '</div>';
     return;
   }
-  // Build list: pre-fill from the backlog (failed builds queued for this cycle).
-  const rowsRoot = $('#batchBuildRows');
-  if (!rowsRoot.children.length) {
-    const backlog = body.backlog || [];
-    rowsRoot.innerHTML = (backlog.length ? backlog : [{}]).map(batchRowHtml).join('');
-    $('#batchSubmitNote').textContent = backlog.length
-      ? backlog.length + ' build(s) loaded from your queue (failed builds you re-queued).'
-      : '';
-  }
+  batchDraft = { rows: body.rows || [], backlog: body.backlog || [], max: body.max || 20 };
+  await Promise.all(batchDraft.rows.map(ensureRowFields));
+  renderBatchRows();
+  setSaveState(batchDraft.rows.length ? 'Saved' : '');
+  await loadBatchList();
+}
+
+async function loadBatchList() {
+  const { status, body } = await api('/v1/batches');
+  if (status !== 200) return;
   renderBatchList(body.batches || []);
-  // Poll while any batch is still running and this view is open.
   clearInterval(batchPollTimer);
   if ((body.batches || []).some((b) => b.status === 'in_progress')) {
     batchPollTimer = setInterval(async () => {
@@ -1803,50 +2078,306 @@ async function expandBatch(id) {
   if (status !== 200) { root.innerHTML = '<div class="report err">' + esc(body.error?.message || 'Could not load.') + '</div>'; return; }
   root.innerHTML = body.builds.map((x) =>
     '<div style="display:flex;gap:0.7rem;flex-wrap:wrap;align-items:center;padding:0.5rem 0;border-top:1px solid var(--line);font-size:0.85rem">' +
-      '<b>' + esc(x.name) + '</b><span style="color:var(--muted)">' + esc(x.siteName) + '</span>' +
+      '<b>' + esc(x.name) + '</b><span style="color:var(--muted)">' + esc(x.siteName) + (x.photos ? ' · ' + x.photos + ' photo(s)' : '') + '</span>' +
       '<span style="' + (x.status === 'failed' ? 'color:var(--bad);font-weight:600' : x.status === 'ready' ? 'color:var(--good)' : 'color:var(--muted)') + '">' + (BATCH_STATUS_LABEL[x.status] || esc(x.status)) + '</span>' +
       (x.status === 'failed'
         ? '<span style="color:var(--bad);font-size:0.78rem">' + esc((x.stage ? x.stage + ': ' : '') + (x.error || '')) + '</span>' +
           '<span style="margin-left:auto;display:flex;gap:0.4rem">' +
           '<button class="primary" data-bact="now" data-id="' + esc(id) + '" data-cid="' + esc(x.customId) + '" type="button" style="font-size:0.75rem;padding:0.25rem 0.6rem">Generate now</button>' +
           '<button class="ghost" data-bact="requeue" data-id="' + esc(id) + '" data-cid="' + esc(x.customId) + '" type="button" style="font-size:0.75rem;padding:0.25rem 0.6rem">Add to next batch</button></span>'
-        : x.status === 'ready'
-          ? '<a class="ghost btnlink" href="#/sites" style="margin-left:auto;font-size:0.75rem;padding:0.25rem 0.6rem">Open in Sites →</a>'
+        : x.status === 'ready' && x.siteId
+          ? '<a class="ghost btnlink" href="#/sites?site=' + esc(x.siteId) + '" style="margin-left:auto;font-size:0.75rem;padding:0.25rem 0.6rem">Open in Sites →</a>'
           : '') +
     '</div>').join('');
 }
 
-$('#batchAddRow')?.addEventListener('click', () => {
-  $('#batchBuildRows').insertAdjacentHTML('beforeend', batchRowHtml());
+/* ── bulk import from a spreadsheet ──────────────────────────────────── */
+// An agency onboarding ten clients already has them in a sheet. Paste the
+// rows and each line becomes a build, pre-filled; open any row to finish it.
+
+const PASTE_FIELDS = {
+  name: 'name', templatename: 'name', template: 'name',
+  sitename: 'siteName', business: 'siteName', businessname: 'siteName', client: 'siteName',
+  tagline: 'tagline', brief: 'brief', designbrief: 'brief',
+  whatyoudo: 'whatYouDo', services: 'services', contactemail: 'contactEmail', email: 'contactEmail',
+  aboutfacts: 'aboutFacts', about: 'aboutFacts', phone: 'phone', address: 'address', hours: 'hours',
+  mission: 'mission', whoyouserve: 'whoYouServe', differentiator: 'differentiator',
+  faqtopics: 'faqTopics', socials: 'socials',
+};
+const PASTE_DEFAULT_ORDER = ['name', 'siteName', 'brief', 'whatYouDo', 'services', 'contactEmail', 'aboutFacts'];
+const LIST_FACTS = new Set(['services', 'faqTopics', 'socials']);
+const norm = (s) => String(s).toLowerCase().replace(/[^a-z]/g, '');
+
+function parsePastedBuilds(text) {
+  const lines = String(text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return { rows: [], error: 'Nothing to import.' };
+  const cells = (line) => (line.includes('\t') ? line.split('\t') : line.split('|')).map((c) => c.trim());
+  let order = PASTE_DEFAULT_ORDER;
+  let start = 0;
+  const first = cells(lines[0]);
+  if (first.every((c) => PASTE_FIELDS[norm(c)])) { order = first.map((c) => PASTE_FIELDS[norm(c)]); start = 1; }
+  const rows = [];
+  for (const line of lines.slice(start)) {
+    const cs = cells(line);
+    const row = newBatchRow();
+    order.forEach((key, i) => {
+      const v = (cs[i] || '').trim();
+      if (!v) return;
+      if (key === 'name' || key === 'siteName' || key === 'tagline') row[key] = v;
+      else if (key === 'brief') row.brief.business = v;
+      else if (LIST_FACTS.has(key)) row.facts[key] = v.split(';').map((s) => s.trim()).filter(Boolean);
+      else row.facts[key] = v;
+    });
+    if (!row.name && !row.siteName) continue;
+    if (!row.name) row.name = row.siteName;
+    if (!row.siteName) row.siteName = row.name;
+    row.prompt = composeBrief(row.brief);
+    rows.push(row);
+  }
+  return rows.length ? { rows } : { rows: [], error: 'No usable rows found — every line needs at least a name.' };
+}
+
+/* ── events ──────────────────────────────────────────────────────────── */
+
+async function addBatchRows(rows, { open = true } = {}) {
+  const room = batchDraft.max - batchDraft.rows.length;
+  if (room <= 0) {
+    $('#batchSubmitOut').innerHTML = '<div class="report err">A batch holds at most ' + batchDraft.max + ' builds. Submit this list first.</div>';
+    return;
+  }
+  const added = rows.slice(0, room);
+  batchDraft.rows.push(...added);
+  // A single new build opens ready to fill in; a pasted stack stays collapsed
+  // so the whole list is visible at once.
+  if (open) batchOpenRow = added[added.length - 1].rowId;
+  await Promise.all(added.map(ensureRowFields));
+  await saveBatchDraft({ now: true }); // the rows must exist before photos can stage against them
+  renderBatchRows();
+  if (rows.length > room) {
+    $('#batchSubmitOut').innerHTML = '<div class="report" style="background:var(--warn-soft);color:var(--warn)">Added ' + room + ' build(s); a batch holds at most ' + batchDraft.max + '.</div>';
+  }
+}
+
+$('#batchAddRow')?.addEventListener('click', () => addBatchRows([newBatchRow()]));
+
+$('#batchPasteToggle')?.addEventListener('click', () => {
+  const box = $('#batchPaste');
+  box.hidden = !box.hidden;
+  if (!box.hidden) $('#batchPasteText').focus();
 });
 
-$('#batchSubmitBtn')?.addEventListener('click', async () => {
-  const builds = readBatchRows();
-  const out = $('#batchSubmitOut');
-  if (!builds.length) { out.innerHTML = '<div class="report err">Add at least one build.</div>'; return; }
-  out.innerHTML = '<div class="report" style="background:var(--code-bg);color:var(--muted)">Submitting ' + builds.length + ' build(s)…</div>';
-  const { status, body } = await api('/v1/batches', { method: 'POST', body: { builds } });
-  if (status === 202) {
-    $('#batchBuildRows').innerHTML = batchRowHtml();
-    $('#batchSubmitNote').textContent = '';
-    out.innerHTML = '<div class="report ok">✓ Batch submitted: ' + body.count + ' build(s). It runs in the background (up to 24h, usually much less); we email you when it\'s done. Progress shows below.</div>';
-    loadBatchView();
-  } else {
-    out.innerHTML = '<div class="report err">' + esc(body.error?.message || (body.errors || []).join('; ') || 'Submit failed (' + status + ').') + '</div>';
+$('#batchPasteGo')?.addEventListener('click', async () => {
+  const { rows, error } = parsePastedBuilds($('#batchPasteText').value);
+  const out = $('#batchPasteOut');
+  if (error) { out.innerHTML = '<div class="report err">' + esc(error) + '</div>'; return; }
+  out.innerHTML = '<div class="report ok">✓ Added ' + rows.length + ' build(s). Open each one to add photos and anything still missing.</div>';
+  $('#batchPasteText').value = '';
+  await addBatchRows(rows, { open: false });
+});
+
+$('#batchClear')?.addEventListener('click', async () => {
+  if (!batchDraft.rows.length) return;
+  if (!confirm('Clear all ' + batchDraft.rows.length + ' queued build(s), including any photos uploaded for them?')) return;
+  batchDraft.rows = [];
+  batchOpenRow = null;
+  await saveBatchDraft({ now: true });
+  renderBatchRows();
+});
+
+// Typing: update the row in memory, keep the summary honest, save on a pause.
+$('#batchBuildRows')?.addEventListener('input', (e) => {
+  const card = e.target.closest('[data-batchrow]');
+  if (!card) return;
+  const row = batchRow(card.dataset.batchrow);
+  if (!row) return;
+  const el = e.target;
+  if (el.dataset.bf) {
+    row[el.dataset.bf] = el.value;
+  } else if (el.dataset.bbrief) {
+    row.brief = row.brief || {};
+    row.brief[el.dataset.bbrief] = el.value;
+    row.prompt = composeBrief(row.brief);
+    const pv = card.querySelector('[data-role="prompt"]');
+    if (pv) pv.textContent = row.prompt || 'Answer "what kind of business is it" above.';
+  } else if (el.dataset.fact) {
+    row.facts = row.facts || {};
+    row.facts[el.dataset.fact] = parseFact(el.dataset.kind, el.value);
+  } else return;
+  updateRowPill(row.rowId);
+  saveBatchDraft();
+});
+
+// Feature toggles change which questions the essentials ask, so that pane is
+// rebuilt (answers already given are kept).
+$('#batchBuildRows')?.addEventListener('change', async (e) => {
+  const card = e.target.closest('[data-batchrow]');
+  if (!card) return;
+  const row = batchRow(card.dataset.batchrow);
+  if (!row) return;
+  const cb = e.target.closest('input[data-bfeat]');
+  if (cb) {
+    const set = new Set(row.features || []);
+    if (cb.checked) set.add(cb.dataset.bfeat); else set.delete(cb.dataset.bfeat);
+    row.features = [...set];
+    cb.closest('.feature').classList.toggle('on', cb.checked);
+    await ensureRowFields(row);
+    card.querySelector('[data-bpane="content"]').innerHTML = rowContentPane(row);
+    const mods = rowModules(row);
+    card.querySelector('[data-role="modnote"]').innerHTML = mods.length
+      ? 'Engine modules for this build: <b>' + mods.map(esc).join('</b>, <b>') + '</b>.'
+      : 'No engine modules, this build ships as a designed site.';
+    updateRowPill(row.rowId);
+    saveBatchDraft();
+    loadRowPhotos(row.rowId); // module-gated compartments (per-page heroes) change too
+    return;
+  }
+  const upload = e.target.closest('input[data-brupload]');
+  if (upload && upload.files.length) {
+    const file = upload.files[0];
+    if (file.size > 8_000_000) { alert('Files must be at most 8 MB.'); upload.value = ''; return; }
+    const b64 = await fileAsBase64(file);
+    const { status, body } = await api('/v1/batches/draft/rows/' + row.rowId + '/assets/' + upload.dataset.brupload, {
+      method: 'POST', body: { filename: file.name, contentBase64: b64 },
+    });
+    if (status !== 201) alert(body.error?.message || 'Upload failed (' + status + ').');
+    loadRowPhotos(row.rowId);
   }
 });
 
-$('#view-batch')?.addEventListener('click', async (e) => {
+$('#batchBuildRows')?.addEventListener('click', async (e) => {
+  const card = e.target.closest('[data-batchrow]');
+  if (!card) return;
+  const row = batchRow(card.dataset.batchrow);
+  if (!row) return;
+
+  const vibe = e.target.closest('[data-bvibe]');
+  if (vibe) {
+    row.brief = row.brief || {};
+    row.brief.vibe = row.brief.vibe === vibe.dataset.bvibe ? '' : vibe.dataset.bvibe;
+    row.prompt = composeBrief(row.brief);
+    card.querySelectorAll('[data-bvibe]').forEach((c) => c.classList.toggle('on', c.dataset.bvibe === row.brief.vibe));
+    const pv = card.querySelector('[data-role="prompt"]');
+    if (pv) pv.textContent = row.prompt || 'Answer "what kind of business is it" above.';
+    updateRowPill(row.rowId);
+    saveBatchDraft();
+    return;
+  }
+
+  const tab = e.target.closest('[data-btab]');
+  if (tab) {
+    card.querySelectorAll('[data-btab]').forEach((t) => t.classList.toggle('on', t === tab));
+    card.querySelectorAll('[data-bpane]').forEach((p) => { p.hidden = p.dataset.bpane !== tab.dataset.btab; });
+    if (tab.dataset.btab === 'photos') loadRowPhotos(row.rowId);
+    return;
+  }
+
+  const del = e.target.closest('button[data-brassetdel]');
+  if (del) {
+    await api('/v1/batches/draft/rows/' + row.rowId + '/assets/' + del.dataset.slot + '/' + del.dataset.brassetdel, { method: 'DELETE' });
+    loadRowPhotos(row.rowId);
+    return;
+  }
+
   const btn = e.target.closest('button[data-bact]');
   if (!btn) return;
-  if (btn.dataset.bact === 'removerow') { btn.closest('[data-batchrow]')?.remove(); return; }
+  if (btn.dataset.bact === 'toggle') {
+    batchOpenRow = batchOpenRow === row.rowId ? null : row.rowId;
+    renderBatchRows();
+    return;
+  }
+  if (btn.dataset.bact === 'removerow') {
+    batchDraft.rows = batchDraft.rows.filter((r) => r.rowId !== row.rowId);
+    if (batchOpenRow === row.rowId) batchOpenRow = null;
+    await saveBatchDraft({ now: true });
+    renderBatchRows();
+    return;
+  }
+  if (btn.dataset.bact === 'duplicate') {
+    // Everything but the identity: the common case is a run of similar sites.
+    await addBatchRows([newBatchRow({
+      name: '', siteName: '', tagline: row.tagline,
+      brief: { ...(row.brief || {}) }, prompt: row.prompt,
+      features: [...(row.features || [])], facts: JSON.parse(JSON.stringify(row.facts || {})),
+    })]);
+    return;
+  }
+  if (btn.dataset.bact === 'featuresToAll') {
+    for (const r of batchDraft.rows) r.features = [...(row.features || [])];
+    await Promise.all(batchDraft.rows.map(ensureRowFields));
+    await saveBatchDraft({ now: true });
+    renderBatchRows();
+  }
+});
+
+$('#batchBacklogNote')?.addEventListener('click', async (e) => {
+  if (!e.target.closest('#batchBacklogAdd')) return;
+  await addBatchRows(batchDraft.backlog.map((spec) => newBatchRow({
+    name: spec.name || '', siteName: spec.siteName || '', tagline: spec.tagline || '',
+    prompt: spec.prompt || '', brief: spec.brief || {},
+    features: Array.isArray(spec.features) ? spec.features : [], facts: spec.facts || {},
+    // Keep the original row id so photos staged for the failed attempt come with it.
+    ...(spec.rowId ? { rowId: spec.rowId } : {}),
+  })));
+});
+
+$('#batchSubmitBtn')?.addEventListener('click', async () => {
+  const out = $('#batchSubmitOut');
+  if (!batchDraft.rows.length) { out.innerHTML = '<div class="report err">Add at least one build.</div>'; return; }
+  if (!(await saveBatchDraft({ now: true }))) { out.innerHTML = '<div class="report err">Could not save the list, so nothing was submitted.</div>'; return; }
+  // Mirror the server's gate before spending a whole overnight run on a site
+  // that would ship half-finished.
+  const short = batchDraft.rows
+    .map((r, i) => ({ i, r, st: rowState(r) }))
+    .filter((x) => !x.st.ok);
+  if (short.length) {
+    out.innerHTML = '<div class="report err"><b>' + short.length + ' build(s) still need answers</b>, so nothing was submitted. ' +
+      'A batch run costs real tokens and takes hours, so every build is checked first.<ul style="margin:0.5rem 0 0;padding-left:1.1rem">' +
+      short.map((x) => '<li>' + (x.i + 1) + '. ' + esc(x.r.name || x.r.siteName || 'Untitled build') + ' — ' +
+        esc([...x.st.blocked.map((b) => 'needs ' + b), ...x.st.missing.map((m) => m.label)].join(', ')) + '</li>').join('') +
+      '</ul></div>';
+    document.querySelector('[data-batchrow="' + short[0].r.rowId + '"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+  // Same nudge the interactive build gives: a batch runs for hours, so a build
+  // with no logo or photos is worth one question before it goes.
+  const bare = batchDraft.rows.filter((r) => !r.photos);
+  if (bare.length && !confirm(
+    bare.length + ' of ' + batchDraft.rows.length + ' build(s) have no logo or photos yet: ' +
+    bare.map((r) => r.name || r.siteName).join(', ') +
+    '.\n\nOK = submit without them\nCancel = go add photos first')) {
+    document.querySelector('[data-batchrow="' + bare[0].rowId + '"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+  out.innerHTML = '<div class="report" style="background:var(--code-bg);color:var(--muted)">Submitting ' + batchDraft.rows.length + ' build(s)…</div>';
+  const { status, body } = await api('/v1/batches', { method: 'POST', body: {} });
+  if (status === 202) {
+    batchDraft.rows = [];
+    batchOpenRow = null;
+    setSaveState('');
+    renderBatchRows();
+    out.innerHTML = '<div class="report ok">✓ Batch submitted: ' + body.count + ' build(s). It runs in the background (up to 24h, usually much less); we email you when it\'s done. Progress shows below.</div>';
+    loadBatchView();
+    return;
+  }
+  if (status === 422 && Array.isArray(body.builds)) {
+    out.innerHTML = '<div class="report err">' + esc(body.error?.message || 'Some builds were rejected.') +
+      '<ul style="margin:0.5rem 0 0;padding-left:1.1rem">' +
+      body.builds.map((p) => '<li>' + (p.index + 1) + '. ' + esc(p.name || 'Untitled build') + ' — ' + esc(p.message) + '</li>').join('') +
+      '</ul></div>';
+    return;
+  }
+  out.innerHTML = '<div class="report err">' + esc(body.error?.message || 'Submit failed (' + status + ').') + '</div>';
+});
+
+$('#batchList')?.addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-bact]');
+  if (!btn) return;
   if (btn.dataset.bact === 'expand') { expandBatch(btn.dataset.id); return; }
   if (btn.dataset.bact === 'now' || btn.dataset.bact === 'requeue') {
     btn.disabled = true;
     const action = btn.dataset.bact === 'now' ? 'generate-now' : 'requeue';
     const { status, body } = await api('/v1/batches/' + btn.dataset.id + '/builds/' + btn.dataset.cid + '/' + action, { method: 'POST' });
     if (status >= 300) alert(body.error?.message || 'Action failed (' + status + ').');
-    if (action === 'requeue') { $('#batchBuildRows').innerHTML = ''; }
     await loadBatchView();
     expandBatch(btn.dataset.id);
   }

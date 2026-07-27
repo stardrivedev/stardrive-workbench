@@ -22,6 +22,7 @@ import { createBilling } from './lib/billing.mjs';
 import { loadCatalog, createImportedStore, validateManifest, validateBundle, autofixTemplateFiles, autofixManifest, summarize } from './lib/templates.mjs';
 import { createJobRunner } from './lib/jobs.mjs';
 import { relayChat, studioConfig, copyModel } from './lib/chat-proxy.mjs';
+import { modulesForFeatures } from './lib/studio-bundle.mjs';
 import { createStaticServer } from './lib/static.mjs';
 import { createConnections, PROVIDERS } from './lib/connections.mjs';
 import { createAssets, MAX_ASSET_BYTES } from './lib/assets.mjs';
@@ -73,7 +74,7 @@ const livePreview = createLivePreview(); // per-site `next start` on localhost
 // API. Reconcile on boot (open batches resume across restarts — the provider
 // batch keeps running server-side regardless) and once a minute after.
 const batches = createBatches(store, {
-  runner: jobs, imported, catalog, accounts, email,
+  runner: jobs, imported, catalog, accounts, email, assets,
   authMeter: (keyId, name, n) => auth.meter(keyId, name, n),
 });
 setTimeout(() => batches.reconcile().catch(() => {}), 3_000).unref?.();
@@ -588,6 +589,20 @@ const ROUTES = [
     },
   },
   {
+    // The intake SCHEMA for a hypothetical site: which questions a build with
+    // these features would have to answer. Same source of truth the per-site
+    // intake uses, so Batch Building can ask exactly what Sites asks before
+    // any site exists. ?features=blog,careers (Studio ids) or ?modules=d4-…
+    method: 'GET', pattern: '/v1/content/fields', scope: 'sites',
+    handler: ({ url }) => {
+      const csv = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
+      const features = csv(url.searchParams.get('features'));
+      const modules = csv(url.searchParams.get('modules'));
+      const resolved = modules.length ? modules : modulesForFeatures(features);
+      return { status: 200, body: { groups: GROUP_LABELS, modules: resolved, fields: requirementsFor(resolved) } };
+    },
+  },
+  {
     // The intake: the exact fields this site must/should answer (gated by its
     // chosen feature pages), the current answers, and how ready it is to ship.
     method: 'GET', pattern: '/v1/sites/:id/content', scope: 'sites',
@@ -976,13 +991,74 @@ const ROUTES = [
         throw httpError(403, 'plan_required', 'Batch Building is an Agency-plan feature — upgrade to queue overnight builds.');
       }
       billing.checkStudioQuota(account, billing.usageSummary(account, listKeys, auth.usageFor, store));
-      const batch = await batches.submit(key.account, key.id, body?.builds);
-      return { status: 202, body: { batchId: batch.id, status: batch.status, count: batch.builds.length } };
+      try {
+        // No `builds` in the body means "submit my saved draft" (what the
+        // Workbench does); an explicit list keeps the API usable headlessly.
+        const batch = body?.builds
+          ? await batches.submit(key.account, key.id, body.builds)
+          : await batches.submitDraft(key.account, key.id);
+        return { status: 202, body: { batchId: batch.id, status: batch.status, count: batch.builds.length } };
+      } catch (e) {
+        // Per-build problems come back as a list so every incomplete row can
+        // be flagged at once instead of one error at a time.
+        if (e.code !== 'builds_incomplete') throw e;
+        return { status: 422, body: { error: { code: e.code, message: e.message }, builds: e.builds } };
+      }
     },
   },
   {
     method: 'GET', pattern: '/v1/batches', scope: 'sites',
     handler: ({ key }) => ({ status: 200, body: { batches: batches.list(key.account), backlog: batches.backlogList(key.account) } }),
+  },
+  // The draft build list: the stack of sites being prepared, saved as it is
+  // typed so a 20-site batch can be filled in across sessions and machines.
+  {
+    method: 'GET', pattern: '/v1/batches/draft', scope: 'sites',
+    handler: ({ key }) => ({ status: 200, body: batches.draftView(key.account) }),
+  },
+  {
+    method: 'PUT', pattern: '/v1/batches/draft', scope: 'sites', bodyLimit: 2_000_000,
+    handler: ({ body, key }) => ({ status: 200, body: batches.saveDraft(key.account, body?.rows) }),
+  },
+  {
+    method: 'DELETE', pattern: '/v1/batches/draft', scope: 'sites',
+    handler: ({ key }) => {
+      batches.saveDraft(key.account, []); // also drops each row's staged photos
+      return { status: 200, body: { cleared: true } };
+    },
+  },
+  // Photos for a build that has no site yet: staged against the draft row and
+  // adopted onto the real site the moment the batch creates it.
+  {
+    method: 'GET', pattern: '/v1/batches/draft/rows/:rowId/assets', scope: 'sites',
+    handler: ({ params, key }) => {
+      const row = batches.draftRowById(key.account, assertUuid(params.rowId, 'row id'));
+      return { status: 200, body: { slots: assets.slotsFor(null, modulesForFeatures(row.features)), assets: assets.state(row.rowId) } };
+    },
+  },
+  {
+    method: 'POST', pattern: '/v1/batches/draft/rows/:rowId/assets/:slot', scope: 'sites', meter: 'assets.upload', bodyLimit: 16_000_000,
+    handler: ({ params, body, key }) => {
+      const row = batches.draftRowById(key.account, assertUuid(params.rowId, 'row id'));
+      const slotDef = assets.slotsFor(null, modulesForFeatures(row.features)).find((s) => s.id === String(params.slot));
+      if (!slotDef) throw httpError(422, 'unknown_slot', `No compartment "${params.slot}" on this build.`);
+      if (typeof body?.filename !== 'string' || !body.filename.trim() || typeof body?.contentBase64 !== 'string') {
+        throw httpError(400, 'bad_request', 'Body must be { filename, contentBase64 }.');
+      }
+      const buffer = Buffer.from(body.contentBase64, 'base64');
+      if (buffer.length > MAX_ASSET_BYTES) throw httpError(422, 'too_large', `Files must be at most ${Math.round(MAX_ASSET_BYTES / 1e6)} MB.`);
+      return { status: 201, body: { slot: slotDef.id, asset: assets.add(row.rowId, slotDef, body.filename.trim(), buffer) } };
+    },
+  },
+  {
+    method: 'DELETE', pattern: '/v1/batches/draft/rows/:rowId/assets/:slot/:assetId', scope: 'sites',
+    handler: ({ params, key }) => {
+      const row = batches.draftRowById(key.account, assertUuid(params.rowId, 'row id'));
+      if (!assets.remove(row.rowId, String(params.slot), assertUuid(params.assetId, 'asset id'))) {
+        throw httpError(404, 'not_found', 'Asset not found.');
+      }
+      return { status: 200, body: { deleted: params.assetId, slot: params.slot } };
+    },
   },
   {
     method: 'GET', pattern: '/v1/batches/:id', scope: 'sites',
@@ -1083,7 +1159,7 @@ const server = createServer(async (req, res) => {
     if (route.rawBody) rawBody = await readRawBody(req, route.bodyLimit);
     else body = await readBody(req, route.bodyLimit);
   }
-  const out = await route.handler({ params, body, rawBody, key, account, req });
+  const out = await route.handler({ params, body, rawBody, key, account, req, url });
   if (key) {
     auth.meter(key.id, 'requests');
     if (route.meter && out.status < 400) auth.meter(key.id, route.meter);
