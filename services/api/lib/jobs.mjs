@@ -154,6 +154,30 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
     save(job);
   }
 
+  /**
+   * A finished build is also a picture of the template it was built from, so
+   * keep the newest one beside that template's record. This is what turns a
+   * library of generated designs from a list of slugs into something a person
+   * can recognise. One hook covers Studio previews and batch builds alike.
+   *
+   * Only the full QA tier produces the screenshot, so with QA off there is
+   * simply no image and the UI falls back to a lettered tile.
+   */
+  function captureThumbnail(job) {
+    try {
+      const shot = store.path('workspaces', job.siteId, PREVIEW_FILE);
+      if (!fs.existsSync(shot)) return;
+      const site = store.readJson(`sites/${job.siteId}.json`);
+      const account = site?.account ?? job.account;
+      const name = site?.templateId;
+      // Own templates only: the shared first-party catalog is not per-account.
+      if (!account || !name || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) return;
+      const dest = store.path('templates', account, `${name}.png`);
+      if (!fs.existsSync(path.dirname(dest))) return; // no imported template by that name
+      fs.copyFileSync(shot, dest);
+    } catch { /* a thumbnail is never worth failing a build over */ }
+  }
+
   function enqueue(kind, siteId, account, opts = {}) {
     const job = {
       id: crypto.randomUUID(),
@@ -186,6 +210,7 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
       if (!executor) throw new Error(`No executor for job kind "${job.kind}".`);
       await executor(job);
       job.status = 'done';
+      captureThumbnail(job);
     } catch (err) {
       job.status = 'failed';
       log(job, `FAILED: ${err.message}`);

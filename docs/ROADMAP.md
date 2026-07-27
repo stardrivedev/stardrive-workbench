@@ -125,6 +125,43 @@ hermetic offline builds):
   `GET /v1/content/fields` (the intake schema for a build with no site yet),
   `GET|PUT|DELETE /v1/batches/draft`, and per-row asset staging under
   `/v1/batches/draft/rows/{rowId}/assets`.
+- **Custom domains SHIPPED 2026-07-27.** The last mile of every client job,
+  built host-agnostic because the whole premise is that the studio owns its
+  hosting. The domain is plain data on the site (`site.domain`), not a
+  property of one provider. Where Stardrive holds a token for the host it
+  attaches the domain, polls verification, and reads the required DNS records
+  BACK from that host (never a hardcoded IP that can go stale); Vercel is
+  implemented, and `lib/domains.mjs` is the seam for the next one. Everywhere
+  else, Stardrive records the domain and shows the record SHAPE plus the
+  handoff text, saying plainly that the values come from your host, because
+  inventing DNS for a host we cannot see would be worse than useless.
+  Publishing also sets `NEXT_PUBLIC_SITE_URL`, which `robots.ts` and
+  `sitemap.ts` already read: without it a site on a custom domain keeps
+  advertising the wrong canonical host to search engines.
+- **Batch Building: review, bulk, and reuse SHIPPED 2026-07-27.**
+  - **A blocking design review.** A batch invents designs nobody has seen, so
+    each one lands in `review` and its site cannot be published until the
+    operator approves it. The gate lives at the deploy actuators, not only in
+    the Batch screen, or it would be theatre. A contact sheet shows every
+    design side by side; Discard deletes that site and the template that build
+    generated. A build made from a template the operator already owns skips
+    review, because that design was reviewed when it was imported.
+  - **Bulk actions.** Publish every approved site in one detached run
+    (progress on the batch record, one failure never stops the rest), and
+    download the whole batch as one archive with a directory per site.
+  - **Build from an existing template.** A row can name a template instead of
+    a brief: no design request is sent at all, so ten franchise sites cost
+    half as much, finish sooner, and look like one brand.
+- **Studio: work that persists SHIPPED 2026-07-27.** The design and its refine
+  conversation autosave server-side (`studio/draft/{account}.json`), compacted
+  first because every generation is a whole template. A template in the
+  library reopens in the Studio to be refined instead of being frozen at
+  import (`GET /v1/templates/{name}?include=files`, own templates only).
+  Design demos are flagged `preview` and kept out of the Sites list, which is
+  the client roster, and each new demo supersedes the last instead of piling
+  up whole workspaces. The library itself is now a grid of screenshots
+  (captured by the full QA tier, with a lettered plate when there is none),
+  so twenty generated designs are finally distinguishable.
 - **Customer-facing side v1 SHIPPED 2026-07-17**: the public marketing site
   at `/` (app/site — deliberate night-sky identity, how-it-works, pillars,
   Studio story, honest private-beta pricing card, FAQ incl. the

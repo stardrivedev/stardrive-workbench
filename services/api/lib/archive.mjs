@@ -56,11 +56,10 @@ function walk(dir, base, out) {
   }
 }
 
-/** tar.gz of a directory tree; paths are relative to `dir`. */
-export function tarGzDir(dir, rootName = '') {
+/** The file entries of one tree, as tar blocks. */
+function blocksFor(dir, rootName, parts) {
   const files = [];
   walk(dir, rootName, files);
-  const parts = [];
   for (const f of files) {
     const content = fs.readFileSync(f.abs);
     parts.push(header(f.rel, content.length, f.stat.mtimeMs));
@@ -68,6 +67,30 @@ export function tarGzDir(dir, rootName = '') {
     const pad = (BLOCK - (content.length % BLOCK)) % BLOCK;
     if (pad) parts.push(Buffer.alloc(pad));
   }
+}
+
+/** tar.gz of a directory tree; paths are relative to `dir`. */
+export function tarGzDir(dir, rootName = '') {
+  const parts = [];
+  blocksFor(dir, rootName, parts);
   parts.push(Buffer.alloc(BLOCK * 2)); // two zero blocks = end of archive
+  return zlib.gzipSync(Buffer.concat(parts));
+}
+
+/**
+ * One tar.gz holding SEVERAL trees, each under its own top-level directory —
+ * a whole batch of finished sites in a single download. Names are made unique
+ * so two clients with the same business name cannot overwrite each other.
+ */
+export function tarGzDirs(entries) {
+  const parts = [];
+  const used = new Set();
+  for (const { dir, name } of entries) {
+    let root = name || 'site';
+    for (let n = 2; used.has(root); n += 1) root = `${name}-${n}`;
+    used.add(root);
+    blocksFor(dir, root, parts);
+  }
+  parts.push(Buffer.alloc(BLOCK * 2));
   return zlib.gzipSync(Buffer.concat(parts));
 }

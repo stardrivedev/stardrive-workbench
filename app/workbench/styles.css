@@ -427,3 +427,34 @@ button.primary.glow { animation: glowpulse 1.5s ease-in-out infinite; }
 .bpreview { margin-top: 0.8rem; }
 .bpreview summary { cursor: pointer; font-size: 0.8rem; color: var(--muted); }
 .bpreview p { font-size: 0.82rem; color: var(--body); margin: 0.45rem 0 0; padding: 0.55rem 0.7rem; background: var(--code-bg); border-radius: 8px; }
+
+/* ── Template library: designs you can recognise ── */
+.tmpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.9rem; }
+.tmpl-card { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); display: flex; flex-direction: column; }
+.tmpl-shot { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; object-position: top center; background: var(--code-bg); border-bottom: 1px solid var(--line); }
+.tmpl-noshot {
+  display: grid; place-items: center; width: 100%; aspect-ratio: 16 / 10;
+  background: var(--accent-soft); color: var(--accent); font-size: 2.4rem; font-weight: 700;
+  border-bottom: 1px solid var(--line);
+}
+.tmpl-body { padding: 0.65rem 0.75rem 0.8rem; display: grid; gap: 0.3rem; }
+.tmpl-meta { font-size: 0.75rem; color: var(--muted); }
+.tmpl-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.4rem; }
+.tmpl-actions button { font-size: 0.76rem; padding: 0.25rem 0.6rem; }
+#templatePeek .tmpl-shot { margin-top: 0.5rem; border-radius: 8px; border: 1px solid var(--line); max-width: 22rem; }
+
+/* ── Batch review: the contact sheet ── */
+.sheet { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: 0.8rem; margin-top: 0.6rem; }
+.sheet-card { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); display: flex; flex-direction: column; }
+.sheet-card.gone { opacity: 0.45; }
+.sheet-shot { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; object-position: top center; background: var(--code-bg); }
+.sheet-noshot {
+  display: grid; place-items: center; width: 100%; aspect-ratio: 16 / 10;
+  background: var(--code-bg); color: var(--muted); font-size: 2rem; font-weight: 700;
+}
+.sheet-body { padding: 0.6rem 0.7rem 0.75rem; display: grid; gap: 0.3rem; font-size: 0.85rem; }
+.sheet-body .brow-state { margin-left: 0; justify-self: start; }
+.sheet-meta { font-size: 0.74rem; color: var(--muted); }
+.sheet-err { font-size: 0.75rem; color: var(--bad); }
+.sheet-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.35rem; }
+.sheet-actions button, .sheet-actions .btnlink { font-size: 0.75rem; padding: 0.25rem 0.6rem; }

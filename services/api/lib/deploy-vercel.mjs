@@ -37,13 +37,18 @@ function walkFiles(dir, base, out) {
   }
 }
 
-/** Vercel project slug rules: lowercase, alphanumeric + hyphen, <= 100 chars. */
-function projectName(name) {
+/** Vercel project slug rules: lowercase, alphanumeric + hyphen, <= 100 chars.
+ *  Exported so the domain actuator attaches to the SAME project this deploys
+ *  to, rather than re-deriving the slug and quietly disagreeing. */
+export function projectName(name) {
   const slug = String(name || 'site').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 100);
   return slug || 'site';
 }
 
-async function vercelJson(token, method, url, body, teamId) {
+/** One authenticated Vercel API call, with team scoping folded in. Exported
+ *  for the domain actuator (lib/domains.mjs) so there is a single place that
+ *  knows how to talk to Vercel. */
+export async function vercelJson(token, method, url, body, teamId) {
   const q = teamId ? (url.includes('?') ? `${url}&teamId=${teamId}` : `${url}?teamId=${teamId}`) : url;
   const res = await fetch(V + q, {
     method,

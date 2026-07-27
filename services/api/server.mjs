@@ -29,9 +29,10 @@ import { createAssets, MAX_ASSET_BYTES } from './lib/assets.mjs';
 import { createLivePreview } from './lib/live-preview.mjs';
 import { requirementsFor, readiness, validateFacts, GROUP_LABELS } from './lib/content.mjs';
 import { generateCopy } from './lib/copy-gen.mjs';
-import { tarGzDir } from './lib/archive.mjs';
+import { tarGzDir, tarGzDirs } from './lib/archive.mjs';
 import { pushToGitHub } from './lib/deploy.mjs';
-import { deployToVercel } from './lib/deploy-vercel.mjs';
+import { deployToVercel, projectName } from './lib/deploy-vercel.mjs';
+import { normalizeDomain, dnsPlanFor, attachVercel, checkVercel, siteUrlEnv, SITE_URL_ENV } from './lib/domains.mjs';
 import { createEmail } from './lib/email.mjs';
 import { createBatches } from './lib/batches.mjs';
 import { runMapping, validateMapping } from '../../packages/field-mapping/index.mjs';
@@ -76,6 +77,10 @@ const livePreview = createLivePreview(); // per-site `next start` on localhost
 const batches = createBatches(store, {
   runner: jobs, imported, catalog, accounts, email, assets,
   authMeter: (keyId, name, n) => auth.meter(keyId, name, n),
+  // Validating a reused template at submit time, and publishing a whole batch
+  // in one go, both need surfaces that live out here.
+  resolveTemplate: (account, name) => getTemplate(account, name),
+  publishSite: (account, siteId) => publishSiteToVercel(account, siteId),
 });
 setTimeout(() => batches.reconcile().catch(() => {}), 3_000).unref?.();
 setInterval(() => batches.reconcile().catch(() => {}), 60_000).unref?.();
@@ -105,6 +110,36 @@ function getTemplate(account, name) {
 const httpError = (status, code, message) => Object.assign(new Error(message), { status, code });
 const fsReadFile = (abs) => fs.readFileSync(abs);
 
+/** A filename-safe slug for exports and repo names. */
+const slugify = (s) => String(s || 'site').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'site';
+
+/** Where a template's preview image lives. Sits beside the template record;
+ *  store.listIds() only reads .json, so a sibling .png is invisible to it. */
+function thumbnailPath(account, name) {
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(String(name))) return null;
+  return store.path('templates', account, `${name}.png`);
+}
+
+/** Remove a site and everything that belongs to it. */
+function purgeSite(site) {
+  livePreview.stop(site.id);
+  fs.rmSync(store.path('workspaces', site.id), { recursive: true, force: true });
+  fs.rmSync(store.path('workspaces', `${site.id}.stage`), { recursive: true, force: true });
+  fs.rmSync(store.path('assets', site.id), { recursive: true, force: true });
+  for (const jid of site.jobs || []) { try { store.deleteJson(`jobs/${jid}.json`); } catch { /* best effort */ } }
+  try { store.deleteJson(`connections/site-${site.id}.json`); } catch { /* may not exist */ }
+  store.deleteJson(`sites/${site.id}.json`);
+}
+
+/** Drop this account's old Studio design demos. Each one carries a whole
+ *  assembled workspace, so keeping every experiment forever is real disk. */
+function reapPreviewSites(account) {
+  for (const id of store.listIds('sites')) {
+    const s = store.readJson(`sites/${id}.json`);
+    if (s && s.preview && s.account === account) purgeSite(s);
+  }
+}
+
 function assertUuid(id, what = 'id') {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id))) {
     throw httpError(400, 'bad_id', `${what} must be a UUID.`);
@@ -129,6 +164,121 @@ function enqueueAssemble(siteId, accountId) {
 function siteReadiness(site) {
   const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
   return readiness(site.content || {}, modules);
+}
+
+/**
+ * A batch-built site whose AI design nobody has looked at yet must not reach
+ * a client. The gate lives here, at the deploy actuators, not only in the
+ * Batch screen: otherwise the operator opens the site in Sites, publishes,
+ * and the review was theatre.
+ */
+function assertReviewed(site) {
+  if (site.review?.state === 'pending') {
+    throw httpError(409, 'review_pending',
+      'This design came out of a batch and has not been reviewed yet. Open Batch Building, look it over, and approve it, then publish.');
+  }
+}
+
+/**
+ * Publish one assembled site to Vercel: token resolution, the review gate,
+ * the connected database, the canonical-URL variable, and the custom domain.
+ * Shared by the per-site route and Batch Building's publish-everything run so
+ * a bulk publish is exactly the same operation, N times.
+ */
+async function publishSiteToVercel(account, siteId, { token: explicitToken = null, teamId = null, name = null } = {}) {
+  const s = loadSite(siteId, account);
+  assertReviewed(s);
+  const dir = store.path('workspaces', s.id);
+  if (!fs.existsSync(path.join(dir, 'package.json'))) {
+    throw httpError(409, 'not_assembled', 'Build the site before publishing.');
+  }
+  const acct = connections.get(account).vercel;
+  const token = explicitToken
+    || connections.revealSiteToken(s.id, 'vercel')
+    || (acct.connected ? connections.reveal(account, 'vercel') : null);
+  if (!token) {
+    throw httpError(422, 'no_target', 'Add a Vercel token to publish: either right here for this site, or once in Hosting as your default so every site reuses it. Get one at vercel.com/account/tokens.');
+  }
+
+  // Auto-wire a connected database (per-site target > account default) as
+  // Vercel project env vars, so the CMS admin works on first publish with no
+  // manual env copying. Vendor-neutral: whatever libSQL endpoint the customer
+  // connected, not necessarily Turso.
+  const dbSite = connections.getSiteTarget(s.id, 'turso');
+  const dbAcct = connections.get(account).turso;
+  const dbUrl = dbSite?.url || dbAcct.url;
+  const dbToken = dbSite?.connected ? connections.revealSiteToken(s.id, 'turso') : (dbAcct.connected ? connections.reveal(account, 'turso') : null);
+  // A custom domain has to reach the site's own code too: robots.ts and
+  // sitemap.ts resolve their base URL from NEXT_PUBLIC_SITE_URL, so without
+  // this a site on a custom domain keeps advertising the wrong canonical host.
+  const env = {
+    ...(dbUrl ? { TURSO_DATABASE_URL: dbUrl, ...(dbToken ? { TURSO_AUTH_TOKEN: dbToken } : {}) } : {}),
+    ...siteUrlEnv(s.domain?.name),
+  };
+
+  const project = projectName(name || s.config.siteName);
+  const result = await deployToVercel({ token, teamId, name: name || s.config.siteName, dir, env: Object.keys(env).length ? env : null });
+
+  // Attach the custom domain to the project just deployed to. A failure here
+  // never fails the publish: the site IS live on its Vercel URL, and the
+  // domain is a separate, retryable step.
+  let domain = null;
+  if (s.domain?.name) {
+    const fresh = loadSite(siteId, account);
+    try {
+      await attachVercel({ token, teamId, project, domain: fresh.domain.name });
+      if (fresh.domain.addWww) {
+        try { await attachVercel({ token, teamId, project, domain: `www.${fresh.domain.name}` }); } catch { /* www is best effort */ }
+      }
+      const state = await checkVercel({ token, teamId, project, domain: fresh.domain.name });
+      fresh.domain = { ...fresh.domain, attachedTo: 'vercel', project, state: state.state, message: state.message, records: state.records, checkedAt: new Date().toISOString() };
+      domain = { name: fresh.domain.name, state: state.state, message: state.message, records: state.records };
+    } catch (e) {
+      fresh.domain = { ...fresh.domain, attachedTo: 'vercel', project, state: 'error', message: e.message, checkedAt: new Date().toISOString() };
+      domain = { name: fresh.domain.name, state: 'error', message: e.message, records: [] };
+    }
+    store.writeJson(`sites/${fresh.id}.json`, fresh);
+  }
+
+  const dbNote = result.envWired ? 'Database connected and wired in automatically. ' : '';
+  return {
+    deployed: true, target: 'vercel', ...result, domain,
+    note: dbNote + (result.readyState === 'READY'
+      ? 'Your site is live on Vercel.'
+      : 'Uploaded to Vercel and building now. The URL goes live the moment the build finishes (usually a minute or two).'),
+  };
+}
+
+/**
+ * A site's domain, plus what the operator has to DO about it. `manageable`
+ * says whether Stardrive holds a token for this site's host: when it does,
+ * the DNS rows are the host's own answer and the state was really checked;
+ * when it doesn't, the rows are the SHAPE to fill in with values the host
+ * supplies, and we say so rather than inventing an IP.
+ */
+function domainView(site, account) {
+  if (!site.domain?.name) return { domain: null, siteUrlEnv: SITE_URL_ENV };
+  const hasVercel = Boolean(
+    connections.getSiteTarget(site.id, 'vercel')?.connected || connections.get(account).vercel.connected
+  );
+  return {
+    domain: {
+      name: site.domain.name,
+      addWww: site.domain.addWww !== false,
+      attachedTo: site.domain.attachedTo ?? null,
+      state: site.domain.state ?? 'pending',
+      message: site.domain.message ?? '',
+      checkedAt: site.domain.checkedAt ?? null,
+    },
+    manageable: hasVercel,
+    records: dnsPlanFor({
+      name: site.domain.name,
+      addWww: site.domain.addWww !== false,
+      hostRecords: site.domain.records,
+    }),
+    siteUrlEnv: SITE_URL_ENV,
+    siteUrlValue: `https://${site.domain.name}`,
+  };
 }
 
 function resolveMappingBody(body, key) {
@@ -359,17 +509,42 @@ const ROUTES = [
   },
   {
     method: 'GET', pattern: '/v1/templates/:name', scope: 'templates',
-    handler: ({ params, key }) => {
+    handler: ({ params, key, url }) => {
       const entry = getTemplate(key.account, params.name);
       if (!entry) throw httpError(404, 'not_found', `Template "${params.name}" not found.`);
+      // ?include=files returns the stored bundle, which is what lets a
+      // template be reopened in the Studio and refined instead of being
+      // frozen the moment it is imported. Own templates only: the bundled
+      // catalog is shared, first-party, and not the licensee's to edit.
+      let files;
+      if (url?.searchParams.get('include') === 'files') {
+        if (!entry.record) {
+          throw httpError(403, 'not_editable', `"${params.name}" is a first-party catalog template, so its files are not editable. Build a site from it, or design your own in the Studio.`);
+        }
+        files = entry.record.bundle.files;
+      }
       return {
         status: 200,
         body: {
           source: entry.source,
           manifest: entry.manifest,
+          ...(files ? { files } : {}),
           ...(entry.record ? { importedAt: entry.record.importedAt, warnings: entry.record.warnings } : {}),
         },
       };
+    },
+  },
+  {
+    // The design's own screenshot, so a library of generated templates is
+    // recognisable instead of a list of slugs. Captured during assembly by
+    // the full QA tier; absent (404) when that tier is off.
+    method: 'GET', pattern: '/v1/templates/:name/thumbnail', scope: 'templates',
+    handler: ({ params, key }) => {
+      const abs = thumbnailPath(key.account, params.name);
+      if (!abs || !fs.existsSync(abs)) {
+        throw httpError(404, 'no_thumbnail', 'No preview image for this template yet. Previews are captured by the full QA tier (STARDRIVE_QA=full) when a site is built from it.');
+      }
+      return { raw: true, status: 200, headers: { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' }, buffer: fsReadFile(abs) };
     },
   },
   {
@@ -448,6 +623,11 @@ const ROUTES = [
       if (typeof config.siteName !== 'string' || !config.siteName.trim()) {
         throw httpError(422, 'incomplete_config', 'config.siteName is required — the engine refuses to assemble a nameless site.');
       }
+      // A Studio design demo is a throwaway: flagged so it stays out of the
+      // client roster, and superseding the last one so previews (each with a
+      // full workspace) cannot pile up.
+      const isPreview = body.preview === true;
+      if (isPreview) reapPreviewSites(key.account);
       const site = {
         id: crypto.randomUUID(),
         account: key.account,
@@ -456,6 +636,7 @@ const ROUTES = [
         parse,
         content: {}, // the customer's factual intake (see lib/content.mjs)
         copy: null,  // the finished copy pack the AI writes from those facts
+        ...(isPreview ? { preview: true } : {}),
         configHistory: [],
         jobs: [],
         createdAt: new Date().toISOString(),
@@ -476,12 +657,16 @@ const ROUTES = [
   },
   {
     method: 'GET', pattern: '/v1/sites', scope: 'sites',
-    handler: ({ key }) => ({
+    handler: ({ key, url }) => ({
       status: 200,
       body: {
         sites: store.listIds('sites')
           .map((id) => store.readJson(`sites/${id}.json`))
-          .filter((s) => s && s.account === key.account)
+          // The Sites list is the licensee's CLIENT roster. Throwaway Studio
+          // design demos are real sites technically, but they do not belong
+          // in it; ?include=previews opts back in.
+          .filter((s) => s && s.account === key.account
+            && (!s.preview || url?.searchParams.get('include') === 'previews'))
           .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
           .map((s) => {
             const last = s.jobs.length ? jobs.get(s.jobs[s.jobs.length - 1]) : null;
@@ -696,6 +881,7 @@ const ROUTES = [
     method: 'POST', pattern: '/v1/sites/:id/deploy', scope: 'deploy', meter: 'sites.deploy',
     handler: async ({ params, body, key }) => {
       const s = loadSite(params.id, key.account);
+      assertReviewed(s);
       const dir = store.path('workspaces', s.id);
       if (!fs.existsSync(path.join(dir, 'package.json'))) {
         throw httpError(409, 'not_assembled', 'Build the site before deploying.');
@@ -717,10 +903,17 @@ const ROUTES = [
       const repo = String(body?.repo || siteTarget?.repo || s.config.siteName || 'site').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '') || 'site';
       if (body?.save) connections.setSiteTarget(s.id, { token: body?.token?.trim() || undefined, owner, repo });
       const result = await pushToGitHub({ token, owner, repo, dir, message: `Stardrive: ${s.config.siteName}` });
+      // Stardrive has no credentials for wherever this repo gets hosted, so
+      // it hands over the one variable the site itself needs rather than
+      // pretending to configure a host it cannot see.
+      const domainNote = s.domain?.name
+        ? ` This site has the domain ${s.domain.name}: point it at your host's DNS targets and set ${SITE_URL_ENV}=https://${s.domain.name} there, or robots.txt and sitemap.xml will keep advertising the wrong address.`
+        : '';
       return {
         status: 200,
         body: { deployed: true, target: 'github', ...result,
-          note: 'Pushed the site to GitHub. Link the repo to Vercel (or your host) and it builds on every push.' },
+          ...(s.domain?.name ? { domain: { name: s.domain.name, env: { [SITE_URL_ENV]: `https://${s.domain.name}` } } } : {}),
+          note: 'Pushed the site to GitHub. Link the repo to Vercel (or your host) and it builds on every push.' + domainNote },
       };
     },
   },
@@ -795,41 +988,75 @@ const ROUTES = [
     method: 'POST', pattern: '/v1/sites/:id/deploy/vercel', scope: 'deploy', meter: 'sites.deploy',
     handler: async ({ params, body, key }) => {
       const s = loadSite(params.id, key.account);
-      const dir = store.path('workspaces', s.id);
-      if (!fs.existsSync(path.join(dir, 'package.json'))) {
-        throw httpError(409, 'not_assembled', 'Build the site before publishing.');
-      }
-      const acct = connections.get(key.account).vercel;
-      const token = (typeof body?.token === 'string' && body.token.trim())
-        || connections.revealSiteToken(s.id, 'vercel')
-        || (acct.connected ? connections.reveal(key.account, 'vercel') : null);
-      if (!token) {
-        throw httpError(422, 'no_target', 'Add a Vercel token to publish: either right here for this site, or once in Hosting as your default so every site reuses it. Get one at vercel.com/account/tokens.');
-      }
-      const teamId = typeof body?.teamId === 'string' && body.teamId.trim() ? body.teamId.trim() : null;
       if (body?.save) connections.setSiteTarget(s.id, { provider: 'vercel', token: body?.token?.trim() || undefined });
-
-      // Auto-wire a connected database (per-site target > account default) as
-      // Vercel project env vars, so the CMS admin works on first publish with
-      // no manual env copying. Vendor-neutral: whatever libSQL endpoint the
-      // customer connected, not necessarily Turso.
-      const dbSite = connections.getSiteTarget(s.id, 'turso');
-      const dbAcct = connections.get(key.account).turso;
-      const dbUrl = dbSite?.url || dbAcct.url;
-      const dbToken = dbSite?.connected ? connections.revealSiteToken(s.id, 'turso') : (dbAcct.connected ? connections.reveal(key.account, 'turso') : null);
-      const env = dbUrl ? { TURSO_DATABASE_URL: dbUrl, ...(dbToken ? { TURSO_AUTH_TOKEN: dbToken } : {}) } : null;
-
-      const result = await deployToVercel({ token, teamId, name: body?.name || s.config.siteName, dir, env });
-      const dbNote = result.envWired ? 'Database connected and wired in automatically. ' : '';
-      return {
-        status: 200,
-        body: {
-          deployed: true, target: 'vercel', ...result,
-          note: dbNote + (result.readyState === 'READY'
-            ? 'Your site is live on Vercel.'
-            : 'Uploaded to Vercel and building now. The URL goes live the moment the build finishes (usually a minute or two).'),
-        },
+      const result = await publishSiteToVercel(key.account, s.id, {
+        token: typeof body?.token === 'string' && body.token.trim() ? body.token.trim() : null,
+        teamId: typeof body?.teamId === 'string' && body.teamId.trim() ? body.teamId.trim() : null,
+        name: body?.name,
+      });
+      return { status: 200, body: result };
+    },
+  },
+  // ── Custom domain ───────────────────────────────────────────────────────
+  // Recorded on the SITE as host-agnostic data. Where Stardrive holds a token
+  // for the host (Vercel today) it attaches and verifies for real; everywhere
+  // else it records the domain and shows what to set, without pretending to
+  // have checked a host it cannot see.
+  {
+    method: 'GET', pattern: '/v1/sites/:id/domain', scope: 'sites',
+    handler: ({ params, key }) => {
+      const s = loadSite(params.id, key.account);
+      return { status: 200, body: domainView(s, key.account) };
+    },
+  },
+  {
+    method: 'PUT', pattern: '/v1/sites/:id/domain', scope: 'deploy', bodyLimit: 4_000,
+    handler: ({ params, body, key }) => {
+      const s = loadSite(params.id, key.account);
+      const { name, addWww } = normalizeDomain(body?.name, { addWww: body?.addWww !== false });
+      s.domain = {
+        name, addWww,
+        attachedTo: s.domain?.name === name ? s.domain.attachedTo ?? null : null,
+        project: s.domain?.name === name ? s.domain.project ?? null : null,
+        state: 'pending',
+        message: 'Saved. Publish this site to attach it, or add the DNS records below at your registrar.',
+        records: [],
+        checkedAt: null,
       };
+      s.updatedAt = new Date().toISOString();
+      store.writeJson(`sites/${s.id}.json`, s);
+      return { status: 200, body: domainView(s, key.account) };
+    },
+  },
+  {
+    method: 'DELETE', pattern: '/v1/sites/:id/domain', scope: 'deploy',
+    handler: ({ params, key }) => {
+      const s = loadSite(params.id, key.account);
+      // Stardrive forgets the domain; it never touches the registrar, and on
+      // a host we hold a token for the operator detaches there if they want.
+      delete s.domain;
+      s.updatedAt = new Date().toISOString();
+      store.writeJson(`sites/${s.id}.json`, s);
+      return { status: 200, body: { removed: true, note: 'Stardrive no longer tracks a domain for this site. Any DNS records you added are still at your registrar.' } };
+    },
+  },
+  {
+    // Re-check. DNS is never instant, so this is explicitly re-runnable and
+    // only ever reports what the host actually told us.
+    method: 'POST', pattern: '/v1/sites/:id/domain/verify', scope: 'deploy',
+    handler: async ({ params, key }) => {
+      const s = loadSite(params.id, key.account);
+      if (!s.domain?.name) throw httpError(409, 'no_domain', 'Set a domain for this site first.');
+      const acct = connections.get(key.account).vercel;
+      const token = connections.revealSiteToken(s.id, 'vercel') || (acct.connected ? connections.reveal(key.account, 'vercel') : null);
+      if (!token) {
+        throw httpError(422, 'no_target', 'Stardrive can only check a domain on a host it has a token for. This site has no Vercel token, so add the records your host gave you and check there.');
+      }
+      const project = s.domain.project || projectName(s.config.siteName);
+      const state = await checkVercel({ token, project, domain: s.domain.name });
+      s.domain = { ...s.domain, attachedTo: 'vercel', project, state: state.state, message: state.message, records: state.records, checkedAt: new Date().toISOString() };
+      store.writeJson(`sites/${s.id}.json`, s);
+      return { status: 200, body: domainView(s, key.account) };
     },
   },
   {
@@ -850,13 +1077,7 @@ const ROUTES = [
     method: 'DELETE', pattern: '/v1/sites/:id', scope: 'sites',
     handler: ({ params, key }) => {
       const site = loadSite(params.id, key.account);
-      livePreview.stop(site.id);
-      fs.rmSync(store.path('workspaces', site.id), { recursive: true, force: true });
-      fs.rmSync(store.path('workspaces', `${site.id}.stage`), { recursive: true, force: true });
-      fs.rmSync(store.path('assets', site.id), { recursive: true, force: true });
-      for (const jid of site.jobs || []) { try { store.deleteJson(`jobs/${jid}.json`); } catch { /* best-effort */ } }
-      try { store.deleteJson(`connections/site-${site.id}.json`); } catch { /* may not exist */ }
-      store.deleteJson(`sites/${site.id}.json`);
+      purgeSite(site);
       return { status: 200, body: { deleted: site.id } };
     },
   },
@@ -895,7 +1116,7 @@ const ROUTES = [
         throw httpError(409, 'not_assembled',
           'This site has not been assembled by the real engine yet. Assemble it (with STARDRIVE_ENGINE=real) and try again.');
       }
-      const slug = String(s.config.siteName || 'site').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'site';
+      const slug = slugify(s.config.siteName);
       // The assembled site repo ONLY — a standalone Next.js project, zero
       // Stardrive runtime dependency; the engine itself is never included.
       const buffer = tarGzDir(dir, slug);
@@ -977,6 +1198,43 @@ const ROUTES = [
       if (result.tokens) auth.meter(key.id, 'studio.tokens', result.tokens);
       return { status: 200, body: result };
     },
+  },
+
+  // ── Studio draft ────────────────────────────────────────────────────────
+  // A generated template plus its refine conversation is real work. It used
+  // to live only in the tab, so a reload lost it. Saved per account, like the
+  // batch build list.
+  {
+    method: 'GET', pattern: '/v1/studio/draft', scope: 'templates',
+    handler: ({ key }) => ({ status: 200, body: store.readJson(`studio/draft/${key.account}.json`, { brief: {}, features: null, messages: [], previewSiteId: null, updatedAt: null }) }),
+  },
+  {
+    // The caller compacts before sending (later FILE blocks supersede earlier
+    // ones, so the whole history is never needed); this caps what lands on
+    // disk so a long session cannot grow the var dir without bound.
+    method: 'PUT', pattern: '/v1/studio/draft', scope: 'templates', bodyLimit: 4_000_000,
+    handler: ({ body, key }) => {
+      const messages = Array.isArray(body?.messages) ? body.messages : [];
+      const draft = {
+        brief: body?.brief && typeof body.brief === 'object' && !Array.isArray(body.brief) ? body.brief : {},
+        features: Array.isArray(body?.features) ? body.features : null,
+        messages: messages
+          .filter((m) => m && typeof m.content === 'string' && ['user', 'assistant'].includes(m.role))
+          .map((m) => ({ role: m.role, content: m.content })),
+        previewSiteId: typeof body?.previewSiteId === 'string' ? body.previewSiteId : null,
+        updatedAt: new Date().toISOString(),
+      };
+      const bytes = Buffer.byteLength(JSON.stringify(draft));
+      if (bytes > 3_500_000) {
+        throw httpError(413, 'draft_too_large', 'This design is too large to save. Import it to your templates to keep it.');
+      }
+      store.writeJson(`studio/draft/${key.account}.json`, draft);
+      return { status: 200, body: { saved: true, bytes, updatedAt: draft.updatedAt } };
+    },
+  },
+  {
+    method: 'DELETE', pattern: '/v1/studio/draft', scope: 'templates',
+    handler: ({ key }) => ({ status: 200, body: { cleared: store.deleteJson(`studio/draft/${key.account}.json`) } }),
   },
 
   // ── Batch Building (Agency tier) ────────────────────────────────────────
@@ -1067,6 +1325,43 @@ const ROUTES = [
   {
     method: 'POST', pattern: '/v1/batches/:id/builds/:cid/requeue', scope: 'sites',
     handler: ({ params, key }) => ({ status: 200, body: batches.requeue(key.account, assertUuid(params.id, 'batch id'), String(params.cid)) }),
+  },
+  // Design review: a batch invents designs nobody has seen, so each one is
+  // held back from publishing until the operator says yes.
+  {
+    method: 'POST', pattern: '/v1/batches/:id/builds/:cid/approve', scope: 'sites',
+    handler: ({ params, key }) => ({ status: 200, body: batches.approve(key.account, assertUuid(params.id, 'batch id'), String(params.cid)) }),
+  },
+  {
+    method: 'POST', pattern: '/v1/batches/:id/builds/:cid/discard', scope: 'sites',
+    handler: ({ params, key }) => ({ status: 200, body: batches.discard(key.account, assertUuid(params.id, 'batch id'), String(params.cid)) }),
+  },
+  {
+    method: 'POST', pattern: '/v1/batches/:id/approve-all', scope: 'sites',
+    handler: ({ params, key }) => ({ status: 200, body: batches.approveAll(key.account, assertUuid(params.id, 'batch id')) }),
+  },
+  {
+    // Publish every approved site in one go. Runs detached; progress shows on
+    // the batch (publishRun) which the Workbench already polls.
+    method: 'POST', pattern: '/v1/batches/:id/publish', scope: 'deploy', meter: 'sites.deploy',
+    handler: ({ params, key }) => ({ status: 202, body: batches.publishAll(key.account, assertUuid(params.id, 'batch id')) }),
+  },
+  {
+    // Every built site in the batch as one archive, a directory per site.
+    method: 'GET', pattern: '/v1/batches/:id/export', scope: 'sites',
+    handler: ({ params, key }) => {
+      const sites = batches.exportable(key.account, assertUuid(params.id, 'batch id'));
+      const entries = sites
+        .map((s) => ({ dir: store.path('workspaces', s.siteId), name: slugify(s.siteName) }))
+        .filter((e) => fs.existsSync(path.join(e.dir, 'package.json')));
+      if (!entries.length) {
+        throw httpError(409, 'not_assembled', 'No assembled sites in this batch yet. Sites are only exportable once the real engine has built them.');
+      }
+      return {
+        raw: true, status: 200, buffer: tarGzDirs(entries),
+        headers: { 'Content-Type': 'application/gzip', 'Content-Disposition': `attachment; filename="batch-${params.id.slice(0, 8)}.tar.gz"` },
+      };
+    },
   },
   {
     method: 'POST', pattern: '/v1/batches/:id/builds/:cid/generate-now', scope: 'sites',

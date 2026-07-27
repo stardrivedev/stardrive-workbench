@@ -146,10 +146,15 @@
       </div>
       <div class="card">
         <h2>Library</h2>
-        <div class="tscroll"><table class="list" id="templateTable">
-          <thead><tr><th>Name</th><th>Kind</th><th>Version</th><th>Source</th><th>Routes</th><th></th></tr></thead>
-          <tbody><tr><td colspan="6" style="color:var(--muted)">Save an API key to load your library.</td></tr></tbody>
-        </table></div>
+        <p style="font-size:0.82rem;color:var(--muted);margin:0.25rem 0 0.8rem">Your own designs can be reopened in the Studio and changed any time. Preview images are captured when a site is built from a template with the full QA tier on; until then a design shows as a lettered tile.</p>
+        <div id="templateGrid" class="tmpl-grid"></div>
+        <details style="margin-top:1rem">
+          <summary style="cursor:pointer;color:var(--muted);font-size:0.85rem">Details table</summary>
+          <div class="tscroll"><table class="list" id="templateTable">
+            <thead><tr><th>Name</th><th>Kind</th><th>Version</th><th>Source</th><th>Routes</th><th></th></tr></thead>
+            <tbody><tr><td colspan="6" style="color:var(--muted)">Save an API key to load your library.</td></tr></tbody>
+          </table></div>
+        </details>
         <div id="manifestPanel"></div>
       </div>
     </section>
@@ -190,6 +195,7 @@
             <div class="field"><label for="brExtra">Anything else? <span style="color:var(--muted);font-weight:400">(optional)</span></label>
               <textarea id="brExtra" rows="3" placeholder="Must-have sections, a reference site you like, the tone of voice…"></textarea></div>
             <button class="primary big" id="genBtn" type="button">✨ Generate my template</button>
+            <p id="studioSaveState" style="font-size:0.78rem;color:var(--muted);margin:0.5rem 0 0"></p>
           </div>
 
           <div id="genResult" style="margin-top:1rem"></div>
@@ -226,7 +232,8 @@
         <h2>Create a site</h2>
         <div class="grid2">
           <div class="field"><label for="siteTemplateSel">Base template</label>
-            <select id="siteTemplateSel"><option value="">Save an API key to load templates…</option></select></div>
+            <select id="siteTemplateSel"><option value="">Save an API key to load templates…</option></select>
+            <div id="templatePeek"></div></div>
           <div class="field"><label for="siteNameInput">Site name (the business)</label>
             <input id="siteNameInput" placeholder="e.g. Acme Fixture Works"></div>
         </div>

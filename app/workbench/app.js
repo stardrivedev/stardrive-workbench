@@ -71,6 +71,7 @@ function route() {
   $('#viewTitle').textContent = TITLES[v];
   if (v === 'home') loadHome();
   if (v === 'templates') loadTemplates();
+  if (v === 'studio') restoreStudioDraft();
   if (v === 'sites') {
     loadSites();
     loadSiteTemplateOptions();
@@ -230,6 +231,31 @@ async function loadTemplates() {
       (status === 401 ? 'That key was not accepted.' : 'This key lacks the templates scope.') + '</td></tr>';
     return;
   }
+  // A grid of designs, not a list of slugs: with twenty generated templates
+  // the name tells you nothing and the picture tells you everything. The
+  // screenshot comes from the full QA tier; without one the tile falls back
+  // to a lettered plate rather than a broken image.
+  const grid = $('#templateGrid');
+  if (grid) {
+    grid.innerHTML = body.templates.map((t) => {
+      return '<div class="tmpl-card">' +
+        thumbHtml('/v1/templates/' + encodeURIComponent(t.name) + '/thumbnail', initialOf(t.name), 'tmpl-shot') +
+        '<div class="tmpl-body">' +
+          '<b>' + esc(t.name) + '</b>' +
+          '<span class="tmpl-meta">' + esc(t.kind) + ' · v' + esc(t.version) + ' · ' + t.routes.length + ' page(s)' +
+            ' <span class="badge ' + (t.source === 'bundled' ? 'bundled' : 'imported') + '">' + esc(t.source) + '</span></span>' +
+          '<div class="tmpl-actions">' +
+            (t.source === 'imported' && t.kind === 'site'
+              ? '<button class="primary" data-act="refine" data-name="' + esc(t.name) + '" type="button">Refine in Studio</button>' : '') +
+            '<button class="ghost" data-act="view" data-name="' + esc(t.name) + '" type="button">Manifest</button>' +
+            (t.source === 'imported' ? '<button class="ghost danger" data-act="del" data-name="' + esc(t.name) + '" type="button">Delete</button>' : '') +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    wireThumbFallbacks(grid);
+  }
+
   tbody.innerHTML = '';
   for (const t of body.templates) {
     const tr = document.createElement('tr');
@@ -245,7 +271,7 @@ async function loadTemplates() {
   }
 }
 
-$('#templateTable').addEventListener('click', async (e) => {
+async function onTemplateAction(e) {
   const btn = e.target.closest('button[data-act]');
   if (!btn) return;
   const name = btn.dataset.name;
@@ -256,13 +282,16 @@ $('#templateTable').addEventListener('click', async (e) => {
       '<div class="codeblock"><pre>' + esc(JSON.stringify(body.manifest, null, 2)) + '</pre><button class="copybtn" type="button">Copy</button></div>' +
       (body.warnings?.length ? '<div class="report err"><b>Lint warnings kept on this import:</b><ul>' + body.warnings.map((w) => '<li>' + esc(w) + '</li>').join('') + '</ul></div>' : '');
   }
+  if (btn.dataset.act === 'refine') { refineTemplate(name); return; }
   if (btn.dataset.act === 'del') {
     if (!confirm('Delete "' + name + '" from your library?')) return;
     await api('/v1/templates/' + encodeURIComponent(name), { method: 'DELETE' });
     $('#manifestPanel').innerHTML = '';
     loadTemplates();
   }
-});
+}
+$('#templateTable').addEventListener('click', onTemplateAction);
+$('#templateGrid')?.addEventListener('click', onTemplateAction);
 
 /* Folder upload → bundle → import. */
 const drop = $('#dropzone');
@@ -506,12 +535,122 @@ async function runGeneration(userText, isFirst) {
     chat.messages.push({ role: 'assistant', content: body.content });
     addMsg('assistant', body.content);
     renderGenOutcome(body.content);
+    saveStudioDraft();
   } catch (err) {
     setGenResult('<div class="report err">Network error: ' + esc(err.message) + '</div>');
     chat.messages.pop();
   } finally {
     genBusy(false);
   }
+}
+
+/* ── the Studio draft ─────────────────────────────────────────────────── */
+// A generated template plus its refine conversation is real work, and it used
+// to live only in this tab: one reload and it was gone. Saved per account,
+// the same way the batch build list is.
+
+let studioSaveTimer = null;
+let studioPreviewSiteId = null;
+
+/** The brief fields, as the draft stores them. */
+const readBrief = () => ({
+  business: $('#brBusiness')?.value || '', vibe: currentVibe,
+  vibeCustom: $('#brVibeCustom')?.value || '',
+  colors: $('#brColors')?.value || '', audience: $('#brAudience')?.value || '',
+  extra: $('#brExtra')?.value || '',
+});
+
+/**
+ * Compact before saving: every generation is a WHOLE template, so keeping the
+ * raw history would balloon. `collectFiles()` already resolves later file
+ * blocks over earlier ones, so the merged file set plus the last exchange is
+ * everything the Studio actually needs to carry on.
+ */
+function compactStudioMessages() {
+  const files = collectFiles();
+  if (!Object.keys(files).length) return chat.messages.slice(-6);
+  const merged = Object.entries(files)
+    .map(([p, c]) => `=== FILE: ${p} ===\n${c}\n=== END FILE ===`).join('\n');
+  const firstUser = chat.messages.find((m) => m.role === 'user');
+  return [
+    ...(firstUser ? [firstUser] : []),
+    { role: 'assistant', content: merged },
+  ];
+}
+
+function saveStudioDraft() {
+  clearTimeout(studioSaveTimer);
+  studioSaveTimer = setTimeout(async () => {
+    const { status, body } = await api('/v1/studio/draft', {
+      method: 'PUT',
+      body: {
+        brief: readBrief(),
+        features: [...enabledFeatures],
+        messages: chat.messages.length ? compactStudioMessages() : [],
+        previewSiteId: studioPreviewSiteId,
+      },
+    });
+    const el = $('#studioSaveState');
+    if (el) el.textContent = status === 200 ? 'Saved' : (body?.error?.message || 'Could not save this design.');
+  }, 800);
+}
+
+async function clearStudioDraft() {
+  clearTimeout(studioSaveTimer);
+  await api('/v1/studio/draft', { method: 'DELETE' });
+  const el = $('#studioSaveState');
+  if (el) el.textContent = '';
+}
+
+/** Put a saved design back on screen, exactly where it was left. */
+async function restoreStudioDraft() {
+  if (!getApiKey() || chat.messages.length) return;
+  const { status, body } = await api('/v1/studio/draft');
+  if (status !== 200 || !body) return;
+  const b = body.brief || {};
+  if ($('#brBusiness')) $('#brBusiness').value = b.business || '';
+  if ($('#brVibeCustom')) $('#brVibeCustom').value = b.vibeCustom || '';
+  if ($('#brColors')) $('#brColors').value = b.colors || '';
+  if ($('#brAudience')) $('#brAudience').value = b.audience || '';
+  if ($('#brExtra')) $('#brExtra').value = b.extra || '';
+  if (b.vibe) {
+    currentVibe = b.vibe;
+    [...($('#brVibe')?.children || [])].forEach((c) => c.classList.toggle('on', c.dataset.vibe === currentVibe));
+  }
+  studioPreviewSiteId = body.previewSiteId || null;
+  if (!body.messages?.length) return;
+  chat.messages = body.messages;
+  for (const m of body.messages) addMsg(m.role, m.content);
+  const last = body.messages.at(-1);
+  if (last?.role === 'assistant') renderGenOutcome(last.content);
+  const rw = $('#refineWrap'); if (rw) rw.hidden = false;
+  const el = $('#studioSaveState');
+  if (el) el.textContent = 'Picked up where you left off' + (body.updatedAt ? ' (' + new Date(body.updatedAt).toLocaleString() + ')' : '');
+}
+
+/**
+ * Reopen a template from the library so it can be refined instead of being
+ * frozen at import. Its files go back into the conversation as the FILE
+ * blocks the Studio already speaks, so "Refine" carries on from there.
+ */
+async function refineTemplate(name) {
+  const { status, body } = await api('/v1/templates/' + encodeURIComponent(name) + '?include=files');
+  if (status !== 200) { alert(body.error?.message || 'Could not open that template.'); return; }
+  const blocks = [
+    `=== FILE: manifest.json ===\n${JSON.stringify(body.manifest, null, 2)}\n=== END FILE ===`,
+    ...(body.files || []).map((f) => `=== FILE: ${f.path} ===\n${f.content}\n=== END FILE ===`),
+  ].join('\n');
+  chat.messages = [
+    { role: 'user', content: `This is my existing template "${name}". I want to change it.` },
+    { role: 'assistant', content: blocks },
+  ];
+  $('#chatlog').innerHTML = '';
+  addMsg('systemnote', `Opened "${name}" from your library. Describe any change and press Refine; importing again under the same name replaces it.`);
+  renderGenOutcome(blocks);
+  const rw = $('#refineWrap'); if (rw) rw.hidden = false;
+  location.hash = '#/studio';
+  saveStudioDraft();
+  setTimeout(() => $('#refineWrap')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 120);
 }
 
 /** After each response: a friendly completion card (code hidden), or the
@@ -579,9 +718,13 @@ async function previewGeneratedDesign() {
   spin('Preparing a demo of this design…');
   const imp = await api('/v1/templates', { method: 'POST', body: bundle });
   if (imp.status >= 300 && imp.status !== 409) { box.innerHTML = '<div class="report err">' + esc(imp.body.errors?.join('; ') || imp.body.error?.message || 'Could not prepare the template.') + '</div>'; return; }
-  const made = await api('/v1/sites', { method: 'POST', body: { templateId: bundle.manifest.name, config: { siteName: 'Preview · ' + bundle.manifest.name }, assemble: false } });
+  // preview:true keeps this demo out of the Sites list (that list is the
+  // client roster) and supersedes the last demo instead of piling up.
+  const made = await api('/v1/sites', { method: 'POST', body: { templateId: bundle.manifest.name, config: { siteName: 'Preview · ' + bundle.manifest.name }, assemble: false, preview: true } });
   if (made.status !== 201) { box.innerHTML = '<div class="report err">Could not start the preview.</div>'; return; }
   const siteId = made.body.siteId;
+  studioPreviewSiteId = siteId;
+  saveStudioDraft();
   await api('/v1/sites/' + siteId + '/content', { method: 'PATCH', body: { facts: PREVIEW_FACTS } });
   const built = await api('/v1/sites/' + siteId + '/assemble', { method: 'POST', body: {} });
   if (built.status !== 202) { box.innerHTML = '<div class="report err">' + esc(built.body.error?.message || 'Preview build failed to start.') + '</div>'; return; }
@@ -616,7 +759,7 @@ async function showGenPreview(siteId) {
   box.innerHTML = '<div class="card">' +
     '<h3 style="margin:0 0 0.5rem">How this design looks</h3>' + img +
     '<div style="margin-top:0.6rem;display:flex;gap:0.5rem;flex-wrap:wrap"><button class="primary" data-genact="preview-live" data-site="' + esc(siteId) + '">▶ Click around it live</button></div>' +
-    '<p style="font-size:0.8rem;color:var(--muted);margin:0.55rem 0 0">Shown with sample content so you can judge the look. Happy with it? Add it to your templates. Want changes? Describe them under "Want changes?". (This demo lives in your Sites list; delete it any time.)</p></div>';
+    '<p style="font-size:0.8rem;color:var(--muted);margin:0.55rem 0 0">Shown with sample content so you can judge the look. Happy with it? Add it to your templates. Want changes? Describe them under "Want changes?". (This is a throwaway demo, not a client site, so it stays out of your Sites list and is replaced by your next preview.)</p></div>';
 }
 
 async function previewGeneratedLive(siteId) {
@@ -693,7 +836,8 @@ $('#downloadGenBtn').addEventListener('click', () => {
   }
 });
 
-$('#clearChatBtn').addEventListener('click', () => {
+$('#clearChatBtn').addEventListener('click', async () => {
+  if (chat.messages.length && !confirm('Start over?\n\nThis design and everything you asked for is discarded.')) return;
   chat.messages = [];
   $('#chatlog').innerHTML = '';
   setGenResult('');
@@ -701,19 +845,44 @@ $('#clearChatBtn').addEventListener('click', () => {
   const rw = $('#refineWrap'); if (rw) rw.hidden = true;
   ['#brBusiness', '#brColors', '#brAudience', '#brExtra', '#brVibeCustom', '#chatText'].forEach((s) => { const el = $(s); if (el) el.value = ''; });
   currentVibe = ''; renderVibes();
+  studioPreviewSiteId = null;
+  await clearStudioDraft();
 });
+
+// The brief is part of the saved draft too, so a half-filled form survives.
+for (const sel of ['#brBusiness', '#brColors', '#brAudience', '#brExtra', '#brVibeCustom']) {
+  $(sel)?.addEventListener('input', saveStudioDraft);
+}
 
 /* ══════════════ Sites ══════════════ */
 const templateSource = {}; // name -> 'bundled' | 'imported'
+// The base templates a site (or a batch build) can start from, cached so the
+// Batch rows can offer them without a fetch per row.
+let siteTemplateOptions = [];
 async function loadSiteTemplateOptions() {
   const sel = $('#siteTemplateSel');
   if (!getApiKey()) return;
   const { status, body } = await api('/v1/templates');
   if (status !== 200) return;
   const bases = body.templates.filter((t) => t.kind === 'site');
+  siteTemplateOptions = bases.map((t) => ({ name: t.name, source: t.source }));
   for (const t of bases) templateSource[t.name] = t.source;
-  sel.innerHTML = bases.map((t) => '<option value="' + esc(t.name) + '">' + esc(t.name) + ' (' + esc(t.source) + ')</option>').join('');
-  renderAssembleFeatures();
+  if (sel) {
+    sel.innerHTML = bases.map((t) => '<option value="' + esc(t.name) + '">' + esc(t.name) + ' (' + esc(t.source) + ')</option>').join('');
+    renderAssembleFeatures();
+    renderTemplatePeek();
+  }
+}
+
+/** Show the selected base template's own screenshot, so picking a design is
+ *  not a guess from a slug. Absent (QA off, never built) simply hides. */
+function renderTemplatePeek() {
+  const host = $('#templatePeek');
+  const name = $('#siteTemplateSel')?.value;
+  if (!host) return;
+  // No screenshot simply means no peek, not an empty frame.
+  host.innerHTML = name ? '<img class="tmpl-shot" src="/v1/templates/' + encodeURIComponent(name) + '/thumbnail" alt="">' : '';
+  host.querySelector('img')?.addEventListener('error', () => { host.innerHTML = ''; }, { once: true });
 }
 
 /** Module-backed feature toggles. Catalog base: default from the Studio
@@ -748,7 +917,7 @@ $('#assembleFeatures').addEventListener('change', (e) => {
   if (cb) cb.closest('.feature').classList.toggle('on', cb.checked);
   updateAssembleNote();
 });
-$('#siteTemplateSel').addEventListener('change', renderAssembleFeatures);
+$('#siteTemplateSel').addEventListener('change', () => { renderAssembleFeatures(); renderTemplatePeek(); });
 
 async function loadSites() {
   const tbody = $('#sitesTable tbody');
@@ -842,9 +1011,21 @@ async function openSiteDetail(siteId) {
     step(3, built ? 'Rebuild the site' : 'Build the site',
       '<p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.6rem">' + (built ? 'Rebuild to pick up edits or newly added photos.' : 'This assembles the finished, shippable site with real copy and images.') + '</p>' + buildRow,
       'Answer the essentials to unlock the build.') +
-    // Step 4 — publish
+    // Step 4 — publish. A design that came out of a batch and has not been
+    // looked at yet cannot go to a client; the gate is enforced server-side,
+    // so say why here rather than letting the publish button fail.
     step(4, 'Publish',
-      (built ? '<div id="launchPanel"></div>' + goLiveCard : ''),
+      (built
+        ? (body.review?.state === 'pending'
+            ? '<div class="report" style="background:var(--warn-soft);color:var(--warn)">' +
+              '<b>This design is waiting for your review.</b> It was generated in a batch, so nobody has seen it yet. ' +
+              'Look it over (the live preview above is the real thing), then approve it to unlock publishing.' +
+              '<div style="margin-top:0.6rem;display:flex;gap:0.5rem;flex-wrap:wrap">' +
+              '<button class="primary" data-siteact="review-approve" data-id="' + esc(id) + '" data-batch="' + esc(body.review.batchId || '') + '" data-cid="' + esc(body.review.customId || '') + '">Approve this design</button>' +
+              '<a class="ghost btnlink" href="#/batch" style="padding:0.35rem 0.7rem">Review the whole batch →</a>' +
+              '</div></div>'
+            : '<div id="launchPanel"></div>' + goLiveCard)
+        : ''),
       'Build the site first, then publish it live.') +
     // reference material, kept out of the main flow
     '<details style="margin-top:1.2rem"><summary style="cursor:pointer;color:var(--muted);font-size:0.85rem">Build history &amp; checks</summary>' +
@@ -862,7 +1043,16 @@ async function openSiteDetail(siteId) {
   loadSiteAssets(body.id);
   loadSiteContent(body.id);
   loadSitePreviewAndQa(body);
-  if (built) loadLaunchPanel(body.id);
+  if (built && body.review?.state !== 'pending') loadLaunchPanel(body.id);
+}
+
+/** Approve a batch design from the site itself, so the operator does not have
+ *  to go hunting for it in Batch Building to unblock one publish. */
+async function approveFromSite(siteId, batchId, customId) {
+  if (!batchId || !customId) return;
+  const { status, body } = await api('/v1/batches/' + batchId + '/builds/' + customId + '/approve', { method: 'POST' });
+  if (status !== 200) { alert(body.error?.message || 'Could not approve this design.'); return; }
+  openSiteDetail(siteId);
 }
 
 // The 4-step gated flow state for the open site, and its reactive render.
@@ -1193,8 +1383,108 @@ async function loadLaunchPanel(siteId) {
       '<h3 style="margin:0 0 0.2rem">🚀 Publish this site</h3>' +
       '<p style="font-size:0.84rem;color:var(--body);margin:0 0 0.9rem">Take this finished site live. Set a token once and it becomes your default for every client, so you never enter it twice. Override per client only when they host it themselves.</p>' +
       vercelBlock + dbBlock + githubBlock +
+      '<div id="domainBlock"></div>' +
       '<div id="launchOut" style="margin-top:0.7rem"></div>' +
     '</div>';
+  loadDomainPanel(siteId);
+}
+
+/* ══════════════ Custom domain ══════════════ */
+// Host-agnostic on purpose. Where Stardrive holds a token for the host it
+// attaches and verifies for real; everywhere else it records the domain and
+// shows what to set, without pretending to have checked a host it cannot see.
+
+const DOMAIN_STATE = {
+  live: { cls: 'ok', label: '✓ Live' },
+  pending: { cls: 'warn', label: 'Waiting on DNS' },
+  error: { cls: 'err', label: 'Needs attention' },
+};
+
+async function loadDomainPanel(siteId) {
+  const host = $('#domainBlock');
+  if (!host) return;
+  const { status, body } = await api('/v1/sites/' + siteId + '/domain');
+  if (status !== 200) { host.innerHTML = ''; return; }
+  host.innerHTML = domainPanelHtml(siteId, body);
+}
+
+function domainPanelHtml(siteId, d) {
+  const info = (id, text) => '<button class="infoBtn" type="button" data-info="' + id + '" aria-label="What is this?">i</button>' +
+    '<div class="tip" id="' + id + '" hidden>' + text + '</div>';
+  const head = '<div class="lpHead"><b>Custom domain</b> ' + info('tipDom',
+    'Point the client\'s own address at this site. Where you have connected the host (Vercel today) Stardrive attaches the domain and checks it for you. On any other host Stardrive records the domain and shows what to set, because it has no credentials there and will not guess DNS values on your behalf.') +
+    ' <span class="lpTag">the last mile</span></div>';
+
+  if (!d.domain) {
+    return '<div class="launchProv">' + head +
+      '<p style="font-size:0.84rem;color:var(--body);margin:0 0 0.6rem">Publishing gives you a working URL straight away. Add the client\'s own domain whenever you are ready, before or after the first publish.</p>' +
+      '<div class="field"><label>Domain</label><input id="domInput" class="mono" placeholder="theclient.com" spellcheck="false" autocomplete="off"></div>' +
+      '<label class="checkline"><input type="checkbox" id="domWww" checked> Also serve www.</label>' +
+      '<div><button class="ghost" data-siteact="domain-save" data-id="' + esc(siteId) + '">Save domain</button></div>' +
+    '</div>';
+  }
+
+  const st = DOMAIN_STATE[d.domain.state] || DOMAIN_STATE.pending;
+  const rows = (d.records || []).map((r) =>
+    '<tr><td><code>' + esc(r.type) + '</code></td><td><code>' + esc(r.host) + '</code></td>' +
+    '<td>' + (r.value
+      ? '<code>' + esc(r.value) + '</code>'
+      : '<span style="color:var(--muted);font-size:0.8rem">' + esc(r.note || 'the value your host gives you') + '</span>') + '</td></tr>').join('');
+
+  // What the studio can hand its client verbatim.
+  const handoff = 'Domain: ' + d.domain.name + '\n'
+    + (d.records || []).map((r) => `${r.type}  ${r.host}  ${r.value || '<the value your host gives you>'}`).join('\n')
+    + '\n\nOn the host, set:\n' + d.siteUrlEnv + '=' + d.siteUrlValue;
+
+  return '<div class="launchProv">' + head +
+    '<p style="font-size:0.86rem;margin:0 0 0.5rem"><code>' + esc(d.domain.name) + '</code> ' +
+      '<span class="brow-state ' + st.cls + '">' + st.label + '</span>' +
+      (d.domain.attachedTo ? ' <span style="font-size:0.78rem;color:var(--muted)">attached on ' + esc(d.domain.attachedTo) + '</span>' : '') + '</p>' +
+    (d.domain.message ? '<p style="font-size:0.82rem;color:var(--body);margin:0 0 0.6rem">' + esc(d.domain.message) + '</p>' : '') +
+    (d.manageable
+      ? '<p class="bhint">Stardrive manages this domain on your connected host: publish the site and it is attached and checked automatically.</p>'
+      : '<p class="bhint">This site does not publish through a host Stardrive holds a token for, so add these records at your registrar yourself. The values come from your host, not from us.</p>') +
+    (rows
+      ? '<div class="tscroll"><table class="list"><thead><tr><th>Type</th><th>Name</th><th>Value</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+      : '') +
+    '<p style="font-size:0.82rem;color:var(--body);margin:0.6rem 0 0.3rem">Set this on the host too, or the site keeps advertising the wrong address in <code>robots.txt</code> and <code>sitemap.xml</code>:</p>' +
+    '<div class="codeblock"><pre>' + esc(d.siteUrlEnv + '=' + d.siteUrlValue) + '</pre><button class="copybtn" type="button">Copy</button></div>' +
+    '<details style="margin-top:0.6rem"><summary style="cursor:pointer;font-size:0.82rem;color:var(--muted)">Send this to the client</summary>' +
+      '<div class="codeblock"><pre>' + esc(handoff) + '</pre><button class="copybtn" type="button">Copy</button></div></details>' +
+    '<div style="display:flex;gap:0.5rem;margin-top:0.7rem;flex-wrap:wrap">' +
+      (d.manageable ? '<button class="ghost" data-siteact="domain-check" data-id="' + esc(siteId) + '">Check again</button>' : '') +
+      '<button class="ghost danger" data-siteact="domain-remove" data-id="' + esc(siteId) + '">Remove domain</button>' +
+    '</div>' +
+    '<div id="domainOut" style="margin-top:0.5rem"></div>' +
+  '</div>';
+}
+
+async function saveDomain(siteId) {
+  const name = $('#domInput')?.value.trim();
+  const out = $('#launchOut');
+  if (!name) { $('#domInput')?.focus(); return; }
+  const { status, body } = await api('/v1/sites/' + siteId + '/domain', {
+    method: 'PUT', body: { name, addWww: $('#domWww')?.checked !== false },
+  });
+  if (status !== 200) { out.innerHTML = '<div class="report err">' + esc(body.error?.message || 'Could not save that domain.') + '</div>'; return; }
+  $('#domainBlock').innerHTML = domainPanelHtml(siteId, body);
+}
+
+async function checkDomain(siteId) {
+  const out = $('#domainOut');
+  if (out) out.innerHTML = '<div class="report" style="background:var(--code-bg);color:var(--muted)">Checking with your host…</div>';
+  const { status, body } = await api('/v1/sites/' + siteId + '/domain/verify', { method: 'POST' });
+  if (status !== 200) {
+    if (out) out.innerHTML = '<div class="report" style="background:var(--warn-soft);color:var(--warn)">' + esc(body.error?.message || 'Could not check right now.') + '</div>';
+    return;
+  }
+  $('#domainBlock').innerHTML = domainPanelHtml(siteId, body);
+}
+
+async function removeDomain(siteId) {
+  if (!confirm('Stop tracking this domain?\n\nAny DNS records you added stay at your registrar; Stardrive just forgets it.')) return;
+  await api('/v1/sites/' + siteId + '/domain', { method: 'DELETE' });
+  loadDomainPanel(siteId);
 }
 
 async function publishVercel(siteId) {
@@ -1304,6 +1594,36 @@ function assetSlotCard(slot, items, attrs) {
   '</div>';
 }
 
+/**
+ * A design's screenshot, with a lettered plate when there is none (previews
+ * are only captured by the full QA tier). Rendered as markup plus a wired-up
+ * error handler rather than an inline onerror, because the fallback text is
+ * user data and would break out of an HTML attribute.
+ */
+function thumbHtml(src, letter, cls) {
+  return '<img class="' + cls + '" src="' + esc(src) + '" alt="" loading="lazy"' +
+    ' data-thumb="' + esc(cls.replace('-shot', '-noshot')) + '" data-letter="' + esc(letter) + '">';
+}
+
+/** Swap any failed thumbnail for its plate. Call after inserting markup. */
+function wireThumbFallbacks(root) {
+  const scope = root || document;
+  scope.querySelectorAll('img[data-thumb]').forEach((img) => {
+    img.addEventListener('error', () => {
+      const plate = document.createElement('div');
+      plate.className = img.dataset.thumb;
+      plate.textContent = img.dataset.letter;
+      img.replaceWith(plate);
+    }, { once: true });
+  });
+  // Images that should just disappear when there is nothing to show.
+  scope.querySelectorAll('img[data-drop-on-error]').forEach((img) => {
+    img.addEventListener('error', () => img.remove(), { once: true });
+  });
+}
+
+const initialOf = (s) => String(s || '?').replace(/^d4-/, '').slice(0, 1).toUpperCase();
+
 /** A picked file as base64, ready for an upload endpoint. */
 function fileAsBase64(file) {
   return new Promise((res, rej) => {
@@ -1382,6 +1702,10 @@ $('#siteDetail').addEventListener('click', async (e) => {
   if (btn.dataset.siteact === 'live') { openLivePreview(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'live-stop') { stopLivePreview(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'live-open') { openLivePreview(btn.dataset.id, true); return; }
+  if (btn.dataset.siteact === 'domain-save') { saveDomain(btn.dataset.id); return; }
+  if (btn.dataset.siteact === 'domain-check') { checkDomain(btn.dataset.id); return; }
+  if (btn.dataset.siteact === 'domain-remove') { removeDomain(btn.dataset.id); return; }
+  if (btn.dataset.siteact === 'review-approve') { approveFromSite(btn.dataset.id, btn.dataset.batch, btn.dataset.cid); return; }
   if (btn.dataset.siteact === 'vercel-go') { publishVercel(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'github-go') { deployGithub(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'db-go') { saveDatabase(btn.dataset.id); return; }
@@ -1518,6 +1842,12 @@ const REF = [
     { m: 'POST', p: '/v1/sites/{id}/deploy/vercel', d: 'One-click publish to Vercel and get a live URL (token: request > site > account default). Auto-wires a connected database as Vercel env vars.', curl: `curl -X POST {BASE}/v1/sites/{siteId}/deploy/vercel -H "Authorization: Bearer {KEY}" -d '{}'` },
     { m: 'GET', p: '/v1/content/fields', d: 'The intake questions a build with these features would have to answer, before any site exists. ?features=blog,careers or ?modules=d4-insights-blog.',
       curl: `curl "{BASE}/v1/content/fields?features=careers" -H "Authorization: Bearer {KEY}"` },
+    { m: 'PUT', p: '/v1/sites/{id}/domain', d: 'Set the client\'s own domain. Host-agnostic: on a host you have connected it is attached and verified for real; on any other host the DNS shape and the NEXT_PUBLIC_SITE_URL value are handed to you rather than guessed.',
+      curl: `curl -X PUT {BASE}/v1/sites/{siteId}/domain \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"name":"theclient.com","addWww":true}'` },
+    { m: 'GET', p: '/v1/sites/{id}/domain', d: 'The domain, its state, the DNS records to set, and whether Stardrive can manage it on this site\'s host.', curl: `curl {BASE}/v1/sites/{siteId}/domain -H "Authorization: Bearer {KEY}"` },
+    { m: 'POST', p: '/v1/sites/{id}/domain/verify', d: 'Re-check the domain with the host. DNS is never instant, so this is meant to be run again.', curl: `curl -X POST {BASE}/v1/sites/{siteId}/domain/verify -H "Authorization: Bearer {KEY}"` },
+    { m: 'GET', p: '/v1/templates/{name}/thumbnail', d: 'The design\'s own screenshot (PNG), captured by the full QA tier when a site is built from it. 404 when there is none.', curl: `curl {BASE}/v1/templates/{name}/thumbnail -H "Authorization: Bearer {KEY}" -o design.png` },
+    { m: 'GET', p: '/v1/studio/draft', d: 'The saved Studio design: brief, features, and the refine conversation, so work survives a reload.', curl: `curl {BASE}/v1/studio/draft -H "Authorization: Bearer {KEY}"` },
     { m: 'POST', p: '/v1/batches', d: 'Batch Building (Agency): queue up to 20 builds in one overnight run on the provider Batch API — each build gets a template design + AI copy, then assembles to a ready site. Send { builds: [ … ] }, or an empty body to submit your saved draft. Every build is readiness-checked FIRST: if any is missing required answers, nothing is submitted and 422 lists them per build.',
       curl: `curl -X POST {BASE}/v1/batches \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"builds":[{"name":"Solstice Bakery","siteName":"Solstice Bakery","prompt":"A warm bakery site.","features":["contact-form"],"facts":{"whatYouDo":"We bake bread","aboutFacts":"Family run since 2019","services":["Sourdough"],"contactEmail":"hi@solstice.example"}}]}'` },
     { m: 'GET', p: '/v1/batches', d: 'Your batches (newest first) plus the backlog of builds queued for the next cycle.', curl: `curl {BASE}/v1/batches -H "Authorization: Bearer {KEY}"` },
@@ -1529,6 +1859,11 @@ const REF = [
     { m: 'GET', p: '/v1/batches/{id}', d: 'One batch with per-build status (generating/assembling/ready/failed + stage and reason).', curl: `curl {BASE}/v1/batches/{id} -H "Authorization: Bearer {KEY}"` },
     { m: 'POST', p: '/v1/batches/{id}/builds/{cid}/generate-now', d: 'Rerun one FAILED build immediately on the live model.', curl: `curl -X POST {BASE}/v1/batches/{id}/builds/b0/generate-now -H "Authorization: Bearer {KEY}"` },
     { m: 'POST', p: '/v1/batches/{id}/builds/{cid}/requeue', d: 'Move one FAILED build\'s spec into the backlog for your next batch.', curl: `curl -X POST {BASE}/v1/batches/{id}/builds/b0/requeue -H "Authorization: Bearer {KEY}"` },
+    { m: 'POST', p: '/v1/batches/{id}/builds/{cid}/approve', d: 'Approve one batch-generated design. Until this, that site cannot be published (409 review_pending on either deploy route). A build made from a template you already own skips review entirely.', curl: `curl -X POST {BASE}/v1/batches/{id}/builds/b0/approve -H "Authorization: Bearer {KEY}"` },
+    { m: 'POST', p: '/v1/batches/{id}/builds/{cid}/discard', d: 'Reject one design: the site and the template that build generated are both deleted. A template you already owned is never touched.', curl: `curl -X POST {BASE}/v1/batches/{id}/builds/b0/discard -H "Authorization: Bearer {KEY}"` },
+    { m: 'POST', p: '/v1/batches/{id}/approve-all', d: 'Approve every design still waiting in this batch.', curl: `curl -X POST {BASE}/v1/batches/{id}/approve-all -H "Authorization: Bearer {KEY}"` },
+    { m: 'POST', p: '/v1/batches/{id}/publish', d: 'Publish every approved site in one run. Returns 202 and reports progress on the batch (publishRun); one site failing never stops the rest.', curl: `curl -X POST {BASE}/v1/batches/{id}/publish -H "Authorization: Bearer {KEY}"` },
+    { m: 'GET', p: '/v1/batches/{id}/export', d: 'Every finished site in the batch as one .tar.gz, a directory per site.', curl: `curl {BASE}/v1/batches/{id}/export -H "Authorization: Bearer {KEY}" -o batch.tar.gz` },
     { m: 'GET', p: '/v1/sites/{id}/database', d: 'This site\'s database target (masked) and your account default.', curl: `curl {BASE}/v1/sites/{siteId}/database -H "Authorization: Bearer {KEY}"` },
     { m: 'POST', p: '/v1/sites/{id}/database', d: 'Connect this site to a libSQL database (vendor-neutral: any libsql://, https://, or file: endpoint — Turso is just the recommended hosted one).',
       curl: `curl -X POST {BASE}/v1/sites/{siteId}/database \\\n  -H "Authorization: Bearer {KEY}" -H "Content-Type: application/json" \\\n  -d '{"url":"libsql://your-db.turso.io","authToken":"YOUR_TOKEN"}'` },
@@ -1738,8 +2073,9 @@ async function revealBatchNav() {
 }
 
 const BATCH_STATUS_LABEL = {
-  generating: 'Generating…', assembling: 'Assembling…', ready: '✓ Ready',
-  failed: '✗ Needs attention', requeued: 'Queued for next batch',
+  generating: 'Generating…', assembling: 'Assembling…', review: 'Waiting for your review',
+  ready: '✓ Approved', failed: '✗ Needs attention', requeued: 'Queued for next batch',
+  discarded: 'Discarded',
 };
 
 /* ── The build list ──────────────────────────────────────────────────── */
@@ -1798,9 +2134,15 @@ function rowState(row) {
   const required = rowFields(row).fields.filter((f) => f.required);
   const missing = required.filter((f) => !factAnswered(f.kind, row.facts?.[f.id]));
   const blocked = [];
-  if (!String(row.name || '').trim()) blocked.push('a template name');
   if (!String(row.siteName || '').trim()) blocked.push('a business name');
-  if (!String(row.prompt || '').trim()) blocked.push('a design brief');
+  // A row reusing a template is not designing anything, so it needs neither a
+  // new template name nor a brief. Mirrors the gate in batches.mjs.
+  if (row.templateId) {
+    if (!siteTemplateOptions.some((t) => t.name === row.templateId)) blocked.push('a template that still exists');
+  } else {
+    if (!String(row.name || '').trim()) blocked.push('a template name');
+    if (!String(row.prompt || '').trim()) blocked.push('a design brief');
+  }
   return {
     required: required.length, answered: required.length - missing.length,
     missing, blocked, ok: !missing.length && !blocked.length,
@@ -1808,7 +2150,7 @@ function rowState(row) {
 }
 
 const newBatchRow = (seed = {}) => ({
-  rowId: uuid(), name: '', siteName: '', tagline: '', prompt: '', brief: {},
+  rowId: uuid(), name: '', siteName: '', tagline: '', prompt: '', brief: {}, templateId: null,
   // Carry the Studio's current feature selection, the same way the Sites
   // assemble form does, so a stack of similar sites starts from one choice.
   features: [...enabledFeatures], facts: {}, photos: 0, ...seed,
@@ -1905,14 +2247,25 @@ const VIBE_CHIPS = (selected) => VIBES.map((v) =>
 
 function rowDesignPane(row) {
   const b = row.brief || {};
-  return '<div class="grid2">' +
-      '<div class="field"><label>Template name <span style="color:var(--bad)">*</span></label>' +
-        '<input data-bf="name" value="' + esc(row.name || '') + '" placeholder="e.g. Solstice Bakery"></div>' +
-      '<div class="field"><label>Business / site name <span style="color:var(--bad)">*</span></label>' +
-        '<input data-bf="siteName" value="' + esc(row.siteName || '') + '" placeholder="e.g. Solstice Bakery"></div>' +
-    '</div>' +
-    '<div class="field"><label>Tagline <span style="color:var(--muted);font-weight:400">(optional)</span></label>' +
-      '<input data-bf="tagline" value="' + esc(row.tagline || '') + '" placeholder="A short line under the name"></div>' +
+  const reusing = Boolean(row.templateId);
+  // Reusing a template skips the design generation entirely: cheaper, faster,
+  // and ten franchise sites come out looking like one brand.
+  const source = '<div class="chips" style="margin-bottom:0.8rem">' +
+    '<button type="button" class="chip-btn' + (reusing ? '' : ' on') + '" data-bsource="new">Generate a new design</button>' +
+    '<button type="button" class="chip-btn' + (reusing ? ' on' : '') + '" data-bsource="reuse">Use one of my templates</button>' +
+  '</div>';
+
+  const reuseBlock = '<div class="field"><label>Template</label>' +
+    '<select data-bf="templateId">' +
+      '<option value="">Pick a template…</option>' +
+      siteTemplateOptions.map((t) => '<option value="' + esc(t.name) + '"' + (t.name === row.templateId ? ' selected' : '') + '>' + esc(t.name) + ' (' + esc(t.source) + ')</option>').join('') +
+    '</select>' +
+    '<p class="bhint">No design is generated for this build, so it costs less and finishes sooner. It also skips the review step: you already approved this design when it went into your library.</p>' +
+    (row.templateId ? '<img class="tmpl-shot" data-drop-on-error src="/v1/templates/' + encodeURIComponent(row.templateId) + '/thumbnail" alt="">' : '') +
+  '</div>';
+
+  const briefBlock = '<div class="field"><label>Template name <span style="color:var(--bad)">*</span></label>' +
+      '<input data-bf="name" value="' + esc(row.name || '') + '" placeholder="e.g. Solstice Bakery"></div>' +
     '<h4 class="bsub">The design brief</h4>' +
     '<p class="bhint">The same questions the Studio asks. They become the instruction the model designs from.</p>' +
     '<div class="field"><label>What kind of business is it? <span style="color:var(--bad)">*</span></label>' +
@@ -1926,6 +2279,14 @@ function rowDesignPane(row) {
       '<textarea data-bbrief="extra" rows="2" placeholder="Anything else that should shape the design.">' + esc(b.extra || '') + '</textarea></div>' +
     '<details class="bpreview"><summary>What the model will be asked</summary>' +
       '<p data-role="prompt">' + esc(row.prompt || 'Answer "what kind of business is it" above.') + '</p></details>';
+
+  return source +
+    '<div class="field"><label>Business / site name <span style="color:var(--bad)">*</span></label>' +
+      '<input data-bf="siteName" value="' + esc(row.siteName || '') + '" placeholder="e.g. Solstice Bakery"></div>' +
+    '<div class="field"><label>Tagline <span style="color:var(--muted);font-weight:400">(optional)</span></label>' +
+      '<input data-bf="tagline" value="' + esc(row.tagline || '') + '" placeholder="A short line under the name"></div>' +
+    '<div data-role="sourceReuse"' + (reusing ? '' : ' hidden') + '>' + reuseBlock + '</div>' +
+    '<div data-role="sourceNew"' + (reusing ? ' hidden' : '') + '>' + briefBlock + '</div>';
 }
 
 function rowFeaturePane(row) {
@@ -1996,6 +2357,7 @@ function renderBatchRows() {
     ? batchDraft.rows.map(batchRowCardHtml).join('')
     : '<p class="bhint" style="margin:0.4rem 0">No builds queued yet. Add one, or paste a list from your spreadsheet.</p>';
   renderBatchSummary();
+  wireThumbFallbacks(root);
   if (batchOpenRow) loadRowPhotos(batchOpenRow);
 }
 
@@ -2026,6 +2388,8 @@ async function loadRowPhotos(rowId) {
 
 let batchPollTimer = null;
 async function loadBatchView() {
+  // Rows can build from an existing template, so the library has to be known.
+  if (!siteTemplateOptions.length) await loadSiteTemplateOptions();
   const { status, body } = await api('/v1/batches/draft');
   if (status !== 200) {
     $('#batchBuildRows').innerHTML = '<div class="report err">' + esc(body.error?.message || 'Save an API key (top right) to use Batch Building.') + '</div>';
@@ -2060,35 +2424,88 @@ function renderBatchList(list) {
     $('#batchList').innerHTML = '<p style="color:var(--muted);font-size:0.85rem">No batches submitted yet. Queue a few builds above and submit them in one go.</p>';
     return;
   }
-  $('#batchList').innerHTML = list.map((b) =>
-    '<div class="card" style="margin-top:0.7rem">' +
+  $('#batchList').innerHTML = list.map((b) => {
+    const c = b.counts;
+    const bits = [c.total + ' build(s)'];
+    if (c.review) bits.push('<b style="color:var(--warn)">' + c.review + ' to review</b>');
+    if (c.ready) bits.push(c.ready + ' approved');
+    if (c.failed) bits.push('<span style="color:var(--bad)">' + c.failed + ' need attention</span>');
+    if (c.discarded) bits.push(c.discarded + ' discarded');
+    const run = b.publishRun;
+    return '<div class="card" style="margin-top:0.7rem">' +
       '<div style="display:flex;gap:0.8rem;flex-wrap:wrap;align-items:baseline">' +
         '<b>' + new Date(b.createdAt).toLocaleString() + '</b>' +
-        '<span style="font-size:0.82rem;color:var(--muted)">' + b.counts.total + ' build(s) · ' + b.counts.ready + ' ready' + (b.counts.failed ? ' · <span style="color:var(--bad)">' + b.counts.failed + ' need attention</span>' : '') + '</span>' +
+        '<span style="font-size:0.82rem;color:var(--muted)">' + bits.join(' · ') + '</span>' +
         '<span class="badge ' + (b.status === 'ready' ? 'imported' : '') + '">' + (b.status === 'in_progress' ? 'Running…' : 'Finished') + '</span>' +
       '</div>' +
+      (run ? '<div style="margin-top:0.5rem;font-size:0.82rem;color:' + (run.finishedAt ? 'var(--muted)' : 'var(--accent)') + '">' +
+        (run.finishedAt ? 'Publish run finished: ' : 'Publishing… ') + run.done + ' of ' + run.total +
+        (run.results.some((r) => !r.ok) ? ' · <span style="color:var(--bad)">' + run.results.filter((r) => !r.ok).length + ' failed</span>' : '') +
+        '</div>' : '') +
       '<div data-batchdetail="' + esc(b.id) + '" style="margin-top:0.6rem"><button class="ghost" data-bact="expand" data-id="' + esc(b.id) + '" type="button" style="font-size:0.8rem">Show builds</button></div>' +
-    '</div>').join('');
+    '</div>';
+  }).join('');
 }
 
+/**
+ * The contact sheet: every design in a batch side by side, so twenty AI
+ * designs can be judged in one look instead of opened one at a time. Nothing
+ * here is published until it is approved.
+ */
 async function expandBatch(id) {
   const { status, body } = await api('/v1/batches/' + id);
   const root = document.querySelector('[data-batchdetail="' + id + '"]');
   if (!root) return;
   if (status !== 200) { root.innerHTML = '<div class="report err">' + esc(body.error?.message || 'Could not load.') + '</div>'; return; }
-  root.innerHTML = body.builds.map((x) =>
-    '<div style="display:flex;gap:0.7rem;flex-wrap:wrap;align-items:center;padding:0.5rem 0;border-top:1px solid var(--line);font-size:0.85rem">' +
-      '<b>' + esc(x.name) + '</b><span style="color:var(--muted)">' + esc(x.siteName) + (x.photos ? ' · ' + x.photos + ' photo(s)' : '') + '</span>' +
-      '<span style="' + (x.status === 'failed' ? 'color:var(--bad);font-weight:600' : x.status === 'ready' ? 'color:var(--good)' : 'color:var(--muted)') + '">' + (BATCH_STATUS_LABEL[x.status] || esc(x.status)) + '</span>' +
-      (x.status === 'failed'
-        ? '<span style="color:var(--bad);font-size:0.78rem">' + esc((x.stage ? x.stage + ': ' : '') + (x.error || '')) + '</span>' +
-          '<span style="margin-left:auto;display:flex;gap:0.4rem">' +
-          '<button class="primary" data-bact="now" data-id="' + esc(id) + '" data-cid="' + esc(x.customId) + '" type="button" style="font-size:0.75rem;padding:0.25rem 0.6rem">Generate now</button>' +
-          '<button class="ghost" data-bact="requeue" data-id="' + esc(id) + '" data-cid="' + esc(x.customId) + '" type="button" style="font-size:0.75rem;padding:0.25rem 0.6rem">Add to next batch</button></span>'
+  const pending = body.builds.filter((b) => b.status === 'review').length;
+  const approved = body.builds.filter((b) => b.status === 'ready').length;
+  const run = body.publishRun;
+
+  const bar = '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;padding:0.6rem 0;border-top:1px solid var(--line)">' +
+    (pending ? '<button class="primary" data-bact="approve-all" data-id="' + esc(id) + '" type="button" style="font-size:0.78rem">Approve all ' + pending + '</button>' : '') +
+    (approved ? '<button class="primary" data-bact="publish-all" data-id="' + esc(id) + '" type="button" style="font-size:0.78rem">Publish ' + approved + ' approved</button>' : '') +
+    '<a class="ghost btnlink" href="/v1/batches/' + esc(id) + '/export" data-bact="export-all" data-id="' + esc(id) + '" style="font-size:0.78rem;padding:0.3rem 0.7rem">Download all</a>' +
+    (pending ? '<span class="bhint" style="margin:0">Nothing publishes until you approve it.</span>' : '') +
+  '</div>';
+
+  const cards = body.builds.map((x) => {
+    const label = BATCH_STATUS_LABEL[x.status] || x.status;
+    const tone = x.status === 'failed' ? 'err' : x.status === 'ready' ? 'ok' : x.status === 'review' ? 'warn' : '';
+    // The screenshot is the point of the contact sheet; it exists only when
+    // the full QA tier captured one, so the tile degrades instead of breaking.
+    const shot = x.siteId && ['review', 'ready'].includes(x.status)
+      ? thumbHtml('/v1/sites/' + x.siteId + '/preview', initialOf(x.siteName), 'sheet-shot')
+      : '<div class="sheet-noshot">' + esc(initialOf(x.siteName)) + '</div>';
+    const actions = x.status === 'review'
+      ? '<button class="primary" data-bact="approve" data-id="' + esc(id) + '" data-cid="' + esc(x.customId) + '" type="button">Approve</button>' +
+        '<button class="ghost danger" data-bact="discard" data-id="' + esc(id) + '" data-cid="' + esc(x.customId) + '" type="button">Discard</button>'
+      : x.status === 'failed'
+        ? '<button class="primary" data-bact="now" data-id="' + esc(id) + '" data-cid="' + esc(x.customId) + '" type="button">Generate now</button>' +
+          '<button class="ghost" data-bact="requeue" data-id="' + esc(id) + '" data-cid="' + esc(x.customId) + '" type="button">Next batch</button>'
         : x.status === 'ready' && x.siteId
-          ? '<a class="ghost btnlink" href="#/sites?site=' + esc(x.siteId) + '" style="margin-left:auto;font-size:0.75rem;padding:0.25rem 0.6rem">Open in Sites →</a>'
-          : '') +
-    '</div>').join('');
+          ? '<a class="ghost btnlink" href="#/sites?site=' + esc(x.siteId) + '">Open in Sites →</a>'
+          : '';
+    return '<div class="sheet-card' + (x.status === 'discarded' ? ' gone' : '') + '">' +
+      (x.siteId && ['review', 'ready'].includes(x.status)
+        ? '<a href="#/sites?site=' + esc(x.siteId) + '" title="Open this site">' + shot + '</a>' : shot) +
+      '<div class="sheet-body">' +
+        '<b>' + esc(x.siteName || x.name) + '</b>' +
+        '<span class="sheet-meta">' + esc(x.name) + (x.reusedTemplate ? ' · from your ' + esc(x.reusedTemplate) : '') + (x.photos ? ' · ' + x.photos + ' photo(s)' : '') + '</span>' +
+        '<span class="brow-state ' + tone + '">' + esc(label) + '</span>' +
+        (x.status === 'failed' ? '<span class="sheet-err">' + esc((x.stage ? x.stage + ': ' : '') + (x.error || '')) + '</span>' : '') +
+        (actions ? '<div class="sheet-actions">' + actions + '</div>' : '') +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  root.innerHTML = bar +
+    (run && run.results.some((r) => !r.ok)
+      ? '<div class="report" style="background:var(--warn-soft);color:var(--warn)">Some sites did not publish:<ul style="margin:0.4rem 0 0;padding-left:1.1rem">' +
+        run.results.filter((r) => !r.ok).map((r) => '<li>' + esc(r.siteName) + ': ' + esc(r.error) + '</li>').join('') + '</ul></div>'
+      : '') +
+    '<div class="sheet">' + cards + '</div>' +
+    '<div data-bulkout="' + esc(id) + '" style="margin-top:0.5rem"></div>';
+  wireThumbFallbacks(root);
 }
 
 /* ── bulk import from a spreadsheet ──────────────────────────────────── */
@@ -2214,6 +2631,17 @@ $('#batchBuildRows')?.addEventListener('change', async (e) => {
   if (!card) return;
   const row = batchRow(card.dataset.batchrow);
   if (!row) return;
+  const tmpl = e.target.closest('select[data-bf="templateId"]');
+  if (tmpl) {
+    row.templateId = tmpl.value || null;
+    // Re-render the pane so the chosen design's screenshot follows the pick.
+    card.querySelector('[data-bpane="design"]').innerHTML = rowDesignPane(row);
+    wireThumbFallbacks(card);
+    updateRowPill(row.rowId);
+    saveBatchDraft();
+    return;
+  }
+
   const cb = e.target.closest('input[data-bfeat]');
   if (cb) {
     const set = new Set(row.features || []);
@@ -2249,6 +2677,20 @@ $('#batchBuildRows')?.addEventListener('click', async (e) => {
   if (!card) return;
   const row = batchRow(card.dataset.batchrow);
   if (!row) return;
+
+  const src = e.target.closest('[data-bsource]');
+  if (src) {
+    const reuse = src.dataset.bsource === 'reuse';
+    row.templateId = reuse ? (row.templateId || siteTemplateOptions[0]?.name || '') : null;
+    card.querySelectorAll('[data-bsource]').forEach((c) => c.classList.toggle('on', (c.dataset.bsource === 'reuse') === reuse));
+    card.querySelector('[data-role="sourceReuse"]').hidden = !reuse;
+    card.querySelector('[data-role="sourceNew"]').hidden = reuse;
+    const sel = card.querySelector('[data-bf="templateId"]');
+    if (sel && row.templateId) sel.value = row.templateId;
+    updateRowPill(row.rowId);
+    saveBatchDraft();
+    return;
+  }
 
   const vibe = e.target.closest('[data-bvibe]');
   if (vibe) {
@@ -2370,17 +2812,64 @@ $('#batchSubmitBtn')?.addEventListener('click', async () => {
 });
 
 $('#batchList')?.addEventListener('click', async (e) => {
+  // "Download all" streams an archive and needs the auth header, so it is
+  // fetched rather than followed as a plain link.
+  const dl = e.target.closest('a[data-bact="export-all"]');
+  if (dl) {
+    e.preventDefault();
+    const out = document.querySelector('[data-bulkout="' + dl.dataset.id + '"]');
+    const res = await fetch('/v1/batches/' + dl.dataset.id + '/export', { headers: { Authorization: 'Bearer ' + getApiKey() } });
+    if (res.ok) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(await res.blob());
+      a.download = (res.headers.get('content-disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'batch.tar.gz';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      if (out) out.innerHTML = '<div class="report ok">Downloaded every finished site, one folder each.</div>';
+    } else if (out) {
+      const b = await res.json().catch(() => ({}));
+      out.innerHTML = '<div class="report" style="background:var(--warn-soft);color:var(--warn)">' + esc(b.error?.message || 'Nothing to download yet.') + '</div>';
+    }
+    return;
+  }
+
   const btn = e.target.closest('button[data-bact]');
   if (!btn) return;
-  if (btn.dataset.bact === 'expand') { expandBatch(btn.dataset.id); return; }
-  if (btn.dataset.bact === 'now' || btn.dataset.bact === 'requeue') {
-    btn.disabled = true;
-    const action = btn.dataset.bact === 'now' ? 'generate-now' : 'requeue';
-    const { status, body } = await api('/v1/batches/' + btn.dataset.id + '/builds/' + btn.dataset.cid + '/' + action, { method: 'POST' });
-    if (status >= 300) alert(body.error?.message || 'Action failed (' + status + ').');
-    await loadBatchView();
-    expandBatch(btn.dataset.id);
+  const id = btn.dataset.id;
+  const out = () => document.querySelector('[data-bulkout="' + id + '"]');
+  if (btn.dataset.bact === 'expand') { expandBatch(id); return; }
+
+  if (btn.dataset.bact === 'discard') {
+    if (!confirm('Discard this design?\n\nThe site and the template this build generated are both deleted. This cannot be undone.')) return;
   }
+  if (btn.dataset.bact === 'publish-all') {
+    if (!confirm('Publish every approved site in this batch?\n\nThey go live on your connected hosting, one after another.')) return;
+  }
+
+  const ROUTE = {
+    now: (cid) => '/builds/' + cid + '/generate-now',
+    requeue: (cid) => '/builds/' + cid + '/requeue',
+    approve: (cid) => '/builds/' + cid + '/approve',
+    discard: (cid) => '/builds/' + cid + '/discard',
+    'approve-all': () => '/approve-all',
+    'publish-all': () => '/publish',
+  };
+  const suffix = ROUTE[btn.dataset.bact];
+  if (!suffix) return;
+  btn.disabled = true;
+  const { status, body } = await api('/v1/batches/' + id + suffix(btn.dataset.cid), { method: 'POST' });
+  if (status >= 300) {
+    const o = out();
+    if (o) o.innerHTML = '<div class="report err">' + esc(body.error?.message || 'That did not work (' + status + ').') + '</div>';
+    btn.disabled = false;
+    return;
+  }
+  if (btn.dataset.bact === 'publish-all') {
+    const o = out();
+    if (o) o.innerHTML = '<div class="report ok">Publishing ' + body.total + ' site(s). Progress updates here as each one lands.</div>';
+  }
+  await loadBatchView();
+  expandBatch(id);
 });
 
 /* ══════════════ Rulebook ══════════════ */

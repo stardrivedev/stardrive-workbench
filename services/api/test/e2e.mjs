@@ -802,6 +802,110 @@ await check('batch draft: rows save with readiness, photos stage per row, an emp
   assert.strictEqual(gone.status, 400, 'an empty draft cannot be submitted');
 });
 
+// These four run on the SECOND licensee: that account never connects a host,
+// so the "Stardrive holds no token here" path is exercised for real (and no
+// live Vercel call is made from the suite).
+await check('custom domain: set, read, re-check, remove — host-agnostic and honest about what it knows', async () => {
+  const made = await call('POST', '/v1/sites', { key: otherAccountKey, body: {
+    templateId: 'd4-site-template', config: { siteName: 'Domain Co' }, assemble: false,
+  } });
+  assert.strictEqual(made.status, 201);
+  const id = made.body.siteId;
+
+  const none = await call('GET', `/v1/sites/${id}/domain`, { key: otherAccountKey });
+  assert.strictEqual(none.body.domain, null);
+  assert.strictEqual(none.body.siteUrlEnv, 'NEXT_PUBLIC_SITE_URL', 'the canonical-URL variable is named up front');
+
+  // What people actually paste is accepted; junk is not.
+  const set = await call('PUT', `/v1/sites/${id}/domain`, { key: otherAccountKey, body: { name: 'https://WWW.TheClient.com/pricing' } });
+  assert.strictEqual(set.status, 200);
+  assert.strictEqual(set.body.domain.name, 'theclient.com', 'scheme, www, path and case all normalized away');
+  assert.strictEqual(set.body.siteUrlValue, 'https://theclient.com');
+  const bad = await call('PUT', `/v1/sites/${id}/domain`, { key: otherAccountKey, body: { name: 'not a domain' } });
+  assert.strictEqual(bad.status, 422);
+  assert.strictEqual(bad.body.error.code, 'bad_domain');
+
+  // With no host token, Stardrive says so instead of inventing DNS values.
+  const view = await call('GET', `/v1/sites/${id}/domain`, { key: otherAccountKey });
+  assert.strictEqual(view.body.manageable, false, 'no Vercel token on this account');
+  assert.ok(view.body.records.length, 'the record SHAPE is still shown');
+  assert.strictEqual(view.body.records[0].value, null, 'no invented IP for a host we cannot see');
+  assert.strictEqual(view.body.records[0].source, 'shape');
+  const verify = await call('POST', `/v1/sites/${id}/domain/verify`, { key: otherAccountKey });
+  assert.strictEqual(verify.status, 422, 'cannot check a host we hold no token for');
+  assert.strictEqual(verify.body.error.code, 'no_target');
+
+  const gone = await call('DELETE', `/v1/sites/${id}/domain`, { key: otherAccountKey });
+  assert.strictEqual(gone.status, 200);
+  assert.match(gone.body.note, /still at your registrar/i, 'honest that DNS is untouched');
+  assert.strictEqual((await call('GET', `/v1/sites/${id}/domain`, { key: otherAccountKey })).body.domain, null);
+  await call('DELETE', `/v1/sites/${id}`, { key: otherAccountKey });
+});
+
+await check('studio draft: a design survives a reload, and an oversized one is refused', async () => {
+  const empty = await call('GET', '/v1/studio/draft', { key: otherAccountKey });
+  assert.strictEqual(empty.status, 200);
+  assert.deepStrictEqual(empty.body.messages, []);
+
+  const saved = await call('PUT', '/v1/studio/draft', { key: otherAccountKey, body: {
+    brief: { business: 'a bakery', vibe: 'Warm & friendly' },
+    features: ['contact-form'],
+    messages: [{ role: 'user', content: 'Design a bakery site.' }, { role: 'assistant', content: '=== FILE: manifest.json ===\n{}\n=== END FILE ===' }],
+  } });
+  assert.strictEqual(saved.status, 200);
+  const back = await call('GET', '/v1/studio/draft', { key: otherAccountKey });
+  assert.strictEqual(back.body.brief.business, 'a bakery');
+  assert.strictEqual(back.body.messages.length, 2);
+  assert.deepStrictEqual(back.body.features, ['contact-form']);
+
+  const huge = await call('PUT', '/v1/studio/draft', { key: otherAccountKey, body: {
+    messages: [{ role: 'assistant', content: 'x'.repeat(3_600_000) }],
+  } });
+  assert.strictEqual(huge.status, 413, 'a runaway draft cannot grow the var dir without bound');
+
+  assert.strictEqual((await call('DELETE', '/v1/studio/draft', { key: otherAccountKey })).status, 200);
+  assert.deepStrictEqual((await call('GET', '/v1/studio/draft', { key: otherAccountKey })).body.messages, []);
+});
+
+await check('templates: own bundles are reopenable, the shared catalog is not, thumbnails 404 cleanly', async () => {
+  // Re-import the fixture: a design has to be reopenable to be refinable.
+  assert.strictEqual((await call('POST', '/v1/templates', { key: otherAccountKey, body: auroraBundle })).status < 300, true);
+  const mine = await call('GET', '/v1/templates/aurora-template?include=files', { key: otherAccountKey });
+  assert.strictEqual(mine.status, 200);
+  assert.ok(Array.isArray(mine.body.files) && mine.body.files.length, 'the bundle comes back so it can be refined');
+  assert.ok(mine.body.files[0].path && typeof mine.body.files[0].content === 'string');
+
+  const shared = await call('GET', '/v1/templates/d4-site-template?include=files', { key: otherAccountKey });
+  assert.strictEqual(shared.status, 403, 'the first-party catalog is not the licensee\'s to edit');
+  assert.strictEqual(shared.body.error.code, 'not_editable');
+  // Without ?include=files the catalog manifest is still readable.
+  assert.strictEqual((await call('GET', '/v1/templates/d4-site-template', { key: otherAccountKey })).status, 200);
+
+  const shot = await call('GET', '/v1/templates/aurora-template/thumbnail', { key: otherAccountKey });
+  assert.strictEqual(shot.status, 404, 'no screenshot without the full QA tier, and it says so');
+  assert.strictEqual(shot.body.error.code, 'no_thumbnail');
+  await call('DELETE', '/v1/templates/aurora-template', { key: otherAccountKey });
+});
+
+await check('studio previews stay out of the client roster', async () => {
+  const before = (await call('GET', '/v1/sites', { key: otherAccountKey })).body.sites.length;
+  const demo = await call('POST', '/v1/sites', { key: otherAccountKey, body: {
+    templateId: 'd4-site-template', config: { siteName: 'Preview · demo' }, assemble: false, preview: true,
+  } });
+  assert.strictEqual(demo.status, 201);
+  const after = await call('GET', '/v1/sites', { key: otherAccountKey });
+  assert.strictEqual(after.body.sites.length, before, 'the demo is not in the client list');
+  const withPreviews = await call('GET', '/v1/sites?include=previews', { key: otherAccountKey });
+  assert.strictEqual(withPreviews.body.sites.length, before + 1, 'but it is still reachable when asked for');
+
+  // A second preview supersedes the first rather than piling up.
+  await call('POST', '/v1/sites', { key: otherAccountKey, body: {
+    templateId: 'd4-site-template', config: { siteName: 'Preview · demo 2' }, assemble: false, preview: true,
+  } });
+  const again = await call('GET', '/v1/sites?include=previews', { key: otherAccountKey });
+  assert.strictEqual(again.body.sites.filter((s) => s.siteName.startsWith('Preview')).length, 1, 'only the newest demo is kept');
+});
+
 await check('content fields: the intake schema for a build that has no site yet', async () => {
   const base = await call('GET', '/v1/content/fields', { key: fullKey });
   assert.strictEqual(base.status, 200);

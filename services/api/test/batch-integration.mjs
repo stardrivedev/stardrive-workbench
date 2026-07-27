@@ -83,12 +83,22 @@ const fake = {
 let liveCalls = 0;
 const fakeRelay = async () => { liveCalls++; return { content: cannedDesign('live'), model: 'fake-live', tokens: 111 }; };
 
+// Publishing, faked: records what a bulk run would have deployed.
+const published = [];
+let publishFailsFor = null;
+
 const metered = [];
 const batches = createBatches(store, {
   runner, imported, catalog, assets,
   accounts: { getAccount: () => ({ id: 'acct-1', plan: 'agency', email: null }) },
   email: { send: () => ({ sent: false }) },
   authMeter: (keyId, name, n = 1) => metered.push([name, n]),
+  resolveTemplate: (account, name) => catalog.get(name) || imported.get(account, name),
+  publishSite: async (account, siteId) => {
+    if (siteId === publishFailsFor) throw new Error('Vercel said no.');
+    published.push(siteId);
+    return { url: `https://${siteId.slice(0, 8)}.example` };
+  },
   provider: fake,
   relay: fakeRelay,
 });
@@ -139,9 +149,9 @@ await check('provider completes: good build -> ready; broken design -> failed, i
   };
   const done = await waitFor(() => {
     const d = batches.detail(ACCT, globalThis.__batchId);
-    return d.builds[0].status === 'ready' && d.builds[1].status === 'failed';
+    return d.builds[0].status === 'review' && d.builds[1].status === 'failed';
   });
-  assert.strictEqual(done, true, 'build 0 ready + build 1 failed');
+  assert.strictEqual(done, true, 'build 0 in review + build 1 failed');
   const d = batches.detail(ACCT, globalThis.__batchId);
   assert.strictEqual(d.builds[0].templateName, 'solstice-bakery', 'template imported under the chosen name');
   assert.ok(d.builds[0].siteId, 'site created');
@@ -182,15 +192,15 @@ await check('generate-now: a failed build regenerates on the live model to ready
   // …then recover it immediately on the (fake) live relay.
   const g = batches.generateNow(ACCT, globalThis.__batchId2, 'b0');
   assert.strictEqual(g.status, 'generating');
-  const ok = await waitFor(() => batches.detail(ACCT, globalThis.__batchId2).builds[0].status === 'ready');
-  assert.strictEqual(ok, true, 'live regeneration lands ready');
+  const ok = await waitFor(() => batches.detail(ACCT, globalThis.__batchId2).builds[0].status === 'review');
+  assert.strictEqual(ok, true, 'live regeneration lands in review');
   assert.strictEqual(liveCalls, 1, 'exactly one live design call');
 });
 
 await check('validation: empty, oversized, and malformed submissions are rejected', async () => {
   await assert.rejects(() => batches.submit(ACCT, 'k', []), /builds/);
   await assert.rejects(() => batches.submit(ACCT, 'k', Array.from({ length: MAX_BATCH_BUILDS + 1 }, (_, i) => ({ name: `t${i}`, siteName: 's', prompt: 'p' }))), /at most/);
-  const bad = batches.preflight([{ siteName: 's', prompt: 'p', facts: FULL_FACTS }]);
+  const bad = batches.preflight(ACCT, [{ siteName: 's', prompt: 'p', facts: FULL_FACTS }]);
   assert.match(bad.problems[0].message, /name/, 'a row with no template name is reported, not thrown past');
 });
 
@@ -214,11 +224,11 @@ await check('readiness gate: an incomplete build blocks the WHOLE submit and eve
 });
 
 await check('readiness gate: a feature module pulls in its own required questions', async () => {
-  const withCareers = batches.preflight([
+  const withCareers = batches.preflight(ACCT, [
     { name: 'Hiring Co', siteName: 'Hiring Co', prompt: 'p', features: ['careers'], facts: FULL_FACTS },
   ]);
   assert.deepStrictEqual(withCareers.problems[0].missing, ['Open roles'], 'careers demands its roles');
-  const answered = batches.preflight([
+  const answered = batches.preflight(ACCT, [
     { name: 'Hiring Co', siteName: 'Hiring Co', prompt: 'p', features: ['careers'],
       facts: { ...FULL_FACTS, roles: [{ title: 'Welder', summary: 'Fabrication work.' }] } },
   ]);
@@ -226,7 +236,7 @@ await check('readiness gate: a feature module pulls in its own required question
 });
 
 await check('readiness gate: a malformed email is caught before the run, not after', async () => {
-  const p = batches.preflight([
+  const p = batches.preflight(ACCT, [
     { name: 'Typo Co', siteName: 'Typo Co', prompt: 'p', features: [], facts: { ...FULL_FACTS, contactEmail: 'not-an-email' } },
   ]);
   assert.match(p.problems[0].message, /email/i);
@@ -267,8 +277,8 @@ await check('draft: the build list saves, reports what each row still needs, and
 await check('draft photos are adopted onto the site the build creates', async () => {
   fake.pollStatus = 'completed';
   fake.results = { 'b0-design': { content: cannedDesign('draft'), tokens: 10 }, 'b0-copy': { content: cannedCopy, tokens: 5 } };
-  const ok = await waitFor(() => batches.detail(ACCT, globalThis.__draftBatch).builds[0].status === 'ready');
-  assert.strictEqual(ok, true, 'the drafted build lands ready');
+  const ok = await waitFor(() => batches.detail(ACCT, globalThis.__draftBatch).builds[0].status === 'review');
+  assert.strictEqual(ok, true, 'the drafted build lands in review');
   const build = batches.detail(ACCT, globalThis.__draftBatch).builds[0];
   assert.strictEqual(build.photos, 1, 'one photo moved onto the site');
   assert.strictEqual((assets.state(build.siteId).logo || []).length, 1, 'the logo is on the site, ready for assembly');
@@ -285,9 +295,112 @@ await check('draft: dropping a row takes its staged photos with it', () => {
   assert.deepStrictEqual(assets.state(rowId), {}, 'no orphaned uploads left behind');
 });
 
+await check('review gate: a generated design lands in review, not ready, and its site is marked pending', () => {
+  const d = batches.detail(ACCT, globalThis.__batchId);
+  assert.strictEqual(d.builds[0].status, 'review');
+  assert.strictEqual(d.builds[0].generatedTemplate, true, 'this build invented its template');
+  const site = store.readJson(`sites/${d.builds[0].siteId}.json`);
+  assert.strictEqual(site.review.state, 'pending', 'the site itself carries the gate, not just the batch');
+  assert.strictEqual(site.review.batchId, globalThis.__batchId);
+});
+
+await check('review gate: approving makes the site publishable', () => {
+  const d = batches.detail(ACCT, globalThis.__batchId);
+  const r = batches.approve(ACCT, globalThis.__batchId, d.builds[0].customId);
+  assert.strictEqual(r.status, 'ready');
+  const site = store.readJson(`sites/${d.builds[0].siteId}.json`);
+  assert.strictEqual(site.review.state, 'approved');
+  // Approving twice is refused rather than silently re-approving.
+  assert.throws(() => batches.approve(ACCT, globalThis.__batchId, d.builds[0].customId), /waiting for review/);
+});
+
+await check('bulk publish: approved sites go, and a batch with nothing approved refuses', async () => {
+  const before = published.length;
+  const r = batches.publishAll(ACCT, globalThis.__batchId);
+  assert.strictEqual(r.total, 1, 'one approved, built site');
+  await waitFor(() => batches.detail(ACCT, globalThis.__batchId).publishRun?.finishedAt);
+  const run = batches.detail(ACCT, globalThis.__batchId).publishRun;
+  assert.strictEqual(run.done, 1);
+  assert.strictEqual(run.results[0].ok, true);
+  assert.match(run.results[0].url, /example$/);
+  assert.strictEqual(published.length, before + 1);
+});
+
+await check('bulk publish: one site failing never stops the others', async () => {
+  const b = await batches.submit(ACCT, 'key-1', [
+    { name: 'Bulk One', siteName: 'Bulk One', prompt: 'p', features: [], facts: FULL_FACTS },
+    { name: 'Bulk Two', siteName: 'Bulk Two', prompt: 'p', features: [], facts: FULL_FACTS },
+  ]);
+  fake.pollStatus = 'completed';
+  fake.results = {
+    'b0-design': { content: cannedDesign('bulk1'), tokens: 1 }, 'b0-copy': { content: cannedCopy, tokens: 1 },
+    'b1-design': { content: cannedDesign('bulk2'), tokens: 1 }, 'b1-copy': { content: cannedCopy, tokens: 1 },
+  };
+  await waitFor(() => batches.detail(ACCT, b.id).builds.every((x) => x.status === 'review'));
+  assert.strictEqual(batches.approveAll(ACCT, b.id).approved, 2, 'approve all clears the queue in one press');
+  publishFailsFor = batches.detail(ACCT, b.id).builds[0].siteId;
+  batches.publishAll(ACCT, b.id);
+  await waitFor(() => batches.detail(ACCT, b.id).publishRun?.finishedAt);
+  const run = batches.detail(ACCT, b.id).publishRun;
+  assert.strictEqual(run.done, 2, 'both attempted');
+  assert.strictEqual(run.results.filter((x) => x.ok).length, 1);
+  assert.match(run.results.find((x) => !x.ok).error, /Vercel said no/);
+  publishFailsFor = null;
+  globalThis.__bulkBatch = b.id;
+});
+
+await check('discard: the site and the template that build generated both go', async () => {
+  const b = await batches.submit(ACCT, 'key-1', [
+    { name: 'Doomed Design', siteName: 'Doomed Design', prompt: 'p', features: [], facts: FULL_FACTS },
+  ]);
+  fake.results = { 'b0-design': { content: cannedDesign('doomed'), tokens: 1 }, 'b0-copy': { content: cannedCopy, tokens: 1 } };
+  await waitFor(() => batches.detail(ACCT, b.id).builds[0].status === 'review');
+  const { siteId, templateName } = batches.detail(ACCT, b.id).builds[0];
+  assert.ok(imported.get(ACCT, templateName), 'the generated template exists before the discard');
+  batches.discard(ACCT, b.id, 'b0');
+  assert.strictEqual(batches.detail(ACCT, b.id).builds[0].status, 'discarded');
+  assert.strictEqual(store.readJson(`sites/${siteId}.json`), null, 'the site is gone');
+  assert.strictEqual(imported.get(ACCT, templateName), null, 'the rejected design is gone too');
+});
+
+await check('reuse a template: no design request, and no second review', async () => {
+  const house = batches.detail(ACCT, globalThis.__bulkBatch).builds[1].templateName;
+  assert.ok(imported.get(ACCT, house), 'house template in the library');
+  const b = await batches.submit(ACCT, 'key-1', [
+    { siteName: 'Franchise A', templateId: house, features: [], facts: FULL_FACTS },
+  ]);
+  const reqs = fake.submitted.at(-1);
+  assert.strictEqual(reqs.length, 1, 'copy only: the design generation is skipped entirely');
+  assert.strictEqual(reqs[0].customId, 'b0-copy');
+  fake.results = { 'b0-copy': { content: cannedCopy, tokens: 5 } };
+  const ok = await waitFor(() => batches.detail(ACCT, b.id).builds[0].status === 'ready');
+  assert.strictEqual(ok, true, 'lands ready with no review step');
+  const build = batches.detail(ACCT, b.id).builds[0];
+  assert.strictEqual(build.generatedTemplate, false);
+  assert.strictEqual(build.reusedTemplate, house);
+  assert.strictEqual(build.templateName, house, 'built from the existing template, not a new one');
+  const site = store.readJson(`sites/${build.siteId}.json`);
+  assert.strictEqual(site.review.state, 'approved', 'a design already in the library needs no second review');
+  // Discarding this one must NOT delete the shared house template.
+  batches.discard(ACCT, b.id, 'b0');
+  assert.ok(imported.get(ACCT, house), 'the reused template survives a discard');
+});
+
+await check('reuse a template: an unknown or non-site template is caught at submit', () => {
+  const missing = batches.preflight(ACCT, [{ siteName: 'X', templateId: 'no-such-template', facts: FULL_FACTS }]);
+  assert.match(missing.problems[0].message, /not in your library/);
+  const wrongKind = batches.preflight(ACCT, [{ siteName: 'X', templateId: 'd4-cms-core', facts: FULL_FACTS }]);
+  assert.match(wrongKind.problems[0].message, /not a base site template/);
+  // A row reusing a template needs no design brief and no new template name.
+  const fine = batches.preflight(ACCT, [{ siteName: 'X', templateId: 'd4-site-template', facts: FULL_FACTS }]);
+  assert.strictEqual(fine.problems.length, 0, 'no brief required when not designing anything');
+});
+
 await check('account isolation: another account cannot read or act on the batch', async () => {
   assert.throws(() => batches.detail('acct-2', globalThis.__batchId), /not found/);
   assert.throws(() => batches.requeue('acct-2', globalThis.__batchId, 'b1'), /not found/);
+  assert.throws(() => batches.approve('acct-2', globalThis.__batchId, 'b0'), /not found/);
+  assert.throws(() => batches.publishAll('acct-2', globalThis.__batchId), /not found/);
   assert.strictEqual(batches.list('acct-2').length, 0);
 });
 

@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
+import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -33,7 +34,9 @@ if (!chromium) {
   process.exit(0);
 }
 
-const PORT = Number(process.env.STARDRIVE_TEST_PORT || 4657);
+// A per-run port: a leftover server from an earlier run holding a fixed port
+// silently serves STALE code to the browser, which reads as random UI failures.
+const PORT = Number(process.env.STARDRIVE_TEST_PORT || (4700 + Math.floor(Math.random() * 200)));
 const BASE = `http://localhost:${PORT}`;
 const varDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stardrive-batchui-'));
 
@@ -52,6 +55,9 @@ function startServer() {
     const t = setTimeout(() => reject(new Error('server never came up: ' + buf)), 15000);
     child.stdout.on('data', (d) => { buf += d; if (buf.includes('listening')) { clearTimeout(t); resolve(child); } });
     child.stderr.on('data', (d) => { buf += d; });
+    // Say so loudly instead of hanging for 15s and then testing nothing: a
+    // port collision here used to look like mysterious UI flakiness.
+    child.on('exit', (code) => { clearTimeout(t); reject(new Error(`server exited early (${code}) on :${PORT}. Output:\n${buf}`)); });
   });
 }
 
@@ -59,10 +65,12 @@ const server = await startServer();
 const browser = await chromium.launch();
 const page = await browser.newPage();
 const errors = [];
-// Two responses are the design, not defects: the gate probes /auth/me before
-// anyone is logged in (401), and this throwaway server has no operator model
-// key, so a real submit gets the honest 501 rather than a fake queue.
-const EXPECTED = /401 \(Unauthorized\)|501 \(Not Implemented\)/;
+// These responses are the design, not defects: the gate probes /auth/me before
+// anyone is logged in (401); this throwaway server has no operator model key,
+// so a real submit gets the honest 501 rather than a fake queue; and with the
+// full QA tier off there are no screenshots, so thumbnail/preview requests
+// 404 and the UI falls back to a lettered plate.
+const EXPECTED = /401 \(Unauthorized\)|501 \(Not Implemented\)|404 \(Not Found\)/;
 page.on('console', (m) => { if (m.type() === 'error' && !EXPECTED.test(m.text())) errors.push(m.text()); });
 page.on('pageerror', (e) => errors.push(String(e.message)));
 // The submit nudges once when a build has no photos yet; say yes.
@@ -71,6 +79,72 @@ page.on('dialog', (d) => { dialogs.push(d.message()); d.accept(); });
 
 const pill = () => page.locator('[data-batchrow] [data-role="pill"]').first().innerText();
 const rows = () => page.locator('[data-batchrow]').count();
+
+/** Open Batch Building and wait for the build list to actually settle: the
+ *  view loads the template library first, so it renders a beat after the nav
+ *  click and asserting straight away is a race. */
+async function gotoBatch() {
+  await page.click('#navBatch');
+  await page.waitForSelector('#view-batch.active');
+  await page.waitForFunction(() => {
+    const el = document.querySelector('#batchBuildRows');
+    return el && el.innerHTML.trim().length > 0;
+  }, null, { timeout: 15000 });
+}
+
+/**
+ * A finished batch, planted directly in the store. The provider is not
+ * configured on this throwaway server, so a real batch can never complete
+ * here; this is the only way to exercise the screen an operator actually
+ * comes back to. Two built sites, both waiting for review.
+ */
+async function plantFinishedBatch() {
+  const ids = await page.evaluate(async () => {
+    const key = localStorage.getItem('sd.apiKey');
+    const make = async (siteName) => {
+      const r = await fetch('/v1/sites', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ templateId: 'd4-site-template', config: { siteName }, assemble: false }),
+      });
+      return (await r.json()).siteId;
+    };
+    return [await make('Planted One'), await make('Planted Two')];
+  });
+
+  const batchId = crypto.randomUUID();
+  const builds = ids.map((siteId, i) => {
+    const sitePath = path.join(varDir, 'sites', `${siteId}.json`);
+    const site = JSON.parse(fs.readFileSync(sitePath, 'utf-8'));
+    // A build that is done: a finished job so the site reads as built, and the
+    // review flag the gate keys off.
+    const jobId = crypto.randomUUID();
+    fs.mkdirSync(path.join(varDir, 'jobs'), { recursive: true });
+    fs.writeFileSync(path.join(varDir, 'jobs', `${jobId}.json`), JSON.stringify({
+      id: jobId, kind: 'assemble', siteId, account: site.account, engine: 'dry',
+      status: 'done', logs: [], result: null,
+      createdAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+    }));
+    site.jobs = [jobId];
+    site.review = { state: 'pending', batchId, customId: `b${i}` };
+    fs.writeFileSync(sitePath, JSON.stringify(site, null, 2));
+    return {
+      customId: `b${i}`, name: `planted-${i}`, siteName: site.config.siteName,
+      status: 'review', stage: null, error: null, templateName: `planted-${i}`,
+      siteId, jobId, tokens: 0, photos: 0, features: [], modules: [],
+      generatedTemplate: true, templateId: null, facts: {}, brief: {}, prompt: 'p', rowId: null, tagline: '',
+    };
+  });
+
+  const account = JSON.parse(fs.readFileSync(path.join(varDir, 'sites', `${ids[0]}.json`), 'utf-8')).account;
+  fs.mkdirSync(path.join(varDir, 'batches'), { recursive: true });
+  fs.writeFileSync(path.join(varDir, 'batches', `${batchId}.json`), JSON.stringify({
+    id: batchId, account, keyId: null, status: 'ready', providerBatchId: 'planted',
+    outputsProcessed: true, builds,
+    createdAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+  }, null, 2));
+  return { batchId, pendingSiteId: ids[1], approvedSiteId: ids[0] };
+}
 
 console.log('batch building UI:');
 
@@ -84,8 +158,7 @@ await check('sign up, then Batch Building is reachable', async () => {
   if (await company.count()) await company.first().fill('Batch UI Co');
   await page.click('#authSubmit');
   await page.waitForSelector('#navBatch:not([hidden])', { timeout: 8000 });
-  await page.click('#navBatch');
-  await page.waitForSelector('#view-batch.active');
+  await gotoBatch();
 });
 
 await check('empty list invites a first build', async () => {
@@ -97,7 +170,7 @@ await check('add a build: the card opens and says what it needs first', async ()
   await page.click('#batchAddRow');
   await page.waitForSelector('[data-batchrow]');
   assert.strictEqual(await rows(), 1);
-  assert.match(await pill(), /Needs a template name/);
+  assert.match(await pill(), /Needs a (business|template) name/);
   assert.ok(await page.locator('[data-bpane="design"]').isVisible(), 'the design pane opens first');
 });
 
@@ -154,7 +227,7 @@ await check('photos stage against the row before any site exists', async () => {
 await check('the list survives a reload (saved server-side, not in the tab)', async () => {
   await page.waitForFunction(() => document.querySelector('#batchSaveState')?.textContent === 'Saved', null, { timeout: 5000 });
   await page.reload({ waitUntil: 'networkidle' });
-  await page.click('#navBatch');
+  await gotoBatch();
   await page.waitForSelector('[data-batchrow]');
   assert.strictEqual(await rows(), 1);
   assert.match(await pill(), /Ready/);
@@ -167,7 +240,7 @@ await check('duplicate copies the work but not the identity', async () => {
   await page.click('[data-bact="duplicate"]');
   await page.waitForFunction(() => document.querySelectorAll('[data-batchrow]').length === 2, null, { timeout: 5000 });
   const second = page.locator('[data-batchrow]').nth(1);
-  assert.match(await second.locator('[data-role="pill"]').innerText(), /Needs a template name/);
+  assert.match(await second.locator('[data-role="pill"]').innerText(), /Needs a (business|template) name/, 'the copy has no identity of its own');
   await second.locator('[data-bbrief="business"]').first().waitFor();
   assert.strictEqual(await second.locator('[data-bbrief="business"]').inputValue(), 'a family bakery in Portland');
 });
@@ -211,6 +284,89 @@ await check('a complete list reaches the provider seam and reports honestly', as
   const msg = await page.locator('#batchSubmitOut').innerText();
   assert.doesNotMatch(msg, /still need answers/, 'the readiness gate passed');
   assert.ok(dialogs.some((d) => /no logo or photos/.test(d)), 'and the photo nudge asked once first');
+});
+
+await check('a row can build from a template already in the library, and stops asking for a brief', async () => {
+  await page.click('#batchAddRow');
+  await page.waitForFunction(() => document.querySelectorAll('[data-batchrow]').length === 4, null, { timeout: 6000 });
+  const row = page.locator('[data-batchrow]').last();
+  await row.locator('[data-bf="siteName"]').fill('Franchise Two');
+  assert.match(await row.locator('[data-role="pill"]').innerText(), /template name|design brief/i, 'a new design needs both');
+  await row.locator('[data-bsource="reuse"]').click();
+  await row.locator('[data-bf="templateId"]').waitFor();
+  await row.locator('[data-bf="templateId"]').selectOption('d4-site-template');
+  // Reusing a design means no brief and no new template name are wanted.
+  assert.strictEqual(await row.locator('[data-role="sourceNew"]').isVisible(), false, 'the brief is put away');
+  await row.locator('[data-btab="content"]').click();
+  for (const [id, v] of [
+    ['whatYouDo', 'We run a franchise location.'],
+    ['aboutFacts', 'Opened in 2021, part of a national group.'],
+    ['services', 'Retail'],
+    ['contactEmail', 'two@franchise.example'],
+  ]) await row.locator('[data-fact="' + id + '"]').fill(v);
+  await page.waitForFunction(
+    () => /Ready/.test(document.querySelectorAll('[data-batchrow] [data-role="pill"]')[3].textContent),
+    null, { timeout: 5000 });
+});
+
+await check('the review gate and bulk actions render once a batch has landed', async () => {
+  // Plant a finished batch directly in the store: the provider is not
+  // configured here, so this is the only way to see the post-batch screen.
+  await page.evaluate(async () => {
+    const r = await fetch('/v1/batches/draft', { headers: { Authorization: 'Bearer ' + localStorage.getItem('sd.apiKey') } });
+    return r.status;
+  });
+  const planted = await plantFinishedBatch();
+  await page.reload({ waitUntil: 'networkidle' });
+  await gotoBatch();
+  await page.waitForSelector('[data-bact="expand"]');
+  await page.click('[data-bact="expand"]');
+  await page.waitForSelector('.sheet-card');
+  assert.strictEqual(await page.locator('.sheet-card').count(), 2, 'a card per design');
+  assert.ok(await page.locator('[data-bact="approve-all"]').count(), 'approve-all offered while designs wait');
+  assert.ok(await page.locator('[data-bact="export-all"]').count(), 'download-all offered');
+  assert.strictEqual(await page.locator('[data-bact="publish-all"]').count(), 0, 'nothing to publish before anything is approved');
+  assert.match(await page.locator('.sheet-card').first().innerText(), /Waiting for your review/);
+  globalThis.__planted = planted;
+});
+
+await check('approving one design unlocks publishing for it alone', async () => {
+  await page.locator('.sheet-card').first().locator('[data-bact="approve"]').click();
+  await page.waitForSelector('[data-bact="publish-all"]', { timeout: 8000 });
+  assert.match(await page.locator('.sheet-card').first().innerText(), /Approved/);
+  assert.match(await page.locator('.sheet-card').nth(1).innerText(), /Waiting for your review/, 'the other is untouched');
+  assert.match(await page.locator('[data-bact="publish-all"]').innerText(), /Publish 1 approved/);
+  assert.ok(await page.locator('[data-bact="approve-all"]').count(), 'one still waiting');
+});
+
+await check('an unreviewed design cannot be published from Sites either', async () => {
+  const pending = globalThis.__planted.pendingSiteId;
+  await page.goto(BASE + '/workbench/#/sites?site=' + pending, { waitUntil: 'networkidle' });
+  await page.waitForSelector('#siteDetail .sstep[data-step="4"]');
+  const step4 = await page.locator('#siteDetail .sstep[data-step="4"]').innerText();
+  assert.match(step4, /waiting for your review/i, 'the gate is explained where the operator would publish');
+  assert.strictEqual(await page.locator('#launchPanel').count(), 0, 'no publish panel while it is pending');
+  assert.ok(await page.locator('[data-siteact="review-approve"]').count(), 'and it can be approved right here');
+});
+
+await check('approving from Sites reveals the publish panel and the custom-domain block', async () => {
+  await page.click('[data-siteact="review-approve"]');
+  await page.waitForSelector('#launchPanel .launch', { timeout: 8000 });
+  await page.waitForSelector('#domInput', { timeout: 8000 });
+  assert.ok(await page.locator('#domainBlock').count(), 'the domain block is part of publishing');
+});
+
+await check('a custom domain is normalized, and Stardrive never invents DNS for a host it cannot see', async () => {
+  await page.fill('#domInput', 'https://WWW.TheClient.com/pricing');
+  await page.click('[data-siteact="domain-save"]');
+  await page.waitForSelector('[data-siteact="domain-remove"]', { timeout: 8000 });
+  const panel = await page.locator('#domainBlock').innerText();
+  assert.match(panel, /theclient\.com/, 'scheme, www, path and case normalized away');
+  assert.match(panel, /NEXT_PUBLIC_SITE_URL=https:\/\/theclient\.com/, 'the canonical URL is handed over');
+  assert.match(panel, /values come from your host/i, 'honest that we did not check a host we have no token for');
+  // The record shape is shown, with no invented IP.
+  assert.match(panel, /\bA\b/);
+  assert.doesNotMatch(panel, /\d+\.\d+\.\d+\.\d+/, 'no made-up IP address');
 });
 
 await check('no JavaScript errors anywhere in the flow', () => {

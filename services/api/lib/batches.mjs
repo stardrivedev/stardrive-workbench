@@ -30,6 +30,7 @@
  * batches/{id}.json, backlog under batches/backlog/{account}.json — restarts
  * resume cleanly (the provider batch keeps running server-side regardless).
  */
+import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { studioConfig, copyModel, relayChat, realBatchProvider } from './chat-proxy.mjs';
 import { designSystemPrompt, parseGeneratedBundle, modulesForFeatures, FEATURES } from './studio-bundle.mjs';
@@ -41,7 +42,10 @@ const httpError = (status, code, message) => Object.assign(new Error(message), {
 
 export const MAX_BATCH_BUILDS = 20;
 const FEATURE_IDS = new Set(FEATURES.map((f) => f.id));
-const TERMINAL = new Set(['ready', 'failed', 'requeued']);
+// `review` and `discarded` are terminal for the BATCH (the automated work is
+// finished and the operator is emailed) even though `review` still wants a
+// human. Publishing is what the review gates, not batch completion.
+const TERMINAL = new Set(['ready', 'review', 'failed', 'requeued', 'discarded']);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // The guided design brief — the same questions the Studio asks interactively,
@@ -68,9 +72,17 @@ function normalizeSpec(raw, i) {
   const siteName = String(raw.siteName ?? '').trim();
   const prompt = String(raw.prompt ?? '').trim();
   const tagline = String(raw.tagline ?? '').trim();
-  if (!name) bad('name (the template name) is required.');
+  // Build on a template the operator already has instead of designing a new
+  // one: no design request at all (half the tokens), and ten franchise sites
+  // come out looking like one brand.
+  const templateId = String(raw.templateId ?? '').trim();
   if (!siteName) bad('siteName is required.');
-  if (!prompt || prompt.length > 20_000) bad('prompt is required (max 20k chars).');
+  if (templateId) {
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(templateId)) bad('templateId must be a template name (lowercase, digits, hyphens).');
+  } else {
+    if (!name) bad('name (the template name) is required.');
+    if (!prompt || prompt.length > 20_000) bad('prompt is required (max 20k chars).');
+  }
   const features = Array.isArray(raw.features) ? raw.features.filter((f) => FEATURE_IDS.has(f)) : [];
   const facts = raw.facts != null && typeof raw.facts === 'object' && !Array.isArray(raw.facts) ? raw.facts : {};
   // A row that staged photos carries its row id so they can be adopted onto
@@ -79,10 +91,10 @@ function normalizeSpec(raw, i) {
   // The guided brief the prompt was composed from, kept so a retry (or a
   // duplicated row) reopens with the same answers rather than raw prose.
   const brief = pickBrief(raw.brief);
-  return { rowId, name, siteName, tagline, prompt, brief, features, facts };
+  return { rowId, name, siteName, tagline, prompt, brief, features, facts, templateId: templateId || null };
 }
 
-export function createBatches(store, { runner, imported, catalog, accounts, email, authMeter, assets = null, provider = null, relay = relayChat } = {}) {
+export function createBatches(store, { runner, imported, catalog, accounts, email, authMeter, assets = null, resolveTemplate = null, publishSite = null, provider = null, relay = relayChat } = {}) {
   const batchPath = (id) => `batches/${id}.json`;
   const backlogPath = (account) => `batches/backlog/${account}.json`;
   const draftPath = (account) => `batches/draft/${account}.json`;
@@ -106,7 +118,7 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
    * `problems` is empty (a malformed row contributes a problem, not a spec),
    * which is exactly when submit() uses it.
    */
-  function preflight(rawBuilds) {
+  function preflight(account, rawBuilds) {
     if (!Array.isArray(rawBuilds) || !rawBuilds.length) {
       throw httpError(400, 'bad_request', 'Body must be { builds: [ { name, prompt, siteName, features?, facts? }, … ] }.');
     }
@@ -124,6 +136,19 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
         return;
       }
       specs.push(spec);
+      // Reusing a template: it has to exist for this account and be a base
+      // site template, checked now rather than hours later mid-batch.
+      if (spec.templateId) {
+        const entry = resolveTemplate ? resolveTemplate(account, spec.templateId) : null;
+        if (!entry) {
+          problems.push({ index: i, name: spec.name || spec.siteName, missing: [], message: `Template "${spec.templateId}" is not in your library.` });
+          return;
+        }
+        if (entry.manifest?.kind !== 'site') {
+          problems.push({ index: i, name: spec.name || spec.siteName, missing: [], message: `"${spec.templateId}" is a ${entry.manifest?.kind} module, not a base site template.` });
+          return;
+        }
+      }
       const modules = modulesForFeatures(spec.features);
       const shape = validateFacts(spec.facts, modules);
       if (!shape.ok) {
@@ -147,7 +172,7 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
   /* ── submit ─────────────────────────────────────────────────────────── */
 
   async function submit(account, keyId, rawBuilds) {
-    const { specs, problems } = preflight(rawBuilds);
+    const { specs, problems } = preflight(account, rawBuilds);
     if (problems.length) {
       throw Object.assign(
         httpError(422, 'builds_incomplete',
@@ -158,12 +183,16 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
     const requests = [];
     const builds = specs.map((s, i) => {
       const modules = modulesForFeatures(s.features);
-      requests.push({
-        customId: `b${i}-design`,
-        model: studioConfig().model,
-        system: designSystemPrompt(s.features),
-        messages: [{ role: 'user', content: s.prompt }],
-      });
+      // A row reusing an existing template needs NO design generation, only
+      // its copy: half the requests, and a design that was already reviewed.
+      if (!s.templateId) {
+        requests.push({
+          customId: `b${i}-design`,
+          model: studioConfig().model,
+          system: designSystemPrompt(s.features),
+          messages: [{ role: 'user', content: s.prompt }],
+        });
+      }
       const cp = copyPromptFor({ siteName: s.siteName, facts: s.facts, modules });
       requests.push({
         customId: `b${i}-copy`,
@@ -198,19 +227,25 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
 
   /* ── the finish pipeline (shared by reconcile + generate-now) ───────── */
 
-  /** Design text + copy pack → imported template + created site + assemble job. */
+  /** Design text (or a reused template) + copy pack → template + created site
+   *  + assemble job. `designText` is null for a build reusing a template. */
   function finishBuild(batch, build, designText, pack) {
-    build.stage = 'import';
-    const bundle = parseGeneratedBundle(designText, build.name);
-    const mf = autofixManifest(bundle.manifest);
-    const repaired = autofixTemplateFiles(bundle.files);
-    const fixed = { manifest: mf.manifest, files: repaired.files };
-    const v = validateBundle(fixed);
-    if (!v.ok) throw new Error(`Template rejected: ${v.errors.slice(0, 3).join(' | ')}`);
-    if (catalog && catalog.has(fixed.manifest.name)) {
-      throw new Error(`"${fixed.manifest.name}" is a first-party catalog name — pick another template name.`);
+    let name = build.templateId;
+    if (!name) {
+      build.stage = 'import';
+      const bundle = parseGeneratedBundle(designText, build.name);
+      const mf = autofixManifest(bundle.manifest);
+      const repaired = autofixTemplateFiles(bundle.files);
+      const fixed = { manifest: mf.manifest, files: repaired.files };
+      const v = validateBundle(fixed);
+      if (!v.ok) throw new Error(`Template rejected: ${v.errors.slice(0, 3).join(' | ')}`);
+      if (catalog && catalog.has(fixed.manifest.name)) {
+        throw new Error(`"${fixed.manifest.name}" is a first-party catalog name — pick another template name.`);
+      }
+      // Only a template this build GENERATED is its own to delete on discard.
+      ({ name } = imported.put(batch.account, fixed, [...mf.fixes.map((f) => `manifest: ${f}`), ...repaired.fixes, ...v.warnings]));
+      build.generatedTemplate = true;
     }
-    const { name } = imported.put(batch.account, fixed, [...mf.fixes.map((f) => `manifest: ${f}`), ...repaired.fixes, ...v.warnings]);
     build.templateName = name;
 
     build.stage = 'assemble';
@@ -226,6 +261,12 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
       parse: null,
       content: build.facts,
       copy: pack,
+      // A design this batch invented has never been seen by a human, so it is
+      // held back from publishing until the operator approves it. A design
+      // they picked from their own library was already reviewed at import.
+      review: build.generatedTemplate
+        ? { state: 'pending', batchId: batch.id, customId: build.customId }
+        : { state: 'approved', batchId: batch.id, customId: build.customId },
       configHistory: [],
       jobs: [],
       createdAt: new Date().toISOString(),
@@ -259,13 +300,22 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
     batch.status = 'ready';
     batch.finishedAt = new Date().toISOString();
     const ready = batch.builds.filter((b) => b.status === 'ready').length;
+    const review = batch.builds.filter((b) => b.status === 'review').length;
     const failed = batch.builds.filter((b) => b.status === 'failed').length;
     const acct = accounts?.getAccount?.(batch.account);
     if (acct?.email && email) {
+      const headline = [
+        review ? `${review} design(s) ready for your review` : '',
+        ready ? `${ready} site(s) ready to publish` : '',
+        failed ? `${failed} need attention` : '',
+      ].filter(Boolean).join(', ');
       email.send({
         to: acct.email,
-        subject: `Your Stardrive batch is done: ${ready} site(s) ready${failed ? `, ${failed} need attention` : ''}`,
-        text: `Batch ${batch.id} finished.\n\n${batch.builds.map((b) => `- ${b.name}: ${b.status}${b.error ? ` (${b.error})` : ''}`).join('\n')}\n\nOpen the Workbench Batch tab to publish the finished sites${failed ? ' and retry the failed ones (Generate now, or add them to your next batch)' : ''}.`,
+        subject: `Your Stardrive batch is done: ${headline || 'nothing to do'}`,
+        text: `Batch ${batch.id} finished.\n\n${batch.builds.map((b) => `- ${b.name}: ${b.status}${b.error ? ` (${b.error})` : ''}`).join('\n')}\n\n`
+          + (review ? `Open the Workbench Batch tab to look over the ${review} new design(s) side by side. Nothing publishes until you approve it.\n` : '')
+          + (ready ? 'Approved sites can be published together from the same screen.\n' : '')
+          + (failed ? 'Failed builds can be rerun now on the live model, or added to your next batch.\n' : ''),
       });
     }
   }
@@ -306,17 +356,22 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
       const out = { ...(p.errorFileId ? await prov.outputs(p.errorFileId) : {}), ...(p.outputFileId ? await prov.outputs(p.outputFileId) : {}) };
       for (const build of batch.builds) {
         if (build.status !== 'generating') continue;
-        const design = out[`${build.customId}-design`];
         const copyRow = out[`${build.customId}-copy`];
-        if (!design || design.error || !design.content) {
-          failBuild(build, 'design', design?.error || 'The provider returned no design output for this build.');
-          continue;
+        // A build reusing a template asked for no design, so there is no
+        // design row to wait for or fail on.
+        let design = null;
+        if (!build.templateId) {
+          design = out[`${build.customId}-design`];
+          if (!design || design.error || !design.content) {
+            failBuild(build, 'design', design?.error || 'The provider returned no design output for this build.');
+            continue;
+          }
         }
         // Copy degrades to the deterministic heuristic pack; never fails a build.
         const pack = packFromText(copyRow?.content || '', { siteName: build.siteName, facts: build.facts });
-        build.tokens = (design.tokens || 0) + (copyRow?.tokens || 0);
+        build.tokens = (design?.tokens || 0) + (copyRow?.tokens || 0);
         try {
-          finishBuild(batch, build, design.content, pack);
+          finishBuild(batch, build, design?.content ?? null, pack);
           meter(batch, 'studio.generations');
           if (build.tokens) meter(batch, 'studio.tokens', build.tokens);
         } catch (e) {
@@ -332,7 +387,9 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
       if (build.status !== 'assembling' || !build.jobId) continue;
       const job = runner.get(build.jobId);
       if (!job) continue;
-      if (job.status === 'done') { build.status = 'ready'; changed = true; }
+      // A generated design goes to the operator for review before it can be
+      // published; a reused template is already approved and lands ready.
+      if (job.status === 'done') { build.status = build.generatedTemplate ? 'review' : 'ready'; changed = true; }
       else if (job.status === 'failed') {
         failBuild(build, 'assemble', job.logs?.at(-1)?.line || 'Assembly failed.');
         changed = true;
@@ -358,6 +415,7 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
   const specOf = (b) => ({
     rowId: b.rowId || null, name: b.name, siteName: b.siteName, tagline: b.tagline || '',
     prompt: b.prompt, brief: b.brief || {}, features: b.features, facts: b.facts,
+    templateId: b.templateId || null,
   });
 
   /** "Add to next batch": the failed build's spec joins the account backlog. */
@@ -373,6 +431,65 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
     return { backlogged: backlog.length };
   }
 
+  /* ── design review (the publish gate) ───────────────────────────────── */
+
+  const setSiteReview = (siteId, state) => {
+    const site = store.readJson(`sites/${siteId}.json`);
+    if (!site) return;
+    site.review = { ...(site.review || {}), state };
+    site.updatedAt = new Date().toISOString();
+    store.writeJson(`sites/${siteId}.json`, site);
+  };
+
+  /** Approve one design: its site becomes publishable. */
+  function approve(account, batchId, customId) {
+    const { batch, build } = findBuild(account, batchId, customId);
+    if (build.status !== 'review') throw httpError(409, 'not_in_review', 'Only a build waiting for review can be approved.');
+    build.status = 'ready';
+    setSiteReview(build.siteId, 'approved');
+    save(batch);
+    return { status: build.status };
+  }
+
+  /** Approve every design still waiting in this batch. */
+  function approveAll(account, batchId) {
+    const batch = get(batchId);
+    if (!batch || batch.account !== account) throw httpError(404, 'not_found', `Batch ${batchId} not found.`);
+    let approved = 0;
+    for (const build of batch.builds) {
+      if (build.status !== 'review') continue;
+      build.status = 'ready';
+      setSiteReview(build.siteId, 'approved');
+      approved += 1;
+    }
+    if (approved) save(batch);
+    return { approved };
+  }
+
+  /**
+   * Reject a design: the site, its workspace, its uploads, and the template
+   * this build generated all go. A template the operator picked from their
+   * own library is never deleted, only the site built from it.
+   */
+  function discard(account, batchId, customId) {
+    const { batch, build } = findBuild(account, batchId, customId);
+    if (!['review', 'ready'].includes(build.status)) {
+      throw httpError(409, 'not_discardable', 'Only a finished build can be discarded.');
+    }
+    if (build.siteId) {
+      store.deleteJson(`sites/${build.siteId}.json`);
+      try { assets?.discard(build.siteId); } catch { /* best effort */ }
+      try { fs.rmSync(store.path('workspaces', build.siteId), { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+    if (build.generatedTemplate && build.templateName) {
+      try { imported.remove(batch.account, build.templateName); } catch { /* best effort */ }
+    }
+    build.status = 'discarded';
+    build.siteId = null;
+    save(batch);
+    return { status: build.status };
+  }
+
   /** "Generate now": run this one failed build immediately on the LIVE model. */
   function generateNow(account, batchId, customId) {
     const { batch, build } = findBuild(account, batchId, customId);
@@ -386,12 +503,17 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
     save(batch);
     (async () => {
       try {
-        const design = await relay({ system: designSystemPrompt(build.features), messages: [{ role: 'user', content: build.prompt }] });
-        meter(batch, 'studio.generations');
-        if (design.tokens) meter(batch, 'studio.tokens', design.tokens);
+        // Reusing a template needs no design call, live or batched.
+        let designText = null;
+        if (!build.templateId) {
+          const design = await relay({ system: designSystemPrompt(build.features), messages: [{ role: 'user', content: build.prompt }] });
+          meter(batch, 'studio.generations');
+          if (design.tokens) meter(batch, 'studio.tokens', design.tokens);
+          designText = design.content;
+        }
         const copy = await generateCopy({ siteName: build.siteName, facts: build.facts, modules: build.modules });
         if (copy.tokens) meter(batch, 'studio.tokens', copy.tokens);
-        finishBuild(batch, build, design.content, copy.pack);
+        finishBuild(batch, build, designText, copy.pack);
       } catch (e) {
         failBuild(build, build.stage || 'design', e);
       }
@@ -406,7 +528,61 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
     customId: b.customId, name: b.name, siteName: b.siteName, status: b.status,
     stage: b.stage, error: b.error, templateName: b.templateName, siteId: b.siteId, jobId: b.jobId,
     photos: b.photos || 0, features: b.features || [],
+    generatedTemplate: Boolean(b.generatedTemplate), reusedTemplate: b.templateId || null,
   });
+
+  /* ── bulk publish ───────────────────────────────────────────────────── */
+
+  /**
+   * Publish every approved, built site in this batch. N deploys take minutes,
+   * so this runs detached (the same fire-and-forget shape generateNow uses)
+   * and reports progress on the batch record, which the Workbench already
+   * polls. One site failing to publish never stops the rest.
+   */
+  function publishAll(account, batchId) {
+    const batch = get(batchId);
+    if (!batch || batch.account !== account) throw httpError(404, 'not_found', `Batch ${batchId} not found.`);
+    if (!publishSite) throw httpError(501, 'publish_unavailable', 'Publishing is not wired up on this server.');
+    if (batch.publishRun && !batch.publishRun.finishedAt) {
+      throw httpError(409, 'already_running', 'A publish run is already going for this batch.');
+    }
+    const targets = batch.builds.filter((b) => b.status === 'ready' && b.siteId);
+    const waiting = batch.builds.filter((b) => b.status === 'review').length;
+    if (!targets.length) {
+      throw httpError(422, 'nothing_to_publish', waiting
+        ? `Nothing is approved yet. ${waiting} design(s) are waiting for your review.`
+        : 'No built, approved sites in this batch to publish.');
+    }
+    batch.publishRun = { startedAt: new Date().toISOString(), finishedAt: null, total: targets.length, done: 0, skipped: waiting, results: [] };
+    save(batch);
+    (async () => {
+      for (const build of targets) {
+        let row;
+        try {
+          const res = await publishSite(account, build.siteId);
+          row = { customId: build.customId, siteName: build.siteName, ok: true, url: res?.url || null };
+        } catch (e) {
+          row = { customId: build.customId, siteName: build.siteName, ok: false, error: String(e?.message || e).slice(0, 300) };
+        }
+        const fresh = get(batch.id);
+        if (!fresh?.publishRun) return;
+        fresh.publishRun.results.push(row);
+        fresh.publishRun.done = fresh.publishRun.results.length;
+        if (fresh.publishRun.done >= fresh.publishRun.total) fresh.publishRun.finishedAt = new Date().toISOString();
+        save(fresh);
+      }
+    })();
+    return { started: true, total: targets.length, skipped: waiting };
+  }
+
+  /** Site ids to include in a whole-batch export (built sites only). */
+  function exportable(account, batchId) {
+    const batch = get(batchId);
+    if (!batch || batch.account !== account) throw httpError(404, 'not_found', `Batch ${batchId} not found.`);
+    return batch.builds
+      .filter((b) => b.siteId && ['ready', 'review'].includes(b.status))
+      .map((b) => ({ siteId: b.siteId, siteName: b.siteName }));
+  }
 
   function list(account) {
     return store.listIds('batches')
@@ -418,15 +594,21 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
         counts: {
           total: b.builds.length,
           ready: b.builds.filter((x) => x.status === 'ready').length,
+          review: b.builds.filter((x) => x.status === 'review').length,
           failed: b.builds.filter((x) => x.status === 'failed').length,
+          discarded: b.builds.filter((x) => x.status === 'discarded').length,
         },
+        publishRun: b.publishRun ?? null,
       }));
   }
 
   function detail(account, id) {
     const b = get(id);
     if (!b || b.account !== account) throw httpError(404, 'not_found', `Batch ${id} not found.`);
-    return { id: b.id, status: b.status, createdAt: b.createdAt, finishedAt: b.finishedAt, builds: b.builds.map(buildView) };
+    return {
+      id: b.id, status: b.status, createdAt: b.createdAt, finishedAt: b.finishedAt,
+      builds: b.builds.map(buildView), publishRun: b.publishRun ?? null,
+    };
   }
 
   const backlogList = (account) => store.readJson(backlogPath(account), []);
@@ -450,6 +632,7 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
       tagline: clip(o.tagline, 300),
       prompt: clip(o.prompt, 20_000),
       brief: pickBrief(o.brief),
+      templateId: clip(o.templateId, 64) || null,
       features: Array.isArray(o.features) ? o.features.filter((f) => FEATURE_IDS.has(f)) : [],
       facts: o.facts && typeof o.facts === 'object' && !Array.isArray(o.facts) ? o.facts : {},
     };
@@ -467,9 +650,13 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
       const modules = modulesForFeatures(r.features || []);
       const ready = readiness(r.facts || {}, modules);
       const blocked = [];
-      if (!r.name) blocked.push('Template name');
       if (!r.siteName) blocked.push('Business name');
-      if (!r.prompt) blocked.push('Design brief');
+      // A row reusing a template needs neither a new template name nor a
+      // design brief: it is not designing anything.
+      if (!r.templateId) {
+        if (!r.name) blocked.push('Template name');
+        if (!r.prompt) blocked.push('Design brief');
+      }
       return {
         ...r,
         modules,
@@ -520,6 +707,7 @@ export function createBatches(store, { runner, imported, catalog, accounts, emai
 
   return {
     submit, submitDraft, preflight, reconcile, list, detail, requeue, generateNow,
+    approve, approveAll, discard, publishAll, exportable,
     backlogList, draftView, saveDraft, draftRowById, clearDraft, MAX_BATCH_BUILDS,
   };
 }
