@@ -284,7 +284,7 @@ function showResetForm(token) {
   $('#appLayout').hidden = true;
   const card = gate.querySelector('.authcard');
   card.innerHTML =
-    '<div class="authbrand"><span class="authlogo">S</span> Stardrive <span class="authtag">Workbench</span></div>' +
+    '<h1 id="authHeading" class="authbrand"><span class="authlogo" aria-hidden="true">S</span> Stardrive <span class="authtag">Workbench</span></h1>' +
     '<h2 style="font-size:1.05rem;margin:0 0 0.2rem">Set a new password</h2>' +
     '<p class="authfine" style="margin:0 0 0.9rem">Choose something you have not used elsewhere. This also signs out every other browser using this account.</p>' +
     '<form id="resetForm" class="authform">' +

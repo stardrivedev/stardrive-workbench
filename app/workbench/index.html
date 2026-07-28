@@ -10,8 +10,10 @@
 <body>
 <!-- ═══ Auth gate (shown until logged in) ═══ -->
 <div id="authGate" class="authgate" hidden>
-  <div class="authcard">
-    <div class="authbrand"><span class="authlogo">S</span> Stardrive <span class="authtag">Workbench</span></div>
+  <!-- A landmark, so a screen-reader user can jump to the form instead of
+       arrowing through loose text on a page with no structure at all. -->
+  <main class="authcard" aria-labelledby="authHeading">
+    <h1 id="authHeading" class="authbrand"><span class="authlogo" aria-hidden="true">S</span> Stardrive <span class="authtag">Workbench</span></h1>
     <div class="authtabs">
       <button class="authtab active" data-authtab="login" type="button">Log in</button>
       <button class="authtab" data-authtab="signup" type="button">Sign up</button>
@@ -33,11 +35,11 @@
       <button type="button" class="linkbtn" id="forgotBtn">Forgotten your password?</button>
     </p>
     <p class="authfine">Your account owns your private templates, mappings, sites, and API keys. Signing up mints your first API key automatically.</p>
-  </div>
+  </main>
 </div>
 
 <div class="layout" id="appLayout" hidden>
-  <aside class="sidebar">
+  <aside class="sidebar" aria-label="Sections">
     <div class="brand">
       <div class="logo">S</div>
       <div><span class="name">Stardrive</span><span class="tag">Workbench</span></div>
@@ -91,7 +93,7 @@
         <div class="jstep" id="jstep-1">
           <div class="jnum">1</div>
           <div class="jbody">
-            <h3>Design a template</h3>
+            <h2>Design a template</h2>
             <p>Generate one by chatting with AI (no model key needed), upload your own, or start from the shared catalog. This is the look, you reuse it across clients.</p>
             <div class="jstatus" id="homeTemplates">…</div>
             <div class="jactions">
@@ -103,7 +105,7 @@
         <div class="jstep" id="jstep-2">
           <div class="jnum">2</div>
           <div class="jbody">
-            <h3>Build a site</h3>
+            <h2>Build a site</h2>
             <p>Assemble a client's real Next.js site from a template: name it, add their logo and images, watch the QA report, and preview the finished result.</p>
             <div class="jstatus" id="homeSites">…</div>
             <div class="jactions">
@@ -114,7 +116,7 @@
         <div class="jstep" id="jstep-3">
           <div class="jnum">3</div>
           <div class="jbody">
-            <h3>Ship it to your hosting</h3>
+            <h2>Ship it to your hosting</h2>
             <p>Connect your own GitHub (and Vercel) once, then deploy any site to accounts <b>you</b> own, or export the finished project any time.</p>
             <div class="jstatus" id="homeHosting">…</div>
             <div class="jactions">
@@ -427,7 +429,9 @@
     <section class="view" id="view-rulebook">
       <p class="lede">The master authoring prompt: hand it to any AI (the Template Studio applies it automatically) and it will produce a template that passes the import gate. Copy it whole.</p>
       <div class="card">
-        <div class="codeblock"><pre id="rulebookPre" style="max-height:30rem;overflow-y:auto"></pre><button class="copybtn" type="button">Copy</button></div>
+        <!-- tabindex on the scrolling box, because a region that only scrolls
+             with a mouse wheel is unreachable to someone using a keyboard. -->
+        <div class="codeblock"><pre id="rulebookPre" tabindex="0" role="region" aria-label="Template authoring rulebook" style="max-height:30rem;overflow-y:auto"></pre><button class="copybtn" type="button">Copy</button></div>
       </div>
     </section>
   </main>

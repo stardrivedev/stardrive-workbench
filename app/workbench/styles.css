@@ -5,7 +5,7 @@
   --sidebar: #f0f0f4;
   --ink: #1a1c26;
   --body: #3c4053;
-  --muted: #71758a;
+  --muted: #63677c;
   --line: #e2e3ec;
   --accent: #5348c7;
   --accent-ink: #ffffff;
@@ -37,7 +37,7 @@
 }
 :root[data-theme="light"] {
   --bg: #f7f7f9; --panel: #ffffff; --sidebar: #f0f0f4; --ink: #1a1c26;
-  --body: #3c4053; --muted: #71758a; --line: #e2e3ec; --accent: #5348c7;
+  --body: #3c4053; --muted: #63677c; --line: #e2e3ec; --accent: #5348c7;
   --accent-ink: #ffffff; --accent-soft: #edecfa; --good: #17784a; --good-soft: #e2f3ea;
   --warn: #9a5b10; --warn-soft: #faf0dd; --bad: #b03a2e; --bad-soft: #fbe9e7;
   --code-bg: #f2f2f7;
@@ -184,7 +184,7 @@ table.list tr:last-child td { border-bottom: 0; }
 .jstep.done { border-color: var(--good); }
 .jnum { width: 2.1rem; height: 2.1rem; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 800; font-size: 1.05rem; display: grid; place-items: center; }
 .jstep.done .jnum { background: var(--good-soft); color: var(--good); }
-.jbody h3 { font-size: 1.12rem; margin-bottom: 0.3rem; }
+.jbody h2 { font-size: 1.12rem; margin-bottom: 0.3rem; }
 .jbody > p { font-size: 0.92rem; color: var(--body); margin: 0 0 0.7rem; max-width: 42rem; }
 .jstatus { font-size: 0.85rem; margin-bottom: 0.9rem; }
 .jstatus .ok { color: var(--good); font-weight: 600; }
