@@ -490,6 +490,69 @@ const ROUTES = [
     },
   },
   {
+    /**
+     * Ask for a reset link.
+     *
+     * Always answers the same, whether or not the address has an account.
+     * Anything else turns this into a way to test which addresses are
+     * registered, and it is a public endpoint by necessity: the person using
+     * it cannot log in.
+     */
+    method: 'POST', pattern: '/auth/forgot-password', scope: 'public', bodyLimit: 4_000,
+    handler: ({ body, req, url }) => {
+      const same = {
+        status: 200,
+        body: {
+          sent: true,
+          message: 'If that address has a Stardrive account, a reset link is on its way. It expires in an hour.',
+        },
+      };
+      if (!ipThrottle('forgot', clientIp(req), 5)) {
+        throw httpError(429, 'rate_limited', 'Too many reset requests from this address — try again in an hour.');
+      }
+
+      // Decided by the DEPLOYMENT, before any lookup. Checking this after
+      // finding the account would make the two answers differ for a known
+      // address and a stranger, which is the exact leak this endpoint is
+      // shaped to avoid.
+      if (!email.configured()) {
+        console.error('[stardrive-api] a password reset was requested but no email provider is configured');
+        return {
+          status: 200,
+          body: {
+            sent: false,
+            message: 'Password reset by email is not switched on for this deployment. Contact whoever runs it and they can reset it for you.',
+          },
+        };
+      }
+
+      const requested = accounts.requestPasswordReset(body?.email);
+      if (requested) {
+        email.passwordReset(requested.account, `${url.origin}/workbench/#/reset?token=${requested.token}`);
+      }
+      return same; // identical whether or not that address has an account
+    },
+  },
+  {
+    // Complete the reset. The token is the whole authorisation, so it is
+    // checked here and nothing else about the caller matters.
+    method: 'POST', pattern: '/auth/reset-password', scope: 'public', bodyLimit: 4_000,
+    handler: ({ body, req }) => {
+      if (!ipThrottle('reset', clientIp(req), 10)) {
+        throw httpError(429, 'rate_limited', 'Too many attempts from this address — try again in an hour.');
+      }
+      const account = accounts.resetPassword(body?.token, body?.password);
+      if (!account) {
+        throw httpError(400, 'bad_token', 'That reset link is not valid any more. It may have been used already, or it may have expired. Ask for a new one.');
+      }
+      // Signed straight in: they have just proved control of the inbox, and
+      // making them retype the password they set five seconds ago is friction
+      // for no security.
+      const token = accounts.createSession(account.id);
+      return { status: 200, cookies: [sessionCookie(token)], body: { account } };
+    },
+  },
+  {
     method: 'POST', pattern: '/auth/login', scope: 'public', bodyLimit: 20_000,
     handler: ({ body }) => {
       const account = accounts.login(body || {});

@@ -86,6 +86,79 @@ await check('sessions store only a hash, expire, and can be destroyed', () => {
   assert.strictEqual(accounts.verifySession(token), null, 'logout really ends it');
 });
 
+// ── Password reset ──
+// Being locked out of your own account with no way back is the worst bug an
+// account system can have, so this path gets the same scrutiny as login.
+
+await check('a reset token is stored only as a hash and lets a new password be set', () => {
+  const { account } = accounts.signup({ email: 'reset@example.com', password: 'originalpass' });
+  const req = accounts.requestPasswordReset('reset@example.com');
+  assert.ok(req.token && /^[0-9a-f]{64}$/.test(req.token));
+  const raw = fs.readFileSync(store.path('accounts', `${account.id}.json`), 'utf-8');
+  assert.strictEqual(raw.includes(req.token), false, 'a leaked store cannot be replayed into a reset');
+
+  assert.ok(accounts.resetPassword(req.token, 'a-brand-new-password'));
+  assert.ok(accounts.login({ email: 'reset@example.com', password: 'a-brand-new-password' }), 'the new one works');
+  assert.strictEqual(accounts.login({ email: 'reset@example.com', password: 'originalpass' }), null, 'the old one does not');
+});
+
+await check('a reset token works exactly once', () => {
+  accounts.signup({ email: 'once@example.com', password: 'originalpass' });
+  const { token } = accounts.requestPasswordReset('once@example.com');
+  assert.ok(accounts.resetPassword(token, 'first-new-password'));
+  assert.strictEqual(accounts.resetPassword(token, 'second-new-password'), null, 'a used link is spent');
+  assert.ok(accounts.login({ email: 'once@example.com', password: 'first-new-password' }));
+});
+
+await check('an expired token is refused', () => {
+  const { account } = accounts.signup({ email: 'stale@example.com', password: 'originalpass' });
+  const { token } = accounts.requestPasswordReset('stale@example.com');
+  // Wind the clock past the hour, the way a link found in an old inbox would.
+  const rec = store.readJson(`accounts/${account.id}.json`);
+  rec.resetExpiresAt = Date.now() - 1000;
+  store.writeJson(`accounts/${account.id}.json`, rec);
+  assert.strictEqual(accounts.resetPassword(token, 'too-late-password'), null);
+  assert.ok(accounts.login({ email: 'stale@example.com', password: 'originalpass' }), 'and the old password still works');
+});
+
+await check('resetting signs out every existing session', () => {
+  const { account } = accounts.signup({ email: 'sessions@example.com', password: 'originalpass' });
+  const a = accounts.createSession(account.id);
+  const b = accounts.createSession(account.id);
+  const { token } = accounts.requestPasswordReset('sessions@example.com');
+  accounts.resetPassword(token, 'replacement-password');
+  // Someone resetting may be doing it BECAUSE a session is in the wrong
+  // hands; leaving those alive would defeat the whole point.
+  assert.strictEqual(accounts.verifySession(a), null);
+  assert.strictEqual(accounts.verifySession(b), null);
+});
+
+await check('a reset also confirms the address, since it proves the same thing', () => {
+  const { account } = accounts.signup({ email: 'unconfirmed@example.com', password: 'originalpass' }, { requireVerification: true });
+  assert.strictEqual(account.emailVerified, false);
+  const { token } = accounts.requestPasswordReset('unconfirmed@example.com');
+  const after = accounts.resetPassword(token, 'now-verified-password');
+  assert.strictEqual(after.emailVerified, true, 'reading the inbox is exactly what verification asks for');
+});
+
+await check('an unknown address yields nothing for the caller to distinguish', () => {
+  assert.strictEqual(accounts.requestPasswordReset('nobody@example.com'), null);
+  assert.strictEqual(accounts.requestPasswordReset(''), null);
+});
+
+await check('a garbage token is refused without touching any account', () => {
+  assert.strictEqual(accounts.resetPassword('not-a-token', 'whatever-password'), null);
+  assert.strictEqual(accounts.resetPassword(null, 'whatever-password'), null);
+  assert.strictEqual(accounts.resetPassword('a'.repeat(64), 'whatever-password'), null);
+});
+
+await check('a reset still enforces the password rules', () => {
+  accounts.signup({ email: 'weak@example.com', password: 'originalpass' });
+  const { token } = accounts.requestPasswordReset('weak@example.com');
+  assert.throws(() => accounts.resetPassword(token, 'short'), /8/);
+  assert.ok(accounts.login({ email: 'weak@example.com', password: 'originalpass' }), 'nothing changed on a rejected attempt');
+});
+
 fs.rmSync(varDir, { recursive: true, force: true });
 if (failures) { console.error(`\n${failures} check(s) FAILED.`); process.exit(1); }
 console.log('\nAll accounts checks passed.');

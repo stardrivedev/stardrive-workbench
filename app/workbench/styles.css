@@ -307,6 +307,14 @@ button.primary.glow { animation: glowpulse 1.5s ease-in-out infinite; }
 .authnote.err { color: var(--bad); }
 .authnote.ok { color: var(--good); }
 .authfine { font-size: 0.78rem; color: var(--muted); margin: 1.2rem 0 0; line-height: 1.6; }
+/* A button styled as a link. Kept a real <button> because it performs an
+   action rather than navigating, which is what assistive tech needs told. */
+.linkbtn {
+  background: none; border: 0; padding: 0; font: inherit; color: var(--accent);
+  text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+}
+.linkbtn:hover { color: var(--ink); }
+.linkbtn:disabled { opacity: 0.5; cursor: default; }
 .acct { border-bottom: 1px solid var(--line); padding-bottom: 0.6rem; }
 .acct-email { font-size: 0.78rem; color: var(--body); word-break: break-all; display: block; }
 .keyreveal { background: var(--good-soft); color: var(--good); border-radius: 8px; padding: 0.85rem 1rem; margin-top: 0.9rem; font-size: 0.86rem; }

@@ -42,6 +42,15 @@ export function createEmail() {
       + `If you didn't create a Stardrive account, ignore this email and nothing happens.`,
   });
 
+  /** The one email a locked-out licensee is waiting on. */
+  const passwordReset = (account, link) => send({
+    to: account.email,
+    subject: 'Reset your Stardrive password',
+    text: `Someone asked to reset the password for this Stardrive account.\n\nSet a new one here:\n\n${link}\n\n`
+      + `The link works once and expires in an hour. Using it also signs out every browser currently logged into this account.\n\n`
+      + `If this was not you, ignore this email. Nothing changes until the link is used, and your current password still works.`,
+  });
+
   const leadNotify = (lead) => send({
     to: process.env.STARDRIVE_LEADS_TO || from().replace(/.*<([^>]+)>.*/, '$1'),
     replyTo: lead.email,
@@ -49,5 +58,5 @@ export function createEmail() {
     text: `${lead.name} <${lead.email}> requested access.\n\nCompany: ${lead.company || '(none)'}\n\n${lead.message || '(no message)'}`,
   });
 
-  return { configured, send, welcome, verify, leadNotify };
+  return { configured, send, welcome, verify, passwordReset, leadNotify };
 }

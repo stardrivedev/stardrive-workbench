@@ -59,7 +59,9 @@ const server = await startServer();
 const browser = await chromium.launch();
 const page = await browser.newPage();
 const errors = [];
-const EXPECTED = /401 \(Unauthorized\)|404 \(Not Found\)/;
+// Expected by design: the pre-login session probe, missing screenshots (no
+// full QA tier here), and the deliberately dead reset token submitted below.
+const EXPECTED = /401 \(Unauthorized\)|404 \(Not Found\)|400 \(Bad Request\)/;
 page.on('console', (m) => { if (m.type() === 'error' && !EXPECTED.test(m.text())) errors.push(m.text()); });
 page.on('pageerror', (e) => errors.push(String(e.message)));
 page.on('dialog', (d) => d.accept());
@@ -197,6 +199,39 @@ await check('the publish panel links to it, so it is found at the moment of need
   // DOM and any wait on it passes instantly, just before the re-render wipes
   // it. Waiting on the thing being asserted is the only race-free version.
   await page.waitForSelector('#launchPanel a[href="#/going-live"]', { timeout: 10000 });
+});
+
+// The token lifecycle (single use, expiry, session invalidation, enumeration)
+// is pinned down in accounts.mjs and e2e.mjs. What can only be checked in a
+// browser is the wiring: that a locked-out person finds the way back, and that
+// the emailed link lands somewhere usable.
+
+await check('a locked-out licensee finds the way back from the login card', async () => {
+  await page.evaluate(() => fetch('/auth/logout', { method: 'POST' }));
+  await page.goto(BASE + '/workbench/', { waitUntil: 'networkidle' });
+  await page.waitForSelector('#authGate:not([hidden])', { timeout: 8000 });
+
+  // Pressed with nothing typed, it should teach rather than fail silently.
+  await page.click('#forgotBtn');
+  await page.waitForFunction(() => /Type your email/.test(document.querySelector('#authNote')?.textContent || ''), null, { timeout: 6000 });
+
+  await page.fill('input[name="email"]', 'handoff-ui@example.com');
+  await page.click('#forgotBtn');
+  await page.waitForFunction(() => /switched on|on its way/.test(document.querySelector('#authNote')?.textContent || ''), null, { timeout: 8000 });
+  const note = await page.textContent('#authNote');
+  assert.match(note, /not switched on/, 'no provider here, and it says so instead of promising an email');
+});
+
+await check('the emailed link opens a reset form, and a dead token fails clearly', async () => {
+  await page.goto(`${BASE}/workbench/#/reset?token=${'a'.repeat(64)}`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('#resetForm', { timeout: 8000 });
+  // The form appears before the token is judged, which is right: the token is
+  // checked on submit, so a bad link cannot be probed by loading a page.
+  await page.fill('#resetForm input[name="password"]', 'a-fresh-long-password');
+  await page.click('#resetForm button[type="submit"]');
+  await page.waitForFunction(() => /not valid any more/.test(document.querySelector('#resetNote')?.textContent || ''), null, { timeout: 8000 });
+  const note = await page.textContent('#resetNote');
+  assert.match(note, /Ask for a new one/, 'and it says what to do next');
 });
 
 await check('no JavaScript errors anywhere in the flow', () => {

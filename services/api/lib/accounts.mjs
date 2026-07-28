@@ -27,6 +27,9 @@ import crypto from 'node:crypto';
 const rmDir = (abs) => { try { fs.rmSync(abs, { recursive: true, force: true }); } catch { /* best effort */ } };
 
 const SESSION_TTL_MS = 30 * 24 * 3600 * 1000; // 30 days
+// Short on purpose: a reset link is a live key to the account, and one left
+// sitting in an old inbox is a spare under the mat.
+const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
 const isEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 const httpError = (status, code, message) => Object.assign(new Error(message), { status, code });
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
@@ -93,6 +96,64 @@ export function createAccounts(store) {
       a.emailVerified = true;
       a.verifyTokenHash = null; // one use only
       store.writeJson(acctRel(id), a);
+      return publicAccount(a);
+    }
+    return null;
+  }
+
+  /**
+   * Begin a password reset. Returns the raw token exactly once, for the email.
+   *
+   * Returns null for an unknown address, and the CALLER must answer the same
+   * either way: a different response would turn this endpoint into a way to
+   * test which addresses have accounts.
+   *
+   * Only the hash is stored, so a leaked store cannot be replayed into a
+   * reset, and it expires, because a link sitting in an old inbox forever is
+   * a spare key under the mat.
+   */
+  function requestPasswordReset(email) {
+    const id = idForEmail(String(email || '').trim());
+    if (!id) return null;
+    const a = store.readJson(acctRel(id));
+    if (!a) return null;
+    const token = crypto.randomBytes(32).toString('hex');
+    a.resetTokenHash = sha256(token);
+    a.resetExpiresAt = Date.now() + RESET_TTL_MS;
+    store.writeJson(acctRel(id), a);
+    return { account: publicAccount(a), token };
+  }
+
+  /**
+   * Complete a reset. Single use, and every existing session for the account
+   * is destroyed: someone resetting a password may be doing it precisely
+   * because a session is in the wrong hands, and leaving those alive would
+   * defeat the point.
+   */
+  function resetPassword(token, password) {
+    if (!token || !/^[0-9a-f]{64}$/.test(token)) return null;
+    password = String(password || '');
+    if (password.length < 8 || password.length > 200) {
+      throw httpError(400, 'bad_request', 'Password must be 8–200 characters.');
+    }
+    const hash = sha256(token);
+    for (const id of store.listIds('accounts')) {
+      const a = store.readJson(acctRel(id));
+      if (!a || a.resetTokenHash !== hash) continue;
+      if (!a.resetExpiresAt || a.resetExpiresAt < Date.now()) return null; // expired reads as invalid
+      a.salt = crypto.randomBytes(16).toString('hex');
+      a.passwordHash = hashPassword(password, a.salt);
+      a.resetTokenHash = null;
+      a.resetExpiresAt = null;
+      // Proving control of the inbox is exactly what verification asks for,
+      // so a reset settles it too rather than leaving them half locked out.
+      a.emailVerified = true;
+      a.verifyTokenHash = null;
+      store.writeJson(acctRel(id), a);
+      for (const s of store.listIds('sessions')) {
+        const rec = store.readJson(`sessions/${s}.json`);
+        if (rec && rec.account === id) store.deleteJson(`sessions/${s}.json`);
+      }
       return publicAccount(a);
     }
     return null;
@@ -230,6 +291,7 @@ export function createAccounts(store) {
 
   return {
     signup, login, getAccount, setPlan, setOverage, verifyEmail, reissueVerification, purge,
+    requestPasswordReset, resetPassword,
     createSession, verifySession, destroySession,
   };
 }

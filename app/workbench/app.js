@@ -75,8 +75,12 @@ const TITLES = {
 };
 function route() {
   const [view, qs] = (location.hash.replace('#/', '') || 'home').split('?');
-  const v = TITLES[view] ? view : 'home';
   const params = new URLSearchParams(qs || '');
+  // Handled before the view lookup, and here as well as at boot: arriving on
+  // a reset link is often a hash-only change (the app already open in that
+  // tab), which never re-runs the boot path.
+  if (view === 'reset' && params.get('token')) { showResetForm(params.get('token')); return; }
+  const v = TITLES[view] ? view : 'home';
   document.querySelectorAll('.view').forEach((el) => el.classList.toggle('active', el.id === 'view-' + v));
   document.querySelectorAll('.nav-item').forEach((el) => el.classList.toggle('active', el.dataset.view === v));
   $('#viewTitle').textContent = TITLES[v];
@@ -243,6 +247,79 @@ $('#authForm').addEventListener('submit', async (e) => {
     $('#authSubmit').disabled = false;
   }
 });
+
+/* ── Forgotten password ────────────────────────────────────────────────── */
+// Two states on the same card rather than a separate screen: someone who has
+// just failed to log in is already here, and sending them somewhere else to
+// recover is how a person gives up.
+
+$('#forgotBtn').addEventListener('click', async () => {
+  const note = $('#authNote');
+  const emailInput = $('#authForm').querySelector('[name="email"]');
+  const address = emailInput.value.trim();
+  if (!address) {
+    note.className = 'authnote';
+    note.textContent = 'Type your email address above first, then press this again.';
+    emailInput.focus();
+    return;
+  }
+  $('#forgotBtn').disabled = true;
+  try {
+    const res = await fetch('/auth/forgot-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: address }),
+    });
+    const body = await res.json().catch(() => ({}));
+    note.className = res.ok ? 'authnote ok' : 'authnote err';
+    note.textContent = body.message || body.error?.message || 'Something went wrong.';
+  } finally {
+    $('#forgotBtn').disabled = false;
+  }
+});
+
+/** The reset form, shown when someone arrives from the emailed link. */
+function showResetForm(token) {
+  const gate = $('#authGate');
+  if (!gate) return;
+  gate.hidden = false;
+  $('#appLayout').hidden = true;
+  const card = gate.querySelector('.authcard');
+  card.innerHTML =
+    '<div class="authbrand"><span class="authlogo">S</span> Stardrive <span class="authtag">Workbench</span></div>' +
+    '<h2 style="font-size:1.05rem;margin:0 0 0.2rem">Set a new password</h2>' +
+    '<p class="authfine" style="margin:0 0 0.9rem">Choose something you have not used elsewhere. This also signs out every other browser using this account.</p>' +
+    '<form id="resetForm" class="authform">' +
+      '<label class="authrow">New password' +
+        '<input name="password" type="password" required minlength="8" autocomplete="new-password" placeholder="at least 8 characters">' +
+      '</label>' +
+      '<button class="primary authsubmit" type="submit">Set password and sign in</button>' +
+      '<p class="authnote" id="resetNote" role="status"></p>' +
+    '</form>';
+
+  $('#resetForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const note = $('#resetNote');
+    const password = e.target.password.value;
+    const btn = e.target.querySelector('button');
+    btn.disabled = true;
+    try {
+      const res = await fetch('/auth/reset-password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, password }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        note.className = 'authnote err';
+        note.textContent = body.error?.message || 'Could not reset the password.';
+        return;
+      }
+      // The reset signed them in, so drop the token out of the URL before
+      // anything else can read it out of the address bar or a bookmark.
+      history.replaceState(null, '', location.pathname + '#/home');
+      location.reload();
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
 
 $('#logoutBtn').addEventListener('click', async () => {
   await fetch('/auth/logout', { method: 'POST' });
@@ -3284,6 +3361,11 @@ $('#rulebookPre').textContent = RULEBOOK_PROMPT;
 
 /* ══════════════ Boot: gate on session ══════════════ */
 (async () => {
+  // Arriving from a reset email beats any existing session: the whole reason
+  // someone follows that link may be that a session is in the wrong hands.
+  const resetToken = new URLSearchParams((location.hash.split('?')[1] || '')).get('token');
+  if (location.hash.startsWith('#/reset') && resetToken) { showResetForm(resetToken); return; }
+
   const account = await whoami();
   if (account) { showApp(account); renderMaskedKey(); revealBatchNav(); route(); }
   else { showGate(); }

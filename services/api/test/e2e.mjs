@@ -1159,6 +1159,54 @@ await check('with the operator model key set, health advertises the Studio on + 
   assert.strictEqual(JSON.stringify(health.body).includes('operator-secret'), false, 'the operator key is never in a response');
 });
 
+// ── Password reset ───────────────────────────────────────────────────────
+console.log('password reset:');
+await check('a known and an unknown address are answered identically', async () => {
+  const PORT_R = 5400 + Math.floor(Math.random() * 90);
+  await startServer(PORT_R, { STARDRIVE_VAR_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'stardrive-reset-')) });
+  const base = `http://localhost:${PORT_R}`;
+  globalThis.__resetBase = base;
+
+  const signup = await call('POST', '/auth/signup', { base, body: { email: 'locked@example.com', password: 'originalpass' } });
+  assert.strictEqual(signup.status, 201);
+
+  const known = await call('POST', '/auth/forgot-password', { base, body: { email: 'locked@example.com' } });
+  const unknown = await call('POST', '/auth/forgot-password', { base, body: { email: 'nobody@example.com' } });
+  // Any difference here turns this into a way to test which addresses have
+  // accounts, and it has to be public because the user cannot log in.
+  assert.strictEqual(known.status, unknown.status);
+  assert.deepStrictEqual(known.body, unknown.body);
+});
+
+await check('with no email provider it says so rather than leaving someone waiting', async () => {
+  const { body } = await call('POST', '/auth/forgot-password', { base: globalThis.__resetBase, body: { email: 'locked@example.com' } });
+  // This deployment has no RESEND_API_KEY, so the honest answer is that the
+  // link is not coming, not a cheerful "check your inbox".
+  assert.strictEqual(body.sent, false);
+  assert.match(body.message, /not switched on/);
+  assert.match(body.message, /Contact whoever runs it/);
+});
+
+await check('a bad reset token is refused with something a person can act on', async () => {
+  const { status, body } = await call('POST', '/auth/reset-password', {
+    base: globalThis.__resetBase,
+    body: { token: 'f'.repeat(64), password: 'a-new-long-password' },
+  });
+  assert.strictEqual(status, 400);
+  assert.strictEqual(body.error.code, 'bad_token');
+  assert.match(body.error.message, /Ask for a new one/);
+});
+
+await check('the reset request is rate limited per address', async () => {
+  const base = globalThis.__resetBase;
+  let limited = false;
+  for (let i = 0; i < 8; i += 1) {
+    const r = await call('POST', '/auth/forgot-password', { base, body: { email: 'locked@example.com' } });
+    if (r.status === 429) { limited = true; break; }
+  }
+  assert.strictEqual(limited, true, 'otherwise it is a free mail cannon pointed at any address');
+});
+
 // ── Site environment + client handoff ────────────────────────────────────
 console.log('site settings + handoff:');
 await check('a new site already knows what it needs and who owes what', async () => {
