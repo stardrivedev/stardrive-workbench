@@ -35,8 +35,30 @@ Everything works dormant; each env var lights up a capability with no code chang
 | **Full QA tier** | `STARDRIVE_QA=full` (+ optional `STARDRIVE_QA_PORT` 4290, `STARDRIVE_QA_TIMEOUT` 300000, `STARDRIVE_PLAYWRIGHT`, `STARDRIVE_AXE`) | Per assembly: npm install → `next build` (the real compile gate) → serve → every route → axe accessibility → 375px overflow → console errors → a screenshot served at `GET /v1/sites/{id}/preview`. Adds ~3–5 min per build; needs npm (+ Playwright for the browser sub-checks, which skip honestly when absent). Default (`structural`) stays fast. |
 | Billing checkout | `STRIPE_SECRET_KEY`, `STRIPE_PRICE_STARTER|STUDIO|AGENCY` | Subscription price ids per plan. |
 | Billing webhook | `STRIPE_WEBHOOK_SECRET` | Point Stripe at `POST /webhooks/stripe`; flips plans on subscribe/cancel. |
-| Email | `RESEND_API_KEY`, `STARDRIVE_EMAIL_FROM`, `STARDRIVE_LEADS_TO` | Signup welcome + access-request notifications. |
+| Email | `RESEND_API_KEY`, `STARDRIVE_EMAIL_FROM`, `STARDRIVE_LEADS_TO` | Signup welcome + access-request notifications. **Also switches on email verification** (see below). |
 | Rate limit | `RATE_LIMIT_PER_MIN` (120) | Per key. |
+| Signup ration | `SIGNUP_LIMIT_PER_HOUR` (5) | Accounts one IP may CREATE per hour. Rejected attempts (bad password, duplicate email) are free, so a typo never burns a real person's allowance. |
+
+## Abuse control on the front door
+
+Signup is unauthenticated and every generation spends the operator's model
+budget, so two things guard it:
+
+- **A per-address ration** on accounts created (`SIGNUP_LIMIT_PER_HOUR`).
+- **Email verification before any model spend.** With `RESEND_API_KEY` set, a
+  new account starts unverified: it can log in, connect hosting, import
+  templates, and set up clients, but template generation, copywriting, and
+  batch submission all answer `403 email_unverified` until the address is
+  confirmed. The link lands on `GET /auth/verify` and redirects into the
+  Console; `POST /auth/resend-verification` sends a fresh one.
+
+Like every other capability here it is **dormant when it cannot work**: with
+no email provider configured there is no way to send a link, so accounts are
+created already verified rather than being stranded behind one. That means
+**turning on email is what turns on verification** — worth knowing before you
+add `RESEND_API_KEY` to an existing deployment, since accounts created after
+that point will need to confirm. Accounts created before verification existed
+are treated as verified and are never retro-locked.
 
 ## State & persistence
 

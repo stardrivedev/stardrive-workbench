@@ -1043,6 +1043,46 @@ await check('a burst past the per-key limit gets 429 + Retry-After', async () =>
   assert.strictEqual(Number(last.headers.get('retry-after')) >= 1, true);
 });
 
+await check('signup is rationed per address, and only a CREATED account counts', async () => {
+  // A random port: a leftover server from an interrupted run holding a fixed
+  // one makes this look like a product failure when it is a port collision.
+  const PORT_D = 4800 + Math.floor(Math.random() * 150);
+  await startServer(PORT_D, { SIGNUP_LIMIT_PER_HOUR: '2' });
+  const base = `http://localhost:${PORT_D}`;
+  const signup = (body) => cookieCall('POST', '/auth/signup', { body, base });
+
+  // Rejected attempts are free: they cost nothing to serve, and a typo must
+  // not burn a legitimate person's allowance. Two of them, then a duplicate,
+  // all while only ONE account has actually been created.
+  assert.strictEqual((await signup({ email: 'nope', password: 'longenough' })).status, 400);
+  assert.strictEqual((await signup({ email: `a+${Date.now()}@e.com`, password: 'short' })).status, 400);
+  const taken = `one+${Date.now()}@e.com`;
+  assert.strictEqual((await signup({ email: taken, password: 'longenough' })).status, 201, 'account 1 of 2');
+  assert.strictEqual((await signup({ email: taken, password: 'longenough' })).status, 409, 'a duplicate is refused, and costs nothing');
+
+  // Only real creations count, so the second one still gets through.
+  assert.strictEqual((await signup({ email: `two+${Date.now()}@e.com`, password: 'longenough' })).status, 201, 'account 2 of 2');
+
+  const over = await signup({ email: `three+${Date.now()}@e.com`, password: 'longenough' });
+  assert.strictEqual(over.status, 429, 'the third real account from this address is refused');
+  assert.strictEqual(over.body.error.code, 'rate_limited');
+});
+
+await check('email verification is dormant when no email provider is configured', async () => {
+  // Locking someone out of a capability we have no way to unlock would be a
+  // bug, not a safeguard: with no provider, accounts arrive verified.
+  const me = await cookieCall('GET', '/auth/me', { cookie: sessionCookie });
+  assert.strictEqual(me.body.account.emailVerified, true);
+  // And the model-spend gate lets them through to the honest 501.
+  const relay = await call('POST', '/workbench/chat', { key: sessionKeySecret, body: { messages: [{ role: 'user', content: 'hi' }] } });
+  assert.strictEqual(relay.status, 501, 'stopped by the dormant model, not by verification');
+  // A person clicks this link, so a stale one lands them in the Console
+  // rather than showing them raw JSON. redirect:'manual' to see the 302.
+  const bad = await fetch(`${BASE}/auth/verify?token=${'f'.repeat(64)}`, { redirect: 'manual' });
+  assert.strictEqual(bad.status, 302);
+  assert.match(bad.headers.get('location'), /verified=0/);
+});
+
 // ── Studio configured (server-side model key present) ────────────────────
 console.log('studio configured:');
 await check('with the operator model key set, health advertises the Studio on + the configured model (key never exposed)', async () => {

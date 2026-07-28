@@ -33,6 +33,15 @@ export function createEmail() {
     text: `Your Stardrive account is ready.\n\nYour first API key was created in the Workbench — it's the license your scripts use. Sign in at the Workbench to generate templates, assemble sites, and connect your own hosting.\n\nReply to this email any time; we read every one.`,
   });
 
+  /** Confirm the address before it can spend the operator's model budget. */
+  const verify = (account, link) => send({
+    to: account.email,
+    subject: 'Confirm your email to start building',
+    text: `Welcome to Stardrive.\n\nConfirm this address to switch on template generation and site copy:\n\n${link}\n\n`
+      + `Everything else is ready now: connect your hosting, import templates, and set up your first client. Only the AI generation waits on this.\n\n`
+      + `If you didn't create a Stardrive account, ignore this email and nothing happens.`,
+  });
+
   const leadNotify = (lead) => send({
     to: process.env.STARDRIVE_LEADS_TO || from().replace(/.*<([^>]+)>.*/, '$1'),
     replyTo: lead.email,
@@ -40,5 +49,5 @@ export function createEmail() {
     text: `${lead.name} <${lead.email}> requested access.\n\nCompany: ${lead.company || '(none)'}\n\n${lead.message || '(no message)'}`,
   });
 
-  return { configured, send, welcome, leadNotify };
+  return { configured, send, welcome, verify, leadNotify };
 }

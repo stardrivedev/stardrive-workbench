@@ -48,6 +48,9 @@ const ENGINE = process.env.STARDRIVE_ENGINE || 'dry';
 const ENGINE_DIR = path.join(HERE, '..', '..', 'vendor', 'd4'); // vendored d4 assembler + modules
 
 const SECURE_COOKIES = process.env.STARDRIVE_SECURE_COOKIES === '1' || process.env.NODE_ENV === 'production';
+// Accounts one address may create per hour. Signup is the unauthenticated
+// front door to spending the operator's model budget, so it is rationed.
+const SIGNUP_PER_HOUR = Number(process.env.SIGNUP_LIMIT_PER_HOUR) || 5;
 
 const store = new VarStore(VAR_DIR);
 const auth = createAuth(store, { rateLimitPerMin: Number(process.env.RATE_LIMIT_PER_MIN) || 120 });
@@ -164,6 +167,21 @@ function enqueueAssemble(siteId, accountId) {
 function siteReadiness(site) {
   const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
   return readiness(site.content || {}, modules);
+}
+
+/**
+ * The one gate in front of anything that spends the operator's model budget:
+ * generating a template, writing a site's copy, or submitting a batch. It
+ * checks BOTH that the address was confirmed and that the plan has quota
+ * left, so a new spend path cannot accidentally skip one of the two. Call it
+ * instead of billing.checkStudioQuota directly.
+ */
+function gateModelSpend(account, usage = null) {
+  if (account?.emailVerified === false) {
+    throw httpError(403, 'email_unverified',
+      'Confirm your email address to switch on AI generation. We sent you a link when you signed up; the Workbench can send it again.');
+  }
+  billing.checkStudioQuota(account, usage ?? billing.usageSummary(account, listKeys, auth.usageFor, store));
 }
 
 /**
@@ -334,12 +352,44 @@ const ROUTES = [
   // machine license). Signup mints the account's first full-scope key.
   {
     method: 'POST', pattern: '/auth/signup', scope: 'public', bodyLimit: 20_000,
-    handler: ({ body }) => {
-      const account = accounts.signup(body || {});
+    handler: ({ body, req, url }) => {
+      // Signing up is free and unauthenticated, and every generation spends
+      // the operator's real model budget, so the front door gets both a
+      // per-address throttle and (when we can actually send mail) a confirmed
+      // address before any of that budget can be touched.
+      const ip = clientIp(req);
+      if (throttleExceeded('signup', ip, SIGNUP_PER_HOUR)) {
+        throw httpError(429, 'rate_limited', 'Too many accounts created from this address — try again in an hour.');
+      }
+      const { account, verifyToken } = accounts.signup(body || {}, { requireVerification: email.configured() });
+      throttleRecord('signup', ip); // charged only for an account that got created
       const { record, secret } = mintKey(store, { name: 'Default key', scopes: SCOPES, account: account.id });
       const token = accounts.createSession(account.id);
-      email.welcome(account); // fire-and-forget; no-op until email is configured
+      // Fire-and-forget; both are no-ops until email is configured.
+      if (verifyToken) email.verify(account, `${url.origin}/auth/verify?token=${verifyToken}`);
+      else email.welcome(account);
       return { status: 201, cookies: [sessionCookie(token)], body: { account, apiKey: { ...record, secret } } };
+    },
+  },
+  {
+    // The link from the confirmation email. A browser lands here, so it
+    // redirects into the Console rather than answering JSON at a person.
+    method: 'GET', pattern: '/auth/verify', scope: 'public',
+    handler: ({ url }) => {
+      const ok = accounts.verifyEmail(url.searchParams.get('token'));
+      return { redirect: `/workbench/#/home?verified=${ok ? '1' : '0'}` };
+    },
+  },
+  {
+    method: 'POST', pattern: '/auth/resend-verification', scope: 'session',
+    handler: ({ account, req, url }) => {
+      if (!ipThrottle('verify-resend', clientIp(req), 5)) {
+        throw httpError(429, 'rate_limited', 'Too many emails requested — try again in an hour.');
+      }
+      const reissued = accounts.reissueVerification(account.id);
+      if (!reissued) return { status: 200, body: { sent: false, alreadyVerified: true } };
+      email.verify(reissued.account, `${url.origin}/auth/verify?token=${reissued.verifyToken}`);
+      return { status: 200, body: { sent: true, to: reissued.account.email } };
     },
   },
   {
@@ -837,7 +887,7 @@ const ROUTES = [
       }
       // Same token-quota gate as the Studio, before spending any model budget.
       const account = accounts.getAccount(key.account) || { id: key.account, plan: 'beta' };
-      billing.checkStudioQuota(account, billing.usageSummary(account, listKeys, auth.usageFor, store));
+      gateModelSpend(account);
       const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
       const result = await generateCopy({ siteName: site.config.siteName, facts: site.content || {}, modules });
       site.copy = result.pack;
@@ -864,7 +914,7 @@ const ROUTES = [
       // "Write the copy". Same quota gate as the Studio.
       if (ready.ready && !site.copy) {
         const account = accounts.getAccount(key.account) || { id: key.account, plan: 'beta' };
-        billing.checkStudioQuota(account, billing.usageSummary(account, listKeys, auth.usageFor, store));
+        gateModelSpend(account);
         const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
         const result = await generateCopy({ siteName: site.config.siteName, facts: site.content || {}, modules });
         site.copy = result.pack;
@@ -1192,7 +1242,7 @@ const ROUTES = [
       // Gate on the account's token quota before spending model budget.
       const account = accounts.getAccount(key.account) || { id: key.account, plan: 'beta' };
       const usage = billing.usageSummary(account, listKeys, auth.usageFor, store);
-      billing.checkStudioQuota(account, usage);
+      gateModelSpend(account, usage);
       const result = await relayChat({ system: body?.system, messages: body?.messages });
       auth.meter(key.id, 'studio.generations');
       if (result.tokens) auth.meter(key.id, 'studio.tokens', result.tokens);
@@ -1248,7 +1298,7 @@ const ROUTES = [
       if (!billing.planAllows(account, 'batch')) {
         throw httpError(403, 'plan_required', 'Batch Building is an Agency-plan feature — upgrade to queue overnight builds.');
       }
-      billing.checkStudioQuota(account, billing.usageSummary(account, listKeys, auth.usageFor, store));
+      gateModelSpend(account);
       try {
         // No `builds` in the body means "submit my saved draft" (what the
         // Workbench does); an explicit list keeps the API usable headlessly.
@@ -1368,7 +1418,7 @@ const ROUTES = [
     handler: ({ params, key }) => {
       const account = accounts.getAccount(key.account) || { id: key.account, plan: 'beta' };
       // Live regeneration spends interactive tokens; same quota gate as the Studio.
-      billing.checkStudioQuota(account, billing.usageSummary(account, listKeys, auth.usageFor, store));
+      gateModelSpend(account);
       return { status: 202, body: batches.generateNow(key.account, assertUuid(params.id, 'batch id'), String(params.cid)) };
     },
   },
@@ -1378,8 +1428,7 @@ const ROUTES = [
   {
     method: 'POST', pattern: '/site/request-access', scope: 'public', bodyLimit: 20_000,
     handler: ({ body, req }) => {
-      const ip = String(req.socket?.remoteAddress || 'unknown');
-      if (!leadThrottle(ip)) throw httpError(429, 'rate_limited', 'Too many requests from this address — try again in an hour.');
+      if (!ipThrottle('leads', clientIp(req), 5)) throw httpError(429, 'rate_limited', 'Too many requests from this address — try again in an hour.');
       const name = String(body?.name ?? '').trim();
       const emailAddr = String(body?.email ?? '').trim();
       const company = String(body?.company ?? '').trim();
@@ -1399,18 +1448,45 @@ const ROUTES = [
   },
 ];
 
-// Per-IP sliding-hour throttle for the public lead form (5/hour).
-const LEAD_WINDOW_MS = 3_600_000;
-const leadHits = new Map();
-function leadThrottle(ip) {
+/**
+ * Per-IP sliding-window throttle for the unauthenticated front door. There is
+ * no API key to rate-limit on out here, so the address is all we have.
+ * `bucket` keeps each endpoint's history separate, so lead spam and signup
+ * spam cannot exhaust each other's allowance.
+ */
+const THROTTLE_WINDOW_MS = 3_600_000;
+const throttleBuckets = new Map();
+
+function throttleHits(bucket, ip) {
+  let hits = throttleBuckets.get(bucket);
+  if (!hits) { hits = new Map(); throttleBuckets.set(bucket, hits); }
   const now = Date.now();
-  const hits = (leadHits.get(ip) || []).filter((t) => now - t < LEAD_WINDOW_MS);
-  if (hits.length >= 5) return false;
-  hits.push(now);
-  leadHits.set(ip, hits);
-  if (leadHits.size > 10_000) leadHits.clear(); // memory guard; resets throttles, acceptable
+  const recent = (hits.get(ip) || []).filter((t) => now - t < THROTTLE_WINDOW_MS);
+  hits.set(ip, recent);
+  if (hits.size > 10_000) hits.clear(); // memory guard; resets throttles, acceptable
+  return { hits, recent };
+}
+
+/** Is this address already over its allowance for `bucket`? */
+const throttleExceeded = (bucket, ip, limit) => throttleHits(bucket, ip).recent.length >= limit;
+
+/** Record one use. Deliberately separate from the check, so a caller can
+ *  charge the allowance only for what actually happened: signup rations
+ *  ACCOUNTS CREATED, not attempts, or a typo'd password would count against
+ *  a legitimate person while costing us nothing. */
+function throttleRecord(bucket, ip) {
+  const { hits, recent } = throttleHits(bucket, ip);
+  recent.push(Date.now());
+  hits.set(ip, recent);
+}
+
+/** Check and record in one go, for endpoints where the attempt IS the cost. */
+function ipThrottle(bucket, ip, limit) {
+  if (throttleExceeded(bucket, ip, limit)) return false;
+  throttleRecord(bucket, ip);
   return true;
 }
+const clientIp = (req) => String(req.socket?.remoteAddress || 'unknown');
 
 // ── Server ───────────────────────────────────────────────────────────────
 
@@ -1460,6 +1536,12 @@ const server = createServer(async (req, res) => {
     if (route.meter && out.status < 400) auth.meter(key.id, route.meter);
   }
   if (out.cookies) res.setHeader('Set-Cookie', out.cookies);
+  // A handler a PERSON lands on (an emailed link) answers with a redirect
+  // into the Console, not JSON at a human being.
+  if (out.redirect) {
+    res.writeHead(out.status || 302, { Location: out.redirect });
+    return res.end();
+  }
   if (out.raw) {
     res.writeHead(out.status, { ...out.headers, 'Content-Length': out.buffer.length });
     return res.end(out.buffer);

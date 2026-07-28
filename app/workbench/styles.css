@@ -458,3 +458,13 @@ button.primary.glow { animation: glowpulse 1.5s ease-in-out infinite; }
 .sheet-err { font-size: 0.75rem; color: var(--bad); }
 .sheet-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.35rem; }
 .sheet-actions button, .sheet-actions .btnlink { font-size: 0.75rem; padding: 0.25rem 0.6rem; }
+
+/* ── Email confirmation notice (AI generation waits on it) ── */
+.verifybar {
+  display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+  margin: 0 0 1rem; padding: 0.65rem 0.85rem; border-radius: 8px;
+  background: var(--warn-soft); color: var(--warn); font-size: 0.86rem; line-height: 1.45;
+}
+.verifybar.ok { background: var(--good-soft); color: var(--good); }
+.verifybar[hidden] { display: none; }
+.verifybar button { font-size: 0.78rem; padding: 0.2rem 0.6rem; }

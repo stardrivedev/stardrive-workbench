@@ -69,7 +69,12 @@ function route() {
   document.querySelectorAll('.view').forEach((el) => el.classList.toggle('active', el.id === 'view-' + v));
   document.querySelectorAll('.nav-item').forEach((el) => el.classList.toggle('active', el.dataset.view === v));
   $('#viewTitle').textContent = TITLES[v];
-  if (v === 'home') loadHome();
+  if (v === 'home') {
+    loadHome();
+    // Landing back from the confirmation email: pick up the new state so the
+    // banner clears itself instead of lingering until a manual reload.
+    if (params.has('verified')) confirmVerification(params.get('verified') === '1');
+  }
   if (v === 'templates') loadTemplates();
   if (v === 'studio') restoreStudioDraft();
   if (v === 'sites') {
@@ -137,7 +142,57 @@ function showApp(account) {
   $('#authGate').hidden = true;
   $('#appLayout').hidden = false;
   $('#acctEmail').textContent = account.email;
+  renderVerifyBanner(account);
 }
+
+/**
+ * Everything works before the address is confirmed except AI generation,
+ * which spends real money. Say exactly that, once, at the top of the app,
+ * rather than letting the operator discover it as a 403 mid-build.
+ */
+function renderVerifyBanner(account) {
+  const host = $('#verifyBanner');
+  if (!host) return;
+  if (!account || account.emailVerified !== false) { host.hidden = true; host.innerHTML = ''; return; }
+  host.hidden = false;
+  host.innerHTML =
+    '<b>Confirm your email to switch on AI generation.</b> We sent a link to ' + esc(account.email) +
+    '. Everything else works now: connect hosting, import templates, set up a client. ' +
+    '<button class="ghost" id="resendVerify" type="button">Send it again</button>' +
+    '<span id="resendVerifyOut"></span>';
+}
+
+async function confirmVerification(ok) {
+  const host = $('#verifyBanner');
+  if (!host) return;
+  if (!ok) {
+    host.hidden = false;
+    host.innerHTML = '<b>That confirmation link did not work.</b> It may have already been used, or it expired. ' +
+      '<button class="ghost" id="resendVerify" type="button">Send a new one</button><span id="resendVerifyOut"></span>';
+    return;
+  }
+  const account = await whoami();
+  renderVerifyBanner(account);
+  host.hidden = false;
+  host.classList.add('ok');
+  host.innerHTML = '<b>Email confirmed.</b> AI generation is on.';
+  setTimeout(() => { host.hidden = true; host.classList.remove('ok'); }, 6000);
+}
+
+document.addEventListener('click', async (e) => {
+  if (!e.target.closest('#resendVerify')) return;
+  const btn = e.target.closest('#resendVerify');
+  btn.disabled = true;
+  const out = $('#resendVerifyOut');
+  const res = await fetch('/auth/resend-verification', { method: 'POST' });
+  const body = await res.json().catch(() => ({}));
+  if (out) {
+    out.textContent = res.ok
+      ? (body.alreadyVerified ? ' Already confirmed, reload the page.' : ' Sent, check your inbox.')
+      : ' ' + (body.error?.message || 'Could not send it just now.');
+  }
+  btn.disabled = false;
+});
 
 let authMode = 'login';
 document.querySelectorAll('.authtab').forEach((t) => t.addEventListener('click', () => {
@@ -2365,18 +2420,33 @@ function renderBatchRows() {
  *  Which compartments exist depends on the row's features, so any unsaved edit
  *  is flushed first — otherwise a just-toggled module's page-hero slot would be
  *  missing from the list the operator is looking at. */
+const photoLoadSeq = new Map(); // rowId → the newest in-flight load
+
 async function loadRowPhotos(rowId) {
   const pane = document.querySelector('[data-batchrow="' + rowId + '"] [data-role="photos"]');
   if (!pane) return;
+  // Toggling a feature and then opening Photos fires two loads at once. Both
+  // repaint the pane, so a late first response can replace the file input
+  // mid-upload and silently swallow the file. Only the newest load paints.
+  const seq = (photoLoadSeq.get(rowId) || 0) + 1;
+  photoLoadSeq.set(rowId, seq);
+  const stale = () => photoLoadSeq.get(rowId) !== seq;
+
   if (batchDirty) await saveBatchDraft({ now: true });
+  if (stale()) return;
   const { status, body } = await api('/v1/batches/draft/rows/' + rowId + '/assets');
+  if (stale()) return;
   if (status !== 200) {
     pane.innerHTML = '<div class="report err">' + esc(body.error?.message || 'Could not load the compartments (' + status + ').') + '</div>';
     return;
   }
-  pane.innerHTML = body.slots
+  const html = body.slots
     .map((slot) => assetSlotCard(slot, body.assets[slot.id] || [], { upload: 'data-brupload', del: 'data-brassetdel' }))
     .join('');
+  // Repaint ONLY on a real change. Opening the Photos tab can legitimately
+  // trigger a second load; replacing identical markup would rip the file
+  // input out from under whoever is mid-drop, and flicker for no reason.
+  if (pane.innerHTML !== html) pane.innerHTML = html;
   const row = batchRow(rowId);
   if (row) {
     row.photos = Object.values(body.assets).reduce((n, items) => n + items.length, 0);
