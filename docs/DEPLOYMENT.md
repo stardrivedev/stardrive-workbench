@@ -102,3 +102,18 @@ the image `HEALTHCHECK` uses it.
   site to the customer's **GitHub** today (their connected token). Direct
   Vercel/Turso provisioning per client is the next integration; until then,
   linking the pushed repo to Vercel builds on push.
+
+## Build throughput
+
+Builds run on a bounded worker pool, `STARDRIVE_BUILD_CONCURRENCY` (default 2).
+A full-QA build is `npm install` plus `next build`, so each one is CPU and
+memory hungry; raise this only with headroom to match.
+
+Work is taken **round-robin per account**, not first-in-first-out. An agency
+submitting a batch of twenty therefore cannot put every other licensee behind
+an hour of their builds: a single build queued afterwards runs next, not last.
+
+Two jobs for the same site never overlap, because they share one workspace
+directory. `GET /v1/health` reports `builds: { concurrency, active, queued,
+accountsWaiting }`, so a backed-up queue is visible from outside instead of
+only surfacing as customers wondering why nothing finished.

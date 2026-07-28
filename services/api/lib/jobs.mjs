@@ -135,9 +135,23 @@ function writeSafe(outDir, relPath, file) {
   fs.writeFileSync(dest, buf);
 }
 
-export function createJobRunner(store, { engine = 'dry', assets = null, engineDir = null, resolveTemplate = null } = {}) {
-  const queue = [];
-  let running = false;
+/**
+ * How many builds may run at once. A full-QA build is `npm install` plus
+ * `next build`, which is CPU and memory hungry, so this is deliberately small
+ * and tunable rather than "as many as arrive".
+ */
+const DEFAULT_CONCURRENCY = Number(process.env.STARDRIVE_BUILD_CONCURRENCY) || 2;
+
+export function createJobRunner(store, { engine = 'dry', assets = null, engineDir = null, resolveTemplate = null, concurrency = DEFAULT_CONCURRENCY } = {}) {
+  // Work is queued PER ACCOUNT and taken round-robin. With one shared queue,
+  // an agency submitting a batch of twenty would put every other licensee
+  // behind an hour of their builds; fairness is the whole point of the split.
+  const queues = new Map();   // account → [{ id, siteId }]
+  const order = [];           // accounts with work waiting, in rotation order
+  let rr = 0;                 // rotation cursor
+  let active = 0;             // builds in flight
+  const activeSites = new Set(); // one build per site: they share a workspace
+  const limit = Math.max(1, Number(concurrency) || 1);
 
   const jobPath = (id) => `jobs/${id}.json`;
 
@@ -192,16 +206,49 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
       finishedAt: null,
     };
     save(job);
-    queue.push(job.id);
-    setImmediate(tick);
+    const acct = job.account ?? '_unowned';
+    if (!queues.has(acct)) { queues.set(acct, []); order.push(acct); }
+    queues.get(acct).push({ id: job.id, siteId: job.siteId });
+    setImmediate(pump);
     return job;
   }
 
-  async function tick() {
-    if (running) return;
-    const id = queue.shift();
-    if (!id) return;
-    running = true;
+  /**
+   * The next runnable job, round-robin across accounts. Skips any job for a
+   * site that is already building: two assembles for one site would fight
+   * over the same workspace directory and corrupt each other.
+   */
+  function takeNext() {
+    for (let n = 0; n < order.length; n += 1) {
+      rr %= order.length;
+      const acct = order[rr];
+      const q = queues.get(acct);
+      if (!q || !q.length) { queues.delete(acct); order.splice(rr, 1); continue; }
+      const at = q.findIndex((j) => !activeSites.has(j.siteId));
+      if (at === -1) { rr += 1; continue; } // this account is blocked; try another
+      const [job] = q.splice(at, 1);
+      if (!q.length) { queues.delete(acct); order.splice(rr, 1); } else { rr += 1; }
+      return job;
+    }
+    return null;
+  }
+
+  /** Start as much work as the concurrency limit allows. */
+  function pump() {
+    while (active < limit) {
+      const next = takeNext();
+      if (!next) return;
+      active += 1;
+      if (next.siteId) activeSites.add(next.siteId);
+      runJob(next.id).finally(() => {
+        active -= 1;
+        if (next.siteId) activeSites.delete(next.siteId);
+        setImmediate(pump);
+      });
+    }
+  }
+
+  async function runJob(id) {
     const job = get(id);
     try {
       job.status = 'running';
@@ -217,9 +264,15 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
     }
     job.finishedAt = new Date().toISOString();
     save(job);
-    running = false;
-    setImmediate(tick);
   }
+
+  /** Queue depth and load, for health checks and the operator's own eyes. */
+  const stats = () => ({
+    concurrency: limit,
+    active,
+    queued: [...queues.values()].reduce((n, q) => n + q.length, 0),
+    accountsWaiting: order.length,
+  });
 
   // ── Executors ──────────────────────────────────────────────────────────
 
@@ -523,16 +576,18 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
 
   const EXECUTORS = { assemble };
 
-  // Requeue anything interrupted by a restart.
+  // Requeue anything interrupted by a restart, back into its owner's lane.
   for (const id of store.listIds('jobs')) {
     const job = get(id);
     if (job && (job.status === 'queued' || job.status === 'running')) {
       job.status = 'queued';
       save(job);
-      queue.push(id);
+      const acct = job.account ?? '_unowned';
+      if (!queues.has(acct)) { queues.set(acct, []); order.push(acct); }
+      queues.get(acct).push({ id, siteId: job.siteId });
     }
   }
-  setImmediate(tick);
+  setImmediate(pump);
 
-  return { enqueue, get };
+  return { enqueue, get, stats };
 }

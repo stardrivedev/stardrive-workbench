@@ -330,6 +330,9 @@ const ROUTES = [
           ok: true, service: 'stardrive-api', version: VERSION, engine: ENGINE,
           qa: ENGINE === 'real' ? (process.env.STARDRIVE_QA === 'full' ? 'full' : 'structural') : 'dry',
           studio: { enabled: s.configured, model: s.configured ? s.model : null, copyModel: s.configured ? copyModel() : null },
+          // Build load, so a backed-up queue is visible from outside instead
+          // of only showing up as customers wondering why nothing finished.
+          builds: jobs.stats(),
         },
       };
     },
