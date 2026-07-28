@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/deneb4admin/d4-site-builder/main/schema/manifest.schema.json",
+  "name": "d4-payments",
+  "version": "1.0.0",
+  "kind": "feature",
+  "description": "Take payment through Stripe Payment Links: the owner pastes a link created in their own Stripe dashboard against each item, and the site renders a Buy button that sends the customer to Stripe's hosted checkout. No API keys, no webhooks and no card data ever touch the site. Ships a public /pay page and a <PayButton /> component that can be embedded on a catalog product, a class, or anywhere else.",
+  "clientFacingSummary": "Sell things and take deposits from your site: money goes straight into your own Stripe account, and you keep control of every price.",
+  "keywords": ["payments", "pay", "buy", "checkout", "stripe", "deposit", "sell", "shop", "ecommerce", "gift voucher", "invoice", "card payment"],
+  "requires": { "d4-cms-core": ">=1.0.0" },
+  "provides": {
+    "routes": ["/pay"],
+    "nav": [{ "label": "Pay", "href": "/pay" }],
+    "adminPanels": [
+      {
+        "id": "payments",
+        "label": "Payments",
+        "importPath": "@/modules/payments/admin/PaymentsEditor"
+      }
+    ],
+    "collections": ["payment-items"],
+    "lib": ["@/modules/payments/PayButton"]
+  },
+  "env": [],
+  "npmDependencies": {},
+  "copy": [{ "from": "files", "to": "." }]
+}

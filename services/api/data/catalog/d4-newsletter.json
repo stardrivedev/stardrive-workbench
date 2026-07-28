@@ -1,0 +1,37 @@
+{
+  "$schema": "https://raw.githubusercontent.com/deneb4admin/d4-site-builder/main/schema/manifest.schema.json",
+  "name": "d4-newsletter",
+  "version": "1.0.0",
+  "kind": "feature",
+  "description": "Newsletter signup: an embeddable form with explicit consent, a subscribers list managed from the dashboard, one-click unsubscribe, and CSV export for whichever sending platform the owner uses. Records the consent wording, timestamp and source page against every subscriber.",
+  "clientFacingSummary": "Collect email addresses from your site: subscribers land in your dashboard, can unsubscribe themselves, and export to a spreadsheet whenever you want to send something.",
+  "keywords": ["newsletter", "email list", "mailing list", "subscribe", "signup", "email capture", "marketing", "leads", "updates"],
+  "requires": { "d4-cms-core": ">=1.0.0" },
+  "provides": {
+    "routes": ["/unsubscribe"],
+    "nav": [],
+    "adminPanels": [
+      {
+        "id": "newsletter",
+        "label": "Newsletter",
+        "importPath": "@/modules/newsletter/admin/NewsletterEditor"
+      }
+    ],
+    "collections": ["subscribers"],
+    "lib": ["@/modules/newsletter/SignupForm"]
+  },
+  "env": [
+    {
+      "name": "RESEND_API_KEY",
+      "required": false,
+      "description": "Shared with the site template contact form. When set with CONTACT_TO_EMAIL, the owner is notified of new subscribers."
+    },
+    {
+      "name": "CONTACT_TO_EMAIL",
+      "required": false,
+      "description": "Inbox that receives subscriber notifications."
+    }
+  ],
+  "npmDependencies": {},
+  "copy": [{ "from": "files", "to": "." }]
+}

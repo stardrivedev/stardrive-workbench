@@ -388,15 +388,19 @@ const FEATURES = [
   { id: 'store', label: 'Online store', prompt: 'A product catalog / simple store: product cards with prices and a product detail page.', module: 'd4-catalog' },
   { id: 'careers', label: 'Careers / jobs', prompt: 'A careers page listing open roles with an apply flow.', module: 'd4-careers-portal' },
   { id: 'cms', label: 'Editable content (admin)', prompt: 'An admin dashboard so the site owner can edit content without code.', module: 'd4-cms-core' },
-  { id: 'booking', label: 'Booking', prompt: 'A booking / appointment request section where visitors request a time.' },
-  { id: 'testimonials', label: 'Testimonials', prompt: 'A testimonials section with customer quotes.' },
+  { id: 'booking', label: 'Booking / appointments', prompt: 'A prominent "book an appointment" call to action linking to /book.', module: 'd4-booking' },
+  { id: 'testimonials', label: 'Testimonials', prompt: 'A testimonials section with customer quotes.', module: 'd4-testimonials' },
   { id: 'faq', label: 'FAQ', prompt: 'An FAQ section with an accordion.' },
-  { id: 'team', label: 'Team / about', prompt: 'A team/about section with member profiles.' },
-  { id: 'newsletter', label: 'Newsletter', prompt: 'A newsletter email-capture form.' },
+  { id: 'team', label: 'Team / staff profiles', prompt: 'A team section with member profiles.', module: 'd4-team' },
+  { id: 'newsletter', label: 'Newsletter', prompt: 'A newsletter email-capture form.', module: 'd4-newsletter' },
+  { id: 'events', label: 'Events / what\'s on', prompt: 'An events section highlighting what is coming up, linking to /events.', module: 'd4-events' },
+  { id: 'menu', label: 'Food / drink menu', prompt: 'A menu highlight section linking to the full menu at /menu.', module: 'd4-menu' },
+  { id: 'payments', label: 'Take payments', prompt: 'Clear "buy" or "pay a deposit" calls to action linking to /pay.', module: 'd4-payments' },
+  { id: 'legal', label: 'Privacy / terms pages', prompt: 'Footer links to the privacy policy and terms at /legal.', module: 'd4-legal' },
   { id: 'pricing', label: 'Pricing table', prompt: 'A pricing section with tiered plans.' },
   { id: 'dark-mode', label: 'Dark mode', prompt: 'A visible light/dark theme toggle in the header (class-based, persisted).' },
   { id: 'announcement', label: 'Announcement bar', prompt: 'An announcement bar above the header for notices/promotions.' },
-  { id: 'map', label: 'Map / location', prompt: 'A location section with an address and a simple map placeholder.' },
+  { id: 'map', label: 'Map / opening hours', prompt: 'A location section: address and opening hours, linking to /locations.', module: 'd4-locations' },
   { id: 'social', label: 'Social links', prompt: 'Social media links in the footer.' },
 ];
 
@@ -412,7 +416,11 @@ function featureBlockFor(ids) {
     + on.map((f) => `- ${f.label}: ${f.prompt}`).join('\n')
     + '\nBuild these into the template design at descriptive routes of your own '
     + '(e.g. /portfolio, /work, /shop). Do NOT use the reserved routes /admin, '
-    + '/catalog, /careers, /insights, or /gallery, those belong to engine modules.';
+    + '/catalog, /careers, /insights, /gallery, /book, /team, /testimonials, '
+    + '/locations, /events, /menu, /pay, /legal or /unsubscribe: those belong to '
+    + 'engine modules, and reusing one fails the build with a route conflict. '
+    + 'Where a feature above has an engine module, the module supplies the page '
+    + 'itself, so design a SECTION that links to it rather than a rival page.';
 }
 
 /** The d4 engine modules implied by a set of enabled feature ids. */

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://raw.githubusercontent.com/deneb4admin/d4-site-builder/main/schema/manifest.schema.json",
+  "name": "d4-booking",
+  "version": "1.0.0",
+  "kind": "feature",
+  "description": "Appointment booking: bookable services with durations and prices, weekly availability windows, generated time slots in the business's own timezone, and a public booking flow. Slots already taken disappear, a booking is re-checked against the live diary before it is accepted, and confirmations are emailed to both sides via Resend when configured. Bookings are managed from the dashboard.",
+  "clientFacingSummary": "Customers book appointments on your site: you set your services and your working hours, and they pick from the times you are actually free.",
+  "keywords": ["booking", "bookings", "appointment", "appointments", "schedule", "scheduling", "reservation", "consultation", "salon", "clinic", "book now", "availability", "calendar"],
+  "requires": { "d4-cms-core": ">=1.0.0" },
+  "provides": {
+    "routes": ["/book"],
+    "nav": [{ "label": "Book", "href": "/book" }],
+    "adminPanels": [
+      {
+        "id": "booking",
+        "label": "Bookings",
+        "importPath": "@/modules/booking/admin/BookingEditor"
+      }
+    ],
+    "collections": ["booking-services", "booking-availability", "bookings"]
+  },
+  "env": [
+    {
+      "name": "RESEND_API_KEY",
+      "required": false,
+      "description": "Shared with the site template contact form. When set with CONTACT_TO_EMAIL, new bookings are emailed to the owner and confirmed to the customer."
+    },
+    {
+      "name": "CONTACT_TO_EMAIL",
+      "required": false,
+      "description": "Inbox that receives booking notifications."
+    }
+  ],
+  "npmDependencies": {},
+  "copy": [{ "from": "files", "to": "." }]
+}

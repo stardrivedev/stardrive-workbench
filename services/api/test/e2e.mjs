@@ -110,6 +110,11 @@ const coffeeAnswers = {
   C9: 'Sam Bean',
   'C10. Best contact': 'sam@cartcrema.example',
 };
+// How many modules the shared catalog ships. Read from disk rather than
+// hardcoded: the engine gains modules over time, and a test that has to be
+// edited every time one lands is a test that gets edited without being read.
+const BUNDLED = fs.readdirSync(path.join(API_DIR, 'data', 'catalog')).filter((f) => f.endsWith('.json')).length;
+
 const goodManifest = JSON.parse(fs.readFileSync(path.join(API_DIR, 'data', 'catalog', 'd4-catalog.json'), 'utf-8'));
 
 // ── Public + auth ────────────────────────────────────────────────────────
@@ -169,7 +174,7 @@ await check('signup creates an account, sets a session cookie, and returns a fir
 await check('the signup key actually works against the product API (account-scoped)', async () => {
   const t = await call('GET', '/v1/templates', { key: sessionKeySecret });
   assert.strictEqual(t.status, 200);
-  assert.strictEqual(t.body.templates.length, 6); // the shared catalog, freshly its own account
+  assert.strictEqual(t.body.templates.length, BUNDLED); // the shared catalog, freshly its own account
 });
 await check('duplicate email → 409; weak password → 400; bad login → 401', async () => {
   const email = `dupe+${Date.now()}@example.com`;
@@ -330,10 +335,10 @@ await check('path-hostile mapping id → 400', async () => {
 
 // ── Templates ────────────────────────────────────────────────────────────
 console.log('templates:');
-await check('catalog lists the six bundled d4 modules', async () => {
+await check('catalog lists every bundled d4 module', async () => {
   const { status, body } = await call('GET', '/v1/templates', { key: fullKey });
   assert.strictEqual(status, 200);
-  assert.strictEqual(body.templates.length, 6);
+  assert.strictEqual(body.templates.length, BUNDLED);
   const site = body.templates.find((t) => t.name === 'd4-site-template');
   assert.strictEqual(site.kind, 'site');
   assert.strictEqual(site.source, 'bundled');
@@ -404,14 +409,14 @@ await check('imported template appears in the list and in detail with warnings',
   const list = await call('GET', '/v1/templates', { key: fullKey });
   const aurora = list.body.templates.find((t) => t.name === 'aurora-template');
   assert.strictEqual(aurora.source, 'imported');
-  assert.strictEqual(list.body.templates.length, 7);
+  assert.strictEqual(list.body.templates.length, BUNDLED + 1);
   const detail = await call('GET', '/v1/templates/aurora-template', { key: fullKey });
   assert.strictEqual(detail.body.source, 'imported');
   assert.strictEqual(detail.body.warnings.length >= 1, true);
 });
 await check('ACCOUNT ISOLATION: another licensee cannot see, fetch, or collide with my templates', async () => {
   const theirList = await call('GET', '/v1/templates', { key: otherAccountKey });
-  assert.strictEqual(theirList.body.templates.length, 6, 'only the shared catalog');
+  assert.strictEqual(theirList.body.templates.length, BUNDLED, 'only the shared catalog');
   assert.strictEqual(theirList.body.templates.some((t) => t.name === 'aurora-template'), false);
   assert.strictEqual((await call('GET', '/v1/templates/aurora-template', { key: otherAccountKey })).status, 404);
   const theirImport = await call('POST', '/v1/templates', { key: otherAccountKey, body: auroraBundle });

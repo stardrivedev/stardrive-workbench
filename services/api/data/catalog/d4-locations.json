@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/deneb4admin/d4-site-builder/main/schema/manifest.schema.json",
+  "name": "d4-locations",
+  "version": "1.0.0",
+  "kind": "feature",
+  "description": "Locations and opening hours: address, phone, per-day hours with a live open/closed indicator, a keyless OpenStreetMap embed and a directions link, managed from the dashboard. Emits LocalBusiness structured data with openingHoursSpecification, which is what puts a business into local search results and map panels.",
+  "clientFacingSummary": "Your address and opening hours, kept up to date by you: visitors see whether you are open right now, a map, and a directions link.",
+  "keywords": ["location", "locations", "address", "opening hours", "hours", "map", "directions", "find us", "visit us", "branches", "store locator", "local seo"],
+  "requires": { "d4-cms-core": ">=1.0.0" },
+  "provides": {
+    "routes": ["/locations"],
+    "nav": [{ "label": "Locations", "href": "/locations" }],
+    "adminPanels": [
+      {
+        "id": "locations",
+        "label": "Locations",
+        "importPath": "@/modules/locations/admin/LocationsEditor"
+      }
+    ],
+    "collections": ["locations"],
+    "lib": ["@/modules/locations/Locations"]
+  },
+  "env": [],
+  "npmDependencies": {},
+  "copy": [{ "from": "files", "to": "." }]
+}

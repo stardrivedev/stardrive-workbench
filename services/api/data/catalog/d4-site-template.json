@@ -1,17 +1,34 @@
 {
   "$schema": "https://raw.githubusercontent.com/deneb4admin/d4-site-builder/main/schema/manifest.schema.json",
   "name": "d4-site-template",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "kind": "site",
-  "description": "Base Next.js site shell: layout, mega-menu header (nav groups with children render full-width panels; flat navs render as plain links), dark/light mode with a contrast-validated dark palette per pairing/preset, optional announcement bar, site-wide quote-request modal wired to the contact route, nav-driven footer with social links, shared UI (FaqAccordion, LogoMarquee, ProductCard), home/about/contact pages, theme via CSS variables. Every assembled site starts from this template; feature modules copy in on top of it.",
+  "description": "Base Next.js site shell: layout, mega-menu header (nav groups with children render full-width panels; flat navs render as plain links), dark/light mode with a contrast-validated dark palette per pairing/preset, optional announcement bar, site-wide quote-request modal wired to the contact route, nav-driven footer with social links, shared UI (FaqAccordion, LogoMarquee, ProductCard), home/about/contact pages, theme via CSS variables, plus search and social metadata (Open Graph, Twitter cards, canonical URLs, favicon, robots, sitemap) and Organization/WebSite structured data. Every assembled site starts from this template; feature modules copy in on top of it.",
   "clientFacingSummary": "A fast, modern marketing site with a full mega-menu navigation, light and dark mode, an announcement bar, a quote-request form, and a contact form that delivers inquiries to your inbox.",
-  "keywords": ["site", "base", "marketing", "landing", "contact form", "about", "mega menu", "dark mode", "announcement", "quote"],
+  "keywords": [
+    "site",
+    "base",
+    "marketing",
+    "landing",
+    "contact form",
+    "about",
+    "mega menu",
+    "dark mode",
+    "announcement",
+    "quote"
+  ],
   "requires": {},
   "provides": {
-    "routes": ["/", "/about", "/contact"],
+    "routes": [
+      "/",
+      "/about",
+      "/contact"
+    ],
     "nav": [],
     "adminPanels": [],
-    "collections": ["messages"]
+    "collections": [
+      "messages"
+    ]
   },
   "env": [
     {
@@ -43,7 +60,12 @@
   "npmDependencies": {
     "@libsql/client": "^0.14.0"
   },
-  "copy": [{ "from": "files", "to": "." }],
+  "copy": [
+    {
+      "from": "files",
+      "to": "."
+    }
+  ],
   "postAssemble": {
     "generatedFiles": [
       "src/config/nav.generated.ts",

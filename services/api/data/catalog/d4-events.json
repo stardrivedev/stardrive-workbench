@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/deneb4admin/d4-site-builder/main/schema/manifest.schema.json",
+  "name": "d4-events",
+  "version": "1.0.0",
+  "kind": "feature",
+  "description": "Events calendar: upcoming and past events with dates, times, venue, price and an optional ticket link, managed from the dashboard. Emits Event structured data so listings can appear in search results and event panels.",
+  "clientFacingSummary": "An events listing you manage yourself: add what is on, when and where, and past events move into an archive automatically.",
+  "keywords": ["events", "calendar", "whats on", "gigs", "classes", "workshops", "diary", "upcoming", "tickets", "venue"],
+  "requires": { "d4-cms-core": ">=1.0.0" },
+  "provides": {
+    "routes": ["/events"],
+    "nav": [{ "label": "Events", "href": "/events" }],
+    "adminPanels": [
+      {
+        "id": "events",
+        "label": "Events",
+        "importPath": "@/modules/events/admin/EventsEditor"
+      }
+    ],
+    "collections": ["events"],
+    "lib": ["@/modules/events/Events"]
+  },
+  "env": [],
+  "npmDependencies": {},
+  "copy": [{ "from": "files", "to": "." }]
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/deneb4admin/d4-site-builder/main/schema/manifest.schema.json",
+  "name": "d4-menu",
+  "version": "1.0.0",
+  "kind": "feature",
+  "description": "Food and drink menus: named menus (lunch, dinner, wine) split into courses, with dish descriptions, prices, dietary markers and allergen notes, managed from the dashboard. Emits Menu structured data. Distinct from d4-catalog, which lists products with spec tables rather than courses.",
+  "clientFacingSummary": "Your menus, kept current by you: courses, dishes, prices and dietary markers like vegan or gluten free, with no printing and no waiting on anyone.",
+  "keywords": ["menu", "menus", "food", "drink", "restaurant", "cafe", "bar", "dishes", "courses", "wine list", "allergens", "vegan", "gluten free", "takeaway"],
+  "requires": { "d4-cms-core": ">=1.0.0" },
+  "provides": {
+    "routes": ["/menu"],
+    "nav": [{ "label": "Menu", "href": "/menu" }],
+    "adminPanels": [
+      {
+        "id": "menu",
+        "label": "Menus",
+        "importPath": "@/modules/menu/admin/MenuEditor"
+      }
+    ],
+    "collections": ["menus"],
+    "lib": ["@/modules/menu/Menu"]
+  },
+  "env": [],
+  "npmDependencies": {},
+  "copy": [{ "from": "files", "to": "." }]
+}

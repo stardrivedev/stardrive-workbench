@@ -43,6 +43,69 @@
       "repo": "https://github.com/deneb4admin/d4-gallery-editor",
       "summary": "Image galleries managed from the dashboard, with an embeddable Gallery component. Standalone from the catalog.",
       "alwaysIncluded": false
+    },
+    {
+      "name": "d4-testimonials",
+      "kind": "feature",
+      "repo": "https://github.com/deneb4admin/d4-testimonials",
+      "summary": "Customer testimonials with optional ratings and photos, managed from the dashboard. Embeddable strip plus a /testimonials page.",
+      "alwaysIncluded": false
+    },
+    {
+      "name": "d4-team",
+      "kind": "feature",
+      "repo": "https://github.com/deneb4admin/d4-team",
+      "summary": "Staff profiles with photo, role and biography, reorderable from the dashboard. Embeddable grid plus a /team page.",
+      "alwaysIncluded": false
+    },
+    {
+      "name": "d4-locations",
+      "kind": "feature",
+      "repo": "https://github.com/deneb4admin/d4-locations",
+      "summary": "Address, opening hours, keyless map and directions, with LocalBusiness structured data for local search.",
+      "alwaysIncluded": false
+    },
+    {
+      "name": "d4-booking",
+      "kind": "feature",
+      "repo": "https://github.com/deneb4admin/d4-booking",
+      "summary": "Appointment booking: services, working hours, generated slots in the business timezone, and a diary in the dashboard. Prevents double booking.",
+      "alwaysIncluded": false
+    },
+    {
+      "name": "d4-events",
+      "kind": "feature",
+      "repo": "https://github.com/deneb4admin/d4-events",
+      "summary": "Events listing with upcoming and past, ticket links and Event structured data.",
+      "alwaysIncluded": false
+    },
+    {
+      "name": "d4-menu",
+      "kind": "feature",
+      "repo": "https://github.com/deneb4admin/d4-menu",
+      "summary": "Food and drink menus: courses, dishes, prices and a closed list of dietary markers. Distinct from the catalog.",
+      "alwaysIncluded": false
+    },
+    {
+      "name": "d4-newsletter",
+      "kind": "feature",
+      "repo": "https://github.com/deneb4admin/d4-newsletter",
+      "summary": "Email capture with evidenced consent, self-service unsubscribe and CSV export. Collects the list; does not send.",
+      "alwaysIncluded": false
+    },
+    {
+      "name": "d4-payments",
+      "kind": "feature",
+      "repo": "https://github.com/deneb4admin/d4-payments",
+      "summary": "Take payment via Stripe Payment Links. No API keys, no webhooks, no card data on the site. Not a shopping cart.",
+      "alwaysIncluded": false
+    },
+    {
+      "name": "d4-legal",
+      "kind": "feature",
+      "repo": "https://github.com/deneb4admin/d4-legal",
+      "summary": "Privacy, terms and cookie pages as editable markdown. Ships unreviewed drafts that 404 until the owner approves them.",
+      "alwaysIncluded": false
     }
   ]
 }

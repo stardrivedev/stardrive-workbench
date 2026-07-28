@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/deneb4admin/d4-site-builder/main/schema/manifest.schema.json",
+  "name": "d4-team",
+  "version": "1.0.0",
+  "kind": "feature",
+  "description": "Team directory: staff profiles with name, role, biography, photo, and optional contact details and profile links, managed from the dashboard. Ships a public /team page and a reusable <Team /> component any page can embed.",
+  "clientFacingSummary": "A team page you manage yourself: add each person's photo, job title and a short biography, and reorder them as your team changes.",
+  "keywords": ["team", "staff", "people", "our team", "meet the team", "practitioners", "stylists", "attorneys", "doctors", "agents", "profiles", "bios"],
+  "requires": { "d4-cms-core": ">=1.0.0" },
+  "provides": {
+    "routes": ["/team"],
+    "nav": [{ "label": "Team", "href": "/team" }],
+    "adminPanels": [
+      {
+        "id": "team",
+        "label": "Team",
+        "importPath": "@/modules/team/admin/TeamEditor"
+      }
+    ],
+    "collections": ["team"],
+    "lib": ["@/modules/team/Team"]
+  },
+  "env": [],
+  "npmDependencies": {},
+  "copy": [{ "from": "files", "to": "." }]
+}

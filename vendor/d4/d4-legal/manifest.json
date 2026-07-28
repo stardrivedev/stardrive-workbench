@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/deneb4admin/d4-site-builder/main/schema/manifest.schema.json",
+  "name": "d4-legal",
+  "version": "1.0.0",
+  "kind": "feature",
+  "description": "Legal pages: privacy policy, terms, and an optional cookie notice, written in markdown and edited from the dashboard. Ships clearly-marked starting drafts that must be reviewed before publication, and each page stays unpublished until the owner marks it reviewed, so a placeholder cannot go live by accident.",
+  "clientFacingSummary": "Your privacy policy and terms, editable by you. Starting drafts are provided to work from, and each one has to be reviewed and approved before it appears on the site.",
+  "keywords": ["legal", "privacy", "privacy policy", "terms", "terms and conditions", "cookies", "gdpr", "compliance", "disclaimer"],
+  "requires": { "d4-cms-core": ">=1.0.0" },
+  "provides": {
+    "routes": ["/legal", "/legal/[slug]"],
+    "nav": [],
+    "adminPanels": [
+      {
+        "id": "legal",
+        "label": "Legal pages",
+        "importPath": "@/modules/legal/admin/LegalEditor"
+      }
+    ],
+    "collections": ["legal-pages"]
+  },
+  "env": [],
+  "npmDependencies": {},
+  "copy": [{ "from": "files", "to": "." }]
+}
