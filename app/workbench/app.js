@@ -70,6 +70,7 @@ $('#themeBtn').addEventListener('click', () => {
 const TITLES = {
   home: 'Home', templates: 'My templates', studio: 'AI Studio',
   sites: 'Sites', batch: 'Batch Building', connections: 'Hosting',
+  'going-live': 'Going live',
   reference: 'API reference', keys: 'API keys', billing: 'Plan & usage', rulebook: 'Rulebook',
 };
 function route() {
@@ -94,6 +95,7 @@ function route() {
     if (params.get('site')) openSiteDetail(params.get('site'));
   }
   if (v === 'batch') loadBatchView();
+  if (v === 'going-live') renderGoingLive();
   if (v === 'connections') loadConnections();
   if (v === 'keys') { renderMaskedKey(); loadKeys(); }
   if (v === 'billing') loadBilling();
@@ -1471,7 +1473,8 @@ async function loadLaunchPanel(siteId) {
   host.innerHTML =
     '<div class="card launch">' +
       '<h3 style="margin:0 0 0.2rem">🚀 Publish this site</h3>' +
-      '<p style="font-size:0.84rem;color:var(--body);margin:0 0 0.9rem">Take this finished site live. Set a token once and it becomes your default for every client, so you never enter it twice. Override per client only when they host it themselves.</p>' +
+      '<p style="font-size:0.84rem;color:var(--body);margin:0 0 0.9rem">Take this finished site live. Set a token once and it becomes your default for every client, so you never enter it twice. Override per client only when they host it themselves. ' +
+        '<a href="#/going-live">How all of this works</a>.</p>' +
       vercelBlock + dbBlock + githubBlock +
       '<div id="domainBlock"></div>' +
       '<div id="envBlock"></div>' +
@@ -2147,6 +2150,86 @@ function renderReference() {
 }
 renderReference();
 $('#saveKeyBtn').addEventListener('click', renderReference);
+
+/* ══════════════ Going live ══════════════ */
+// Served from the API rather than written here, so this page and the deploy
+// path can never disagree. A guide maintained separately from the code it
+// describes is wrong within a month, and wrong instructions cost the reader
+// twice: once following them, once discovering they lied.
+
+let guideLoaded = false;
+
+async function renderGoingLive() {
+  const root = $('#goingLiveRoot');
+  if (!root || guideLoaded) return;
+  const { status, body } = await api('/v1/guide/deploy');
+  if (status !== 200) {
+    root.innerHTML = '<div class="report err">Could not load the guide (' + status + '). Save a valid API key up top.</div>';
+    return;
+  }
+  guideLoaded = true;
+
+  const steps = (body.steps || []).map((s, i) =>
+    '<li style="margin:0 0 0.7rem"><b>' + esc(s.title) + '</b><br>' +
+    '<span style="color:var(--body)">' + esc(s.detail) + '</span></li>').join('');
+
+  const supplied = (body.environment?.supplied || []).map((v) =>
+    '<tr><td><b>' + esc(v.label) + '</b><br><code style="font-size:0.76rem">' + esc(v.name) + '</code></td>' +
+    '<td>' + esc(v.why) + (v.where ? '<br><span style="color:var(--muted)">Get it from ' + esc(v.where) + '</span>' : '') + '</td></tr>').join('');
+
+  const managed = (body.environment?.managed || []).map((v) =>
+    '<tr><td><code style="font-size:0.76rem">' + esc(v.name) + '</code></td><td>' + esc(v.why) + '</td></tr>').join('');
+
+  const byHow = {};
+  for (const h of body.hosts || []) (byHow[h.how] ||= []).push(h);
+  const hosts = Object.entries(byHow).map(([how, list]) =>
+    '<div style="margin:0 0 0.9rem">' +
+      '<div style="font-size:0.82rem;font-weight:600;margin-bottom:0.3rem">' + esc(body.howLabels?.[how] || how) + '</div>' +
+      '<ul style="margin:0;padding-left:1.1rem;font-size:0.86rem">' +
+      list.map((h) => '<li><b>' + esc(h.name) + '</b> · <span style="color:var(--muted)">' + esc(h.note) + '</span></li>').join('') +
+      '</ul>' +
+    '</div>').join('');
+
+  const faq = (body.faq || []).map((f) =>
+    '<details class="endpoint"><summary>' + esc(f.q) + '</summary>' +
+    '<div class="body" style="font-size:0.88rem;line-height:1.55">' + esc(f.a) + '</div></details>').join('');
+
+  root.innerHTML =
+    '<div class="card">' +
+      '<h2>How a job runs, start to finish</h2>' +
+      '<ol style="margin:0.6rem 0 0;padding-left:1.2rem;font-size:0.9rem">' + steps + '</ol>' +
+    '</div>' +
+
+    '<div class="card">' +
+      '<h2>Settings you supply</h2>' +
+      '<p style="font-size:0.86rem;color:var(--body);margin:0 0 0.7rem">Only these. Add them on the site itself, under <b>Site settings</b>, once per client. Every publish after that reuses them.</p>' +
+      '<div class="tscroll"><table class="list"><thead><tr><th>Setting</th><th>What it is for</th></tr></thead><tbody>' +
+      supplied + '</tbody></table></div>' +
+      '<h2 style="margin-top:1.2rem">Handled for you</h2>' +
+      '<p style="font-size:0.86rem;color:var(--body);margin:0 0 0.7rem">You never enter these. Stardrive fills them in and pushes them with every publish.</p>' +
+      '<div class="tscroll"><table class="list"><thead><tr><th>Setting</th><th>Where it comes from</th></tr></thead><tbody>' +
+      managed + '</tbody></table></div>' +
+    '</div>' +
+
+    '<div class="card">' +
+      '<h2>Where a site can be hosted</h2>' +
+      '<div class="report" style="background:var(--warn-soft);color:var(--warn)">' + esc(body.constraint || '') + '</div>' +
+      hosts +
+      '<p style="font-size:0.82rem;color:var(--muted);margin:0.4rem 0 0">Every site you build also ships its own <code>Dockerfile</code> and <code>DEPLOY.md</code>, so whoever opens it later has these instructions too.</p>' +
+    '</div>' +
+
+    '<div class="card">' +
+      '<h2>Handing over to your client</h2>' +
+      '<p style="font-size:0.9rem;margin:0 0 0.5rem">' + esc(body.handoff?.what || '') + '</p>' +
+      '<p style="font-size:0.9rem;margin:0 0 0.5rem">' + esc(body.handoff?.how || '') + '</p>' +
+      '<div class="report" style="background:var(--warn-soft);color:var(--warn)">' + esc(body.handoff?.note || '') + '</div>' +
+    '</div>' +
+
+    '<div class="card">' +
+      '<h2>Questions</h2>' + faq +
+    '</div>';
+}
+
 
 /* ══════════════ Keys & usage ══════════════ */
 $('#testKeyBtn').addEventListener('click', async () => {

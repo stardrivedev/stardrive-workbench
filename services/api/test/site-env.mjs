@@ -20,6 +20,7 @@ import {
 } from '../lib/site-env.mjs';
 import { guideFor, notesFor, renderHandoffHtml } from '../lib/handoff.mjs';
 import { renderDockerfile, renderDeployGuide } from '../lib/portable.mjs';
+import { deployGuide, HOSTS } from '../lib/guide.mjs';
 import { netlifySiteName } from '../lib/deploy-netlify.mjs';
 
 let failures = 0;
@@ -242,6 +243,41 @@ await check('the guide lists variable NAMES and never a value', () => {
   const guide = renderDeployGuide({ siteName: 'X', envNames: ['ADMIN_PASSWORD', 'RESEND_API_KEY'] });
   assert.match(guide, /- `ADMIN_PASSWORD`/);
   assert.strictEqual(/ADMIN_PASSWORD=/.test(guide), false, 'this file ships in the export and lands in git');
+});
+
+await check('the in-app guide is built from the same definitions the deploy path uses', () => {
+  const guide = deployGuide();
+  // If these could drift, the page in the app would describe a product that
+  // no longer exists. Deriving them is the whole point.
+  assert.deepStrictEqual(
+    guide.environment.supplied.map((v) => v.name).sort(),
+    Object.keys(SUPPLIED).sort(),
+    'every setting the licensee owes is on the page'
+  );
+  assert.deepStrictEqual(
+    guide.environment.managed.map((v) => v.name).sort(),
+    Object.keys(MANAGED).sort(),
+    'and so is everything we handle'
+  );
+  assert.ok(guide.environment.supplied.every((v) => v.why && v.label), 'each one says what it is for');
+});
+
+await check('the guide and the generated DEPLOY.md name the same hosts', () => {
+  const named = HOSTS.filter((h) => h.how !== 'server').map((h) => h.name);
+  const doc = renderDeployGuide({ siteName: 'X', envNames: [] });
+  for (const host of named) {
+    assert.ok(doc.includes(host), `${host} is in the app guide but missing from DEPLOY.md`);
+  }
+});
+
+await check('the guide answers the questions that would otherwise become support', () => {
+  const guide = deployGuide();
+  const asked = guide.faq.map((f) => f.q).join(' ');
+  assert.match(asked, /Stripe key/, 'the one Ridhi asked, answered in the product');
+  assert.match(asked, /Where do the API keys actually go/);
+  assert.match(guide.faq.find((f) => /Stripe/.test(f.q)).a, /^No\./, 'answered plainly, not hedged');
+  assert.match(guide.constraint, /runs Node/, 'the constraint that bites is stated once, up top');
+  assert.ok(guide.steps.length >= 4 && guide.handoff.what, 'the whole job is described, not just the tricky bit');
 });
 
 await check('netlify site names become valid DNS labels', () => {

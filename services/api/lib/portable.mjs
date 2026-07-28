@@ -12,7 +12,12 @@
  * application, not a folder of files, so it needs somewhere that runs Node.
  * Discovering that on a client's launch day is how a licensee stops trusting
  * the tool.
+ *
+ * The host list comes from guide.mjs, the same one the Workbench renders, so
+ * this file and the page in the app can never disagree about where a site can
+ * go.
  */
+import { HOSTS } from './guide.mjs';
 
 /** A production Dockerfile for the assembled site. Works on any host that
  *  takes a container: Fly, Railway, Render, Coolify, a plain VPS. */
@@ -49,6 +54,14 @@ CMD ["npm", "start"]
 }
 
 const slug = (s) => String(s || 'site').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'site';
+
+/** Host names for the guide, taken from the one list the Workbench also
+ *  renders, so the page in the app and the file in the export never disagree
+ *  about where a site can go. */
+const listHosts = (kinds) => HOSTS
+  .filter((h) => kinds.includes(h.how))
+  .map((h) => `**${h.name}**`)
+  .join(', ');
 
 /**
  * The deploy guide. `env` is the list of variable NAMES this site needs; no
@@ -98,9 +111,8 @@ choose **Download .env**. Never commit that file to a repository.
 Push this code to GitHub, GitLab or Bitbucket, then point a host at the
 repository. It builds on every push from then on, with no further setup.
 
-Works as-is with **Vercel**, **Netlify**, **Cloudflare Pages**, **Render**,
-**Railway**, **AWS Amplify**, **DigitalOcean App Platform**, and others. None
-of them need any change to this code. Where a build command is requested, it is
+Works as-is with ${listHosts(['direct', 'git'])}, and others. None of them need
+any change to this code. Where a build command is requested, it is
 \`npm run build\`; the output directory is \`.next\`.
 
 ## Option 2: a container (most portable)
@@ -112,9 +124,8 @@ docker build -t ${slug(siteName)} .
 docker run -p 3000:3000 --env-file .env ${slug(siteName)}
 \`\`\`
 
-That image runs on **Fly.io**, **Railway**, **Render**, **Google Cloud Run**,
-**AWS App Runner**, **Azure Container Apps**, **Coolify**, **Dokku**, or any
-server you own. This is the option with no lock-in of any kind.
+That image runs on ${listHosts(['container'])}, or any server you own. This is
+the option with no lock-in of any kind.
 
 ## Option 3: a plain server
 

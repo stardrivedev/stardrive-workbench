@@ -174,6 +174,31 @@ await check('rotating the password changes it and warns it is not live yet', asy
   assert.notStrictEqual(before.text, after.text);
 });
 
+await check('Going live explains the whole job without leaving the app', async () => {
+  await page.goto(BASE + '/workbench/#/going-live', { waitUntil: 'networkidle' });
+  await page.waitForSelector('#goingLiveRoot .card', { timeout: 8000 });
+  const text = await page.textContent('#goingLiveRoot');
+
+  assert.match(text, /Settings you supply/);
+  assert.match(text, /Resend API key/, 'named, with what it is for');
+  assert.match(text, /Handled for you/, 'and what they never have to touch');
+  assert.match(text, /ADMIN_PASSWORD/);
+  assert.match(text, /runs Node/, 'the constraint that bites is on the page');
+  assert.match(text, /Vercel/);
+  assert.match(text, /Cloudflare Pages/, 'including hosts we do not publish to directly');
+  assert.match(text, /Handing over to your client/);
+  assert.match(text, /Stripe key/, 'the question a licensee would otherwise email about');
+});
+
+await check('the publish panel links to it, so it is found at the moment of need', async () => {
+  await page.goto(`${BASE}/workbench/#/sites?site=${globalThis.__site}`, { waitUntil: 'networkidle' });
+  // Wait for the link itself, not for the panel around it. A hash-only
+  // navigation does not reload, so the previous view's panel is still in the
+  // DOM and any wait on it passes instantly, just before the re-render wipes
+  // it. Waiting on the thing being asserted is the only race-free version.
+  await page.waitForSelector('#launchPanel a[href="#/going-live"]', { timeout: 10000 });
+});
+
 await check('no JavaScript errors anywhere in the flow', () => {
   assert.deepStrictEqual(errors, []);
 });

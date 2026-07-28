@@ -37,6 +37,7 @@ import { normalizeDomain, dnsPlanFor, attachVercel, checkVercel, siteUrlEnv, SIT
 import { createEmail } from './lib/email.mjs';
 import { createSiteEnv, specFor, deployEnv, renderEnvFile, missingFrom, SUPPLIED } from './lib/site-env.mjs';
 import { renderHandoffHtml, guideFor, notesFor } from './lib/handoff.mjs';
+import { deployGuide } from './lib/guide.mjs';
 import { createOps } from './lib/ops.mjs';
 import { createBatches } from './lib/batches.mjs';
 import { runMapping, validateMapping } from '../../packages/field-mapping/index.mjs';
@@ -421,6 +422,14 @@ const ROUTES = [
       requireOpsToken(req);
       return { status: 200, body: { checked: await ops.checkNow(), alerts: ops.activeAlerts() } };
     },
+  },
+  {
+    // Going live, explained where the licensee is working. Served from the
+    // same definitions the deploy path uses, so it cannot drift from what the
+    // product actually does. `any` rather than public: it names our hosts and
+    // our defaults, and it is for customers, not passers-by.
+    method: 'GET', pattern: '/v1/guide/deploy', scope: 'any',
+    handler: () => ({ status: 200, body: deployGuide() }),
   },
   {
     method: 'GET', pattern: '/v1', scope: 'public',
