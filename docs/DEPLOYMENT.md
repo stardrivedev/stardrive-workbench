@@ -67,6 +67,35 @@ mount a volume in prod). The store interface is four verbs (`readJson`,
 `writeJson`, `deleteJson`, `listIds`) — deliberately swappable for Turso when
 scale calls for it, without touching the API surface.
 
+### Backups
+
+The var directory **is** the business: every account, API key, template,
+site, and encrypted hosting token. Losing the volume loses every licensee's
+work at once.
+
+```
+node services/api/scripts/backup.mjs create  /backups --var-dir /data
+node services/api/scripts/backup.mjs verify  /backups/stardrive-<stamp>.tar.gz
+node services/api/scripts/backup.mjs restore /backups/stardrive-<stamp>.tar.gz /data
+```
+
+- Snapshots **exclude `workspaces/`** (build output, regenerable by
+  rebuilding, and the overwhelming majority of the bytes). What is kept is
+  the irreplaceable part, and it is small.
+- Each snapshot gets a `.sha256` sidecar; `verify` and `restore` both check
+  it and refuse a corrupt archive rather than restoring damage.
+- `restore` refuses a non-empty target unless you pass `--force`, so it
+  cannot quietly overwrite a live deployment.
+
+**Back up `STARDRIVE_SECRET` separately, in a password manager, not beside
+the data.** Hosting tokens are encrypted with it: restore without the same
+secret and you get accounts and sites but dead credentials. A drill for
+exactly this lives in `services/api/test/backup-restore.mjs`, which destroys
+a deployment and restores it with the right secret and the wrong one.
+
+Run a restore drill before you take money, and again whenever the store
+layout changes. A backup nobody has restored is a hope, not a backup.
+
 ## Go live (runbook)
 
 The whole product is one container. A single instance with a persistent volume

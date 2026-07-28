@@ -79,6 +79,12 @@ export function createLivePreview({ basePort = 4300 } = {}) {
     if (!fs.existsSync(path.join(dir, '.next'))) {
       throw err(409, 'no_build', 'No production build found for this site. Rebuild it (full QA) and try again.');
     }
+    // A pruned workspace keeps the shippable site but not its dependencies
+    // (STARDRIVE_PRUNE_BUILDS), so say that plainly instead of failing with
+    // whatever npm prints when node_modules is missing.
+    if (!fs.existsSync(path.join(dir, 'node_modules'))) {
+      throw err(409, 'pruned', 'This build\'s dependencies were reclaimed to save disk, so it cannot be served here. Rebuild the site to preview it, or publish it and open the live URL.');
+    }
     const port = await findFreePort(basePort);
     const child = spawn(NPM, ['run', 'start', '--', '-p', String(port)], {
       cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], shell: SHELL,

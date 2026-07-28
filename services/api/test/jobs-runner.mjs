@@ -60,7 +60,11 @@ await check('the queue is bounded: no more than `concurrency` builds run at once
   clearInterval(sampler);
   assert.strictEqual(allDone(runner, ids), true, 'every job finished');
   assert.ok(peak <= 2, `never exceeded the limit (peak ${peak})`);
-  assert.deepStrictEqual(runner.stats(), { concurrency: 2, active: 0, queued: 0, accountsWaiting: 0 }, 'drains to empty');
+  const s = runner.stats();
+  assert.strictEqual(s.concurrency, 2);
+  assert.strictEqual(s.active, 0, 'drains to empty');
+  assert.strictEqual(s.queued, 0);
+  assert.strictEqual(s.accountsWaiting, 0);
 });
 
 await check('a big batch does not starve another account queued behind it', async () => {
@@ -103,6 +107,45 @@ await check('two builds for the SAME site never overlap', async () => {
   clearInterval(sampler);
   assert.strictEqual(sawDouble, false, 'one workspace, one build at a time');
   assert.strictEqual(allDone(runner, ids), true, 'and all three still completed');
+});
+
+await check('pruning reclaims build artifacts and keeps everything that ships', async () => {
+  const store = freshStore();
+  const site = 'prune-me';
+  const ws = store.path('workspaces', site);
+  // A workspace shaped like a finished full-QA build.
+  fs.mkdirSync(path.join(ws, 'node_modules', 'next'), { recursive: true });
+  fs.mkdirSync(path.join(ws, '.next', 'server'), { recursive: true });
+  fs.mkdirSync(path.join(ws, 'src', 'app'), { recursive: true });
+  fs.writeFileSync(path.join(ws, 'node_modules', 'next', 'index.js'), 'x'.repeat(1000));
+  fs.writeFileSync(path.join(ws, '.next', 'server', 'app.js'), 'x'.repeat(1000));
+  fs.writeFileSync(path.join(ws, 'package.json'), '{"name":"site"}');
+  fs.writeFileSync(path.join(ws, 'src', 'app', 'page.tsx'), 'export default () => null;');
+  fs.writeFileSync(path.join(ws, '.stardrive-preview.png'), 'png');
+
+  store.writeJson(`sites/${site}.json`, { id: site, account: 'acct-3', templateId: 'd4-site-template', config: { siteName: site }, jobs: [], configHistory: [] });
+  process.env.STARDRIVE_PRUNE_BUILDS = '1';
+  const { createJobRunner: freshRunner } = await import('../lib/jobs.mjs?prune=1');
+  const runner = freshRunner(store, { engine: 'dry', concurrency: 1 });
+  const id = runner.enqueue('assemble', site, 'acct-3').id;
+  await waitFor(() => ['done', 'failed'].includes(runner.get(id)?.status));
+  delete process.env.STARDRIVE_PRUNE_BUILDS;
+
+  assert.strictEqual(fs.existsSync(path.join(ws, 'node_modules')), false, 'dependencies reclaimed');
+  assert.strictEqual(fs.existsSync(path.join(ws, '.next')), false, 'compile output reclaimed');
+  assert.strictEqual(fs.existsSync(path.join(ws, 'package.json')), true, 'the shippable site stays');
+  assert.strictEqual(fs.existsSync(path.join(ws, 'src', 'app', 'page.tsx')), true, 'source stays, it is what deploys');
+  assert.strictEqual(fs.existsSync(path.join(ws, '.stardrive-preview.png')), true, 'the QA screenshot stays');
+});
+
+await check('disk stats are reported so a filling volume is visible', () => {
+  const runner = createJobRunner(freshStore(), { engine: 'dry', concurrency: 1 });
+  const s = runner.stats();
+  assert.ok('diskFreeMb' in s && 'diskOk' in s && 'pruneBuilds' in s);
+  if (s.diskFreeMb !== null) {
+    assert.ok(s.diskFreeMb > 0, 'free space reads as a real number');
+    assert.strictEqual(typeof s.diskOk, 'boolean');
+  }
 });
 
 await check('an unowned job (no account) still runs', async () => {

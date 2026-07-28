@@ -142,6 +142,32 @@ function writeSafe(outDir, relPath, file) {
  */
 const DEFAULT_CONCURRENCY = Number(process.env.STARDRIVE_BUILD_CONCURRENCY) || 2;
 
+/**
+ * Disk policy. A full-QA build installs dependencies and compiles, leaving
+ * `node_modules` (300-500 MB) and `.next` in the site's workspace. Twenty
+ * client sites is 6-10 GB that nothing ever reclaimed.
+ *
+ * Neither is needed afterwards: export (archive.mjs) and deploy
+ * (deploy-vercel.mjs) both skip them explicitly, and the site SOURCE, which
+ * is what actually ships, is tiny. The one thing that wants them is the
+ * local live preview, which is why pruning defaults ON in production and OFF
+ * on a workstation. STARDRIVE_PRUNE_BUILDS=1/0 decides it either way.
+ */
+const BUILD_ARTIFACTS = ['node_modules', '.next'];
+const PRUNE_BUILDS = process.env.STARDRIVE_PRUNE_BUILDS === '1'
+  || (process.env.STARDRIVE_PRUNE_BUILDS !== '0' && process.env.NODE_ENV === 'production');
+/** Refuse to start a build with less than this free, rather than dying
+ *  halfway and leaving a corrupt workspace behind. */
+const MIN_FREE_BYTES = (Number(process.env.STARDRIVE_MIN_FREE_MB) || 2048) * 1024 * 1024;
+
+/** Bytes free on the volume holding `dir`, or null if it cannot be read. */
+export function freeSpaceBytes(dir) {
+  try {
+    const s = fs.statfsSync(dir);
+    return Number(s.bavail) * Number(s.bsize);
+  } catch { return null; }
+}
+
 export function createJobRunner(store, { engine = 'dry', assets = null, engineDir = null, resolveTemplate = null, concurrency = DEFAULT_CONCURRENCY } = {}) {
   // Work is queued PER ACCOUNT and taken round-robin. With one shared queue,
   // an agency submitting a batch of twenty would put every other licensee
@@ -177,6 +203,21 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
    * Only the full QA tier produces the screenshot, so with QA off there is
    * simply no image and the UI falls back to a lettered tile.
    */
+  /**
+   * Drop a finished build's dependency and compile output. The shippable
+   * site, the QA screenshot, and the assembly record all stay; only what can
+   * be regenerated goes. Returns how many artifact trees were removed.
+   */
+  function pruneWorkspace(siteId) {
+    let removed = 0;
+    for (const dir of BUILD_ARTIFACTS) {
+      const abs = store.path('workspaces', siteId, dir);
+      if (!fs.existsSync(abs)) continue;
+      try { fs.rmSync(abs, { recursive: true, force: true }); removed += 1; } catch { /* keep the build */ }
+    }
+    return removed;
+  }
+
   function captureThumbnail(job) {
     try {
       const shot = store.path('workspaces', job.siteId, PREVIEW_FILE);
@@ -257,7 +298,10 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
       if (!executor) throw new Error(`No executor for job kind "${job.kind}".`);
       await executor(job);
       job.status = 'done';
-      captureThumbnail(job);
+      captureThumbnail(job); // reads the screenshot before anything is pruned
+      if (PRUNE_BUILDS && job.siteId && pruneWorkspace(job.siteId)) {
+        log(job, 'Reclaimed the build artifacts (dependencies and compile output); the shippable site is untouched.');
+      }
     } catch (err) {
       job.status = 'failed';
       log(job, `FAILED: ${err.message}`);
@@ -267,12 +311,18 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
   }
 
   /** Queue depth and load, for health checks and the operator's own eyes. */
-  const stats = () => ({
-    concurrency: limit,
-    active,
-    queued: [...queues.values()].reduce((n, q) => n + q.length, 0),
-    accountsWaiting: order.length,
-  });
+  const stats = () => {
+    const free = freeSpaceBytes(store.dir);
+    return {
+      concurrency: limit,
+      active,
+      queued: [...queues.values()].reduce((n, q) => n + q.length, 0),
+      accountsWaiting: order.length,
+      pruneBuilds: PRUNE_BUILDS,
+      diskFreeMb: free === null ? null : Math.round(free / 1e6),
+      diskOk: free === null ? null : free >= MIN_FREE_BYTES,
+    };
+  };
 
   // ── Executors ──────────────────────────────────────────────────────────
 
@@ -327,6 +377,14 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
   async function assembleReal(job, site) {
     if (!engineDir || !fs.existsSync(path.join(engineDir, 'd4-site-builder', 'bin', 'assemble.mjs'))) {
       throw new Error('The d4 engine is not available (vendor/d4 missing).');
+    }
+    // Say "not enough disk" now, rather than dying mid-`npm install` and
+    // leaving a half-written workspace that looks like a build failure.
+    const free = freeSpaceBytes(store.dir);
+    if (free !== null && free < MIN_FREE_BYTES) {
+      throw new Error(
+        `Not enough disk space to build: ${Math.round(free / 1e6)} MB free, `
+        + `${Math.round(MIN_FREE_BYTES / 1e6)} MB required. Delete old sites, or set STARDRIVE_PRUNE_BUILDS=1 to reclaim build artifacts automatically.`);
     }
     const resolved = resolveTemplate && resolveTemplate(site.account, site.templateId);
     if (!resolved) throw new Error(`Template "${site.templateId}" not found for this account.`);
