@@ -27,6 +27,16 @@ async function api(path, { method = 'GET', body, raw } = {}) {
   return { status: res.status, ok: res.ok, body: data };
 }
 
+/** The raw Response, for endpoints that return a file rather than JSON
+ *  (the .env download, the client handoff page). The API key travels in a
+ *  header, so a plain <a href> would come back unauthorised. */
+function apiRaw(path, { method = 'GET' } = {}) {
+  return fetch(path, {
+    method,
+    headers: { ...(getApiKey() ? { Authorization: 'Bearer ' + getApiKey() } : {}) },
+  });
+}
+
 function flash(btn, text) {
   const old = btn.textContent;
   btn.textContent = text;
@@ -1464,9 +1474,155 @@ async function loadLaunchPanel(siteId) {
       '<p style="font-size:0.84rem;color:var(--body);margin:0 0 0.9rem">Take this finished site live. Set a token once and it becomes your default for every client, so you never enter it twice. Override per client only when they host it themselves.</p>' +
       vercelBlock + dbBlock + githubBlock +
       '<div id="domainBlock"></div>' +
+      '<div id="envBlock"></div>' +
+      '<div id="handoffBlock"></div>' +
       '<div id="launchOut" style="margin-top:0.7rem"></div>' +
     '</div>';
   loadDomainPanel(siteId);
+  loadEnvPanel(siteId);
+  renderHandoffBlock(siteId);
+}
+
+/* ══════════════ Site settings (keys the built site needs) ══════════════ */
+// The distinction this panel exists to make: some settings Stardrive fills in
+// on its own, and some only the licensee has. Showing both, clearly separated,
+// is what stops someone hunting for a value nobody ever needed from them.
+
+async function loadEnvPanel(siteId) {
+  const host = $('#envBlock');
+  if (!host) return;
+  const { status, body } = await api('/v1/sites/' + siteId + '/env');
+  if (status !== 200) { host.innerHTML = ''; return; }
+  host.innerHTML = envPanelHtml(siteId, body);
+}
+
+function envPanelHtml(siteId, d) {
+  const info = (id, text) => '<button class="infoBtn" type="button" data-info="' + id + '" aria-label="What is this?">i</button>' +
+    '<div class="tip" id="' + id + '" hidden>' + text + '</div>';
+
+  const supplied = (d.spec || []).filter((v) => v.source === 'supplied');
+  const managed = (d.spec || []).filter((v) => v.source === 'managed');
+
+  const fields = supplied.map((v) => {
+    const set = d.set?.[v.name];
+    const value = set?.value ? esc(set.value) : '';
+    const state = set?.set
+      ? '<span style="color:var(--ok);font-size:0.78rem">✓ saved</span>'
+      : '<span style="color:var(--muted);font-size:0.78rem">not set</span>';
+    return '<div class="field">' +
+      '<label>' + esc(v.label || v.name) + ' ' + state + '</label>' +
+      '<p style="font-size:0.76rem;color:var(--muted);margin:0.1rem 0 0.35rem">' + esc(v.why || '') +
+        (v.where ? ' Get it from <b>' + esc(v.where) + '</b>.' : '') + '</p>' +
+      '<input data-env="' + esc(v.name) + '" class="mono" type="' + (v.secret ? 'password' : 'text') + '"' +
+        ' value="' + value + '" placeholder="' + (set?.set && v.secret ? 'saved, type to replace' : esc(v.name)) + '"' +
+        ' autocomplete="off" style="width:100%">' +
+    '</div>';
+  }).join('');
+
+  const managedList = managed.map((v) =>
+    '<li><code>' + esc(v.name) + '</code> ' + esc(v.managedBy || '') + '</li>').join('');
+
+  const missing = (d.missing || []).length
+    ? '<div class="report" style="background:var(--warn-soft);color:var(--warn)">' +
+        esc(d.missing.length === 1 ? 'One setting is still missing: ' : d.missing.length + ' settings are still missing: ') +
+        esc(d.missing.map((m) => m.label).join(', ')) +
+        '. The site will publish and work, but those features stay switched off.</div>'
+    : '<div class="report ok">✓ Everything this site needs is set.</div>';
+
+  return '<div class="launchPart">' +
+    '<div class="lpHead"><b>Site settings</b> ' + info('tipEnv',
+      'The settings this site needs on whatever host it runs on. Stardrive fills in the ones it knows (the admin password it generated for your client, the database, the domain) and pushes them automatically when you publish. The ones below are the only things it cannot know: your own keys. Enter them once per site and every future publish reuses them.') + '</div>' +
+    missing +
+    fields +
+    '<div style="margin-top:0.5rem;display:flex;gap:0.5rem;flex-wrap:wrap">' +
+      '<button class="primary" data-siteact="env-save" data-id="' + esc(siteId) + '">Save settings</button>' +
+      '<button class="ghost" data-siteact="env-download" data-id="' + esc(siteId) + '">Download .env</button>' +
+    '</div>' +
+    '<p style="font-size:0.78rem;color:var(--muted);margin:0.5rem 0 0">Publishing from here wires all of these in for you. Download the .env file only if you are deploying somewhere Stardrive cannot reach, and never commit it.</p>' +
+    (managedList ? '<details style="margin-top:0.6rem"><summary style="font-size:0.82rem;cursor:pointer">Handled for you (' + managed.length + ')</summary>' +
+      '<ul style="font-size:0.78rem;color:var(--muted);margin:0.4rem 0 0;padding-left:1.1rem">' + managedList + '</ul></details>' : '') +
+  '</div>';
+}
+
+async function saveEnv(siteId) {
+  const values = {};
+  document.querySelectorAll('[data-env]').forEach((el) => {
+    // An untouched secret field is blank on purpose; sending that blank would
+    // erase a key the licensee saved earlier and never meant to change.
+    if (el.type === 'password' && !el.value) return;
+    values[el.dataset.env] = el.value;
+  });
+  const out = $('#launchOut');
+  if (!Object.keys(values).length) {
+    if (out) out.innerHTML = '<div class="report">Nothing to save.</div>';
+    return;
+  }
+  const { status, body } = await api('/v1/sites/' + siteId + '/env', { method: 'PUT', body: { values } });
+  if (out) {
+    out.innerHTML = status === 200
+      ? '<div class="report ok">✓ Saved. Publish again to push these to the host.</div>'
+      : '<div class="report err">' + esc(body.error?.message || 'Could not save (' + status + ').') + '</div>';
+  }
+  loadEnvPanel(siteId);
+}
+
+/* ══════════════ Client handoff ══════════════ */
+
+function renderHandoffBlock(siteId) {
+  const host = $('#handoffBlock');
+  if (!host) return;
+  host.innerHTML = '<div class="launchPart">' +
+    '<div class="lpHead"><b>Hand over to your client</b></div>' +
+    '<p style="font-size:0.84rem;color:var(--body);margin:0 0 0.6rem">A printable page with their sign-in details, what they can change themselves, and anything still worth knowing. Written for them, not for a developer. Read it first, then send it on.</p>' +
+    '<div style="display:flex;gap:0.5rem;flex-wrap:wrap">' +
+      '<button class="primary" data-siteact="handoff-open" data-id="' + esc(siteId) + '">Preview handoff</button>' +
+      '<button class="ghost" data-siteact="handoff-download" data-id="' + esc(siteId) + '">Download</button>' +
+      '<button class="ghost" data-siteact="handoff-rotate" data-id="' + esc(siteId) + '">New password</button>' +
+    '</div>' +
+    '<p style="font-size:0.78rem;color:var(--muted);margin:0.5rem 0 0">The page shows the client\'s password in full, so treat it like one.</p>' +
+  '</div>';
+}
+
+/** Fetch an authenticated file and hand it to the browser as a download. The
+ *  API key lives in a header, so a plain link would come back unauthorised. */
+async function downloadAuthed(path, filename) {
+  const res = await apiRaw(path);
+  if (!res.ok) {
+    const out = $('#launchOut');
+    if (out) out.innerHTML = '<div class="report err">Could not prepare that download (' + res.status + ').</div>';
+    return;
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function openHandoff(siteId) {
+  const res = await apiRaw('/v1/sites/' + siteId + '/handoff');
+  if (!res.ok) {
+    const out = $('#launchOut');
+    if (out) out.innerHTML = '<div class="report err">Could not build the handoff (' + res.status + ').</div>';
+    return;
+  }
+  // Opened as a blob so the credentials never travel through a URL that a
+  // browser would keep in its history.
+  const url = URL.createObjectURL(new Blob([await res.text()], { type: 'text/html' }));
+  window.open(url, '_blank', 'noopener');
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+async function rotateAdminPassword(siteId) {
+  const out = $('#launchOut');
+  if (!window.confirm('Give this site a new admin password?\n\nThe current one keeps working until you publish again. Anything you have already sent your client will be out of date.')) return;
+  const { status, body } = await api('/v1/sites/' + siteId + '/env/rotate-admin', { method: 'POST', body: {} });
+  if (out) {
+    out.innerHTML = status === 200
+      ? '<div class="report ok">✓ New password: <code class="mono">' + esc(body.password) + '</code><br>' + esc(body.note) + '</div>'
+      : '<div class="report err">' + esc(body.error?.message || 'Could not rotate (' + status + ').') + '</div>';
+  }
 }
 
 /* ══════════════ Custom domain ══════════════ */
@@ -1786,6 +1942,11 @@ $('#siteDetail').addEventListener('click', async (e) => {
   if (btn.dataset.siteact === 'domain-check') { checkDomain(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'domain-remove') { removeDomain(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'review-approve') { approveFromSite(btn.dataset.id, btn.dataset.batch, btn.dataset.cid); return; }
+  if (btn.dataset.siteact === 'env-save') { saveEnv(btn.dataset.id); return; }
+  if (btn.dataset.siteact === 'env-download') { downloadAuthed('/v1/sites/' + btn.dataset.id + '/env/file', 'site.env'); return; }
+  if (btn.dataset.siteact === 'handoff-open') { openHandoff(btn.dataset.id); return; }
+  if (btn.dataset.siteact === 'handoff-download') { downloadAuthed('/v1/sites/' + btn.dataset.id + '/handoff?download=1', 'client-handoff.html'); return; }
+  if (btn.dataset.siteact === 'handoff-rotate') { rotateAdminPassword(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'vercel-go') { publishVercel(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'github-go') { deployGithub(btn.dataset.id); return; }
   if (btn.dataset.siteact === 'db-go') { saveDatabase(btn.dataset.id); return; }

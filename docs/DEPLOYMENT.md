@@ -184,6 +184,70 @@ which of the two is missing.
 `/v1/health` from another network. Nothing inside the container can tell you
 the container is unreachable.
 
+## What a CLIENT site needs (and who supplies it)
+
+Not to be confused with the env table above, which configures **Stardrive
+itself**. This is about the sites your licensees build for their customers.
+
+Every variable a built site needs falls into exactly one of three buckets, and
+`GET /v1/sites/:id/env` reports them that way:
+
+| Bucket | Examples | Who fills it |
+|---|---|---|
+| **Managed** | `ADMIN_PASSWORD`, `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `NEXT_PUBLIC_SITE_URL` | Stardrive, automatically, on every publish |
+| **Supplied** | `RESEND_API_KEY`, `CONTACT_TO_EMAIL`, `BLOB_READ_WRITE_TOKEN` | The licensee, once per site, in the Workbench |
+| **Optional** | anything a module declares and nobody set | Nobody. The feature stays dormant and says so. |
+
+`ADMIN_PASSWORD` is generated per site and is **stable**: rotating it on every
+publish would silently lock out a client who wrote it down. `POST
+/v1/sites/:id/env/rotate-admin` issues a new one when a site changes hands.
+
+Supplied values are AES-256-GCM at rest under `STARDRIVE_SECRET`, never
+returned through any listing, and reused on every future publish of that site.
+The settings route accepts **only** the supplied names, so a caller cannot
+overwrite the database URL or the admin password through it.
+
+**No Stripe key is needed by a client site.** `d4-payments` uses Stripe Payment
+Links, created in the site owner's own dashboard, so no API key, webhook or
+card data is ever in scope.
+
+### Hosts Stardrive writes to directly
+
+Publishing from the Workbench pushes the whole environment for you:
+
+- **Vercel** (`POST /v1/sites/:id/deploy/vercel`)
+- **Netlify** (`POST /v1/sites/:id/deploy/netlify`)
+
+### Everywhere else
+
+`GET /v1/sites/:id/env/file` returns a ready-filled `.env`, and every assembled
+site ships a `Dockerfile` and a `DEPLOY.md` naming real hosts with real steps.
+A git push to any repository host means **Vercel, Netlify, Cloudflare Pages,
+Render, Railway, Amplify and DigitalOcean** all build it with no code change.
+
+**There is no Cloudflare Pages direct-upload adapter, deliberately.** The CMS
+depends on `@libsql/client`, `otplib` and `qrcode`, which are Node libraries,
+so a direct upload would produce a site whose admin area is broken. Cloudflare
+is supported through the git path instead.
+
+**The one constraint worth knowing before promising anything:** a site with an
+admin area or any form is an application, not a folder of files, so it needs a
+host that runs Node. That rules out plain S3, GitHub Pages and basic shared
+hosting. `DEPLOY.md` says so in the client's copy too.
+
+## Handing a site to the client
+
+`GET /v1/sites/:id/handoff` renders a printable, self-contained page for the
+person who paid for the site: where it lives, how to sign in, what they can
+change themselves, and who to contact. It shows the admin password **in full**,
+because a handoff that says "ask your developer for the password" is not a
+handoff.
+
+What it lists is derived from the modules actually installed, so it never
+promises a Menu tab to a site with no menu. It also states the honest gaps: with
+no Resend key saved, it tells the client their website messages are saved in the
+dashboard Inbox and nothing is emailed, so check it.
+
 ## Scale-up (post-launch)
 
 - **Turso store**: the store interface is four verbs (`readJson`, `writeJson`,
