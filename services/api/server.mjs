@@ -55,7 +55,7 @@ const SIGNUP_PER_HOUR = Number(process.env.SIGNUP_LIMIT_PER_HOUR) || 5;
 const store = new VarStore(VAR_DIR);
 const auth = createAuth(store, { rateLimitPerMin: Number(process.env.RATE_LIMIT_PER_MIN) || 120 });
 const accounts = createAccounts(store);
-const billing = createBilling(accounts);
+const billing = createBilling(accounts, store);
 const catalog = loadCatalog(); // throws at boot if the bundle is bad
 const imported = createImportedStore(store);
 const assets = createAssets(store);
@@ -409,6 +409,52 @@ const ROUTES = [
     handler: ({ req }) => {
       accounts.destroySession(parseCookies(req).sd_session);
       return { status: 200, cookies: [clearCookie()], body: { ok: true } };
+    },
+  },
+  {
+    // Everything Stardrive holds about this account, in one file. The privacy
+    // policy promises it, and an account that cannot leave is not really the
+    // licensee's own. Secrets are deliberately NOT included: key secrets are
+    // stored only as hashes and hosting tokens only encrypted, so exporting
+    // them is impossible by design and would be wrong anyway.
+    method: 'GET', pattern: '/v1/account/export', scope: 'session',
+    handler: ({ account }) => {
+      const mine = (dir) => store.listIds(dir).map((id) => store.readJson(`${dir}/${id}.json`)).filter((r) => r && r.account === account.id);
+      const sites = mine('sites');
+      return {
+        status: 200,
+        body: {
+          exportedAt: new Date().toISOString(),
+          account: accounts.getAccount(account.id),
+          apiKeys: listKeys(store, account.id), // metadata only; secrets are unrecoverable
+          hosting: connections.get(account.id), // masked: which providers, last4, when
+          templates: imported.list(account.id).map((t) => ({ name: t.manifest.name, importedAt: t.record.importedAt, manifest: t.manifest })),
+          sites: sites.map((s) => ({
+            id: s.id, templateId: s.templateId, config: s.config, content: s.content,
+            copy: s.copy, domain: s.domain ?? null, createdAt: s.createdAt, updatedAt: s.updatedAt,
+          })),
+          batches: batches.list(account.id),
+          drafts: { batch: batches.draftView(account.id).rows, studio: store.readJson(`studio/draft/${account.id}.json`) },
+          note: 'Your built sites are downloadable individually as standalone projects: GET /v1/sites/{id}/export.',
+        },
+      };
+    },
+  },
+  {
+    // Close the account and remove everything belonging to it. The password is
+    // required because a session alone should not be able to destroy a
+    // business's whole library.
+    method: 'DELETE', pattern: '/v1/account', scope: 'session', bodyLimit: 10_000,
+    handler: ({ account, body }) => {
+      const full = accounts.getAccount(account.id);
+      if (!accounts.login({ email: full.email, password: String(body?.password ?? '') })) {
+        throw httpError(403, 'bad_credentials', 'Enter your password to close the account.');
+      }
+      if (String(body?.confirm ?? '').trim().toLowerCase() !== full.email.toLowerCase()) {
+        throw httpError(400, 'confirm_required', 'Type the account email to confirm. This deletes every template, site, and key you own, and cannot be undone.');
+      }
+      const removed = accounts.purge(account.id, { purgeSite });
+      return { status: 200, cookies: [clearCookie()], body: { deleted: true, ...removed } };
     },
   },
   {
@@ -1529,7 +1575,9 @@ const server = createServer(async (req, res) => {
 
   let body;
   let rawBody;
-  if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
+  // DELETE included: closing an account carries a password and a typed
+  // confirmation, and a destructive verb is exactly where that belongs.
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
     if (route.rawBody) rawBody = await readRawBody(req, route.bodyLimit);
     else body = await readBody(req, route.bodyLimit);
   }

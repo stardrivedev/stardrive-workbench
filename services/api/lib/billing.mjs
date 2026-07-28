@@ -102,8 +102,18 @@ export function planAllows(account, feature) {
   return Boolean(planOf(account)[feature]);
 }
 
-export function createBilling(accounts) {
+/** How old a signed webhook may be. Stripe's own default; the point is that
+ *  a captured event cannot be replayed tomorrow for a free upgrade. */
+const WEBHOOK_TOLERANCE_SEC = Number(process.env.STRIPE_WEBHOOK_TOLERANCE_SEC) || 300;
+/** Overridable so the money path can be exercised against a stub instead of
+ *  a real account. Same idea as STARDRIVE_PLAYWRIGHT for the QA browser. */
+const stripeBase = () => (process.env.STRIPE_API_BASE || 'https://api.stripe.com').replace(/\/$/, '');
+
+/** `store` is optional: without it, webhook de-duplication is skipped rather
+ *  than failing, so a caller that only wants plan maths need not supply one. */
+export function createBilling(accounts, store = null) {
   const configured = () => Boolean(process.env.STRIPE_SECRET_KEY);
+  const seenPath = (eventId) => `billing/events/${String(eventId).replace(/[^a-zA-Z0-9_-]/g, '')}.json`;
 
   /** Aggregate this month's counters across all of an account's keys. */
   function usageSummary(account, listKeys, usageFor, store) {
@@ -186,7 +196,7 @@ export function createBilling(accounts) {
       success_url: successUrl || 'https://stardrive.dev/workbench/#/billing?checkout=success',
       cancel_url: cancelUrl || 'https://stardrive.dev/workbench/#/billing?checkout=cancel',
     });
-    const res = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+    const res = await fetch(`${stripeBase()}/v1/checkout/sessions`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`, 'Content-Type': 'application/x-www-form-urlencoded' },
       body: form,
@@ -196,14 +206,38 @@ export function createBilling(accounts) {
     return { url: data.url, id: data.id };
   }
 
-  /** Verify a Stripe webhook signature (scheme: t=…,v1=… HMAC-SHA256). */
-  function verifySignature(rawBody, sigHeader, secret) {
-    const parts = Object.fromEntries(String(sigHeader || '').split(',').map((kv) => kv.split('=')));
-    if (!parts.t || !parts.v1) return false;
-    const expected = crypto.createHmac('sha256', secret).update(`${parts.t}.${rawBody}`).digest('hex');
-    const a = Buffer.from(expected);
-    const b = Buffer.from(parts.v1);
-    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  /**
+   * Verify a Stripe webhook signature (scheme: `t=<unix>,v1=<hmac-sha256>`).
+   *
+   * Two details that matter and are easy to get wrong:
+   *  - The timestamp is signed for a REASON: without an age check, anyone who
+   *    ever captures one valid webhook can replay it forever. A replayed
+   *    `checkout.session.completed` is a free plan upgrade.
+   *  - During a secret rotation Stripe sends SEVERAL `v1=` signatures in one
+   *    header, and the rule is "accept if ANY matches". Parsing the header
+   *    into an object keeps only the last one, which breaks every rotation.
+   */
+  function verifySignature(rawBody, sigHeader, secret, { toleranceSec = WEBHOOK_TOLERANCE_SEC, now = Date.now() } = {}) {
+    const pairs = String(sigHeader || '').split(',').map((kv) => {
+      const i = kv.indexOf('=');
+      return i === -1 ? null : [kv.slice(0, i).trim(), kv.slice(i + 1).trim()];
+    }).filter(Boolean);
+    const t = pairs.find(([k]) => k === 't')?.[1];
+    const signatures = pairs.filter(([k]) => k === 'v1').map(([, v]) => v);
+    if (!t || !signatures.length) return { ok: false, reason: 'malformed signature header' };
+
+    const ageSec = Math.abs(now / 1000 - Number(t));
+    if (!Number.isFinite(ageSec)) return { ok: false, reason: 'malformed timestamp' };
+    if (toleranceSec > 0 && ageSec > toleranceSec) {
+      return { ok: false, reason: `timestamp outside the ${toleranceSec}s tolerance (replay?)` };
+    }
+
+    const expected = Buffer.from(crypto.createHmac('sha256', secret).update(`${t}.${rawBody}`).digest('hex'));
+    const matched = signatures.some((sig) => {
+      const given = Buffer.from(sig);
+      return given.length === expected.length && crypto.timingSafeEqual(given, expected);
+    });
+    return matched ? { ok: true } : { ok: false, reason: 'signature does not match' };
   }
 
   /**
@@ -213,18 +247,56 @@ export function createBilling(accounts) {
   function handleWebhook(rawBody, sigHeader) {
     const secret = process.env.STRIPE_WEBHOOK_SECRET;
     if (!secret) throw httpError(501, 'billing_unconfigured', 'Stripe webhooks are not enabled yet (STRIPE_WEBHOOK_SECRET unset).');
-    if (!verifySignature(rawBody, sigHeader, secret)) throw httpError(400, 'bad_signature', 'Invalid Stripe signature.');
+    const sig = verifySignature(rawBody, sigHeader, secret);
+    if (!sig.ok) throw httpError(400, 'bad_signature', `Invalid Stripe signature: ${sig.reason}.`);
     let event;
     try { event = JSON.parse(rawBody); } catch { throw httpError(400, 'bad_json', 'Webhook body is not JSON.'); }
+
+    // Stripe retries until it gets a 2xx, so the same event WILL arrive more
+    // than once. Answer the retry with what happened the first time instead
+    // of acting twice: a duplicate `subscription.deleted` landing after a
+    // re-subscribe would otherwise downgrade someone who just paid.
+    if (event.id && store) {
+      const seen = store.readJson(seenPath(event.id));
+      if (seen) return { ...seen, duplicate: true };
+    }
+
+    const result = applyEvent(event);
+    if (event.id && store) store.writeJson(seenPath(event.id), { ...result, at: new Date().toISOString() });
+    return result;
+  }
+
+  function applyEvent(event) {
     const obj = event?.data?.object || {};
+    const planOfObject = () => {
+      const p = obj.metadata?.plan;
+      return p && PLANS[p] ? p : null;
+    };
+
     if (event.type === 'checkout.session.completed') {
       const accountId = obj.client_reference_id || obj.metadata?.account;
-      const plan = obj.metadata?.plan;
-      if (accountId && plan && PLANS[plan] && accounts.setPlan(accountId, plan)) {
+      const plan = planOfObject();
+      if (accountId && plan && accounts.setPlan(accountId, plan)) {
         return { received: true, action: `plan set to ${plan}`, account: accountId };
       }
       return { received: true, action: 'ignored (missing account or plan)' };
     }
+
+    // A plan change made in Stripe (upgrade, downgrade, or a subscription
+    // that lapsed into an unpaid state) has to reach us too, or someone can
+    // downgrade in the portal and keep the higher tier here indefinitely.
+    if (event.type === 'customer.subscription.updated') {
+      const accountId = obj.metadata?.account;
+      if (!accountId) return { received: true, action: 'ignored (no account metadata)' };
+      const dead = ['canceled', 'unpaid', 'incomplete_expired'].includes(obj.status);
+      const plan = dead ? 'free' : planOfObject();
+      if (!plan) return { received: true, action: `ignored (no plan in metadata, status ${obj.status})` };
+      if (accounts.setPlan(accountId, plan)) {
+        return { received: true, action: `plan set to ${plan}`, account: accountId };
+      }
+      return { received: true, action: 'ignored (unknown account)' };
+    }
+
     if (event.type === 'customer.subscription.deleted') {
       const accountId = obj.metadata?.account;
       if (accountId && accounts.setPlan(accountId, 'free')) {
@@ -235,5 +307,5 @@ export function createBilling(accounts) {
     return { received: true, action: `ignored (${event.type})` };
   }
 
-  return { configured, summary, usageSummary, quota, checkStudioQuota, createCheckout, handleWebhook, planAllows };
+  return { configured, summary, usageSummary, quota, checkStudioQuota, createCheckout, handleWebhook, verifySignature, planAllows };
 }

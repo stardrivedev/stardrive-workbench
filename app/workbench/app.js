@@ -2118,6 +2118,70 @@ $('#planGrid').addEventListener('click', async (e) => {
   $('#checkoutArea').innerHTML = '<div class="report" style="background:var(--code-bg);color:var(--muted);margin-top:0.9rem">' + esc(body.error?.message || 'Checkout unavailable.') + '</div>';
 });
 
+/* ══════════════ Your data: export and account closure ══════════════ */
+// The privacy policy promises both of these in the Workbench, so they live
+// here rather than being a support email.
+
+$('#exportAccountBtn')?.addEventListener('click', async () => {
+  const out = $('#exportOut');
+  out.innerHTML = '<div class="report" style="background:var(--code-bg);color:var(--muted)">Gathering everything…</div>';
+  const res = await fetch('/v1/account/export');
+  if (!res.ok) {
+    out.innerHTML = '<div class="report err">Could not build the export (' + res.status + ').</div>';
+    return;
+  }
+  const data = await res.json();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+  a.download = 'stardrive-account-' + new Date().toISOString().slice(0, 10) + '.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  out.innerHTML = '<div class="report ok">Downloaded: ' + data.templates.length + ' template(s), ' +
+    data.sites.length + ' site(s), ' + data.apiKeys.length + ' key(s). ' +
+    'Secrets are not included, because they are stored hashed or encrypted and cannot be read back.</div>';
+});
+
+$('#closeAccountBtn')?.addEventListener('click', () => {
+  const area = $('#closeAccountArea');
+  if (!area) return;
+  area.innerHTML =
+    '<div class="report" style="background:var(--bad-soft);color:var(--bad)">' +
+      '<b>This deletes everything you own and cannot be undone.</b>' +
+      '<div class="field" style="margin:0.7rem 0 0.4rem"><label>Type your account email to confirm</label>' +
+        '<input id="closeConfirm" autocomplete="off" spellcheck="false" placeholder="' + esc($('#acctEmail')?.textContent || '') + '"></div>' +
+      '<div class="field"><label>Your password</label><input id="closePassword" type="password" autocomplete="current-password"></div>' +
+      '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.5rem">' +
+        '<button class="ghost danger" id="closeAccountGo" type="button">Delete my account for good</button>' +
+        '<button class="ghost" id="closeAccountCancel" type="button">Keep my account</button>' +
+      '</div>' +
+    '</div>';
+});
+
+document.addEventListener('click', async (e) => {
+  if (e.target.closest('#closeAccountCancel')) { $('#closeAccountArea').innerHTML = ''; return; }
+  if (!e.target.closest('#closeAccountGo')) return;
+  const btn = e.target.closest('#closeAccountGo');
+  btn.disabled = true;
+  const res = await fetch('/v1/account', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirm: $('#closeConfirm')?.value || '', password: $('#closePassword')?.value || '' }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    btn.disabled = false;
+    $('#closeAccountArea').insertAdjacentHTML('beforeend',
+      '<div class="report err" style="margin-top:0.5rem">' + esc(body.error?.message || 'Could not close the account.') + '</div>');
+    return;
+  }
+  localStorage.removeItem('sd.apiKey');
+  document.body.innerHTML = '<div style="max-width:34rem;margin:6rem auto;padding:0 1.5rem;font-family:var(--sans)">' +
+    '<h1 style="font-size:1.3rem">Your account is closed.</h1>' +
+    '<p style="color:#666;line-height:1.6">Everything you owned here has been deleted: ' +
+    body.sites + ' site(s), ' + body.templates + ' template(s), and ' + body.keys + ' key(s). ' +
+    'Your email address is free to use again if you ever come back.</p></div>';
+});
+
 /* ══════════════ Batch Building (Agency perk) ══════════════ */
 // The nav item stays hidden until the account's plan includes `batch`.
 async function revealBatchNav() {

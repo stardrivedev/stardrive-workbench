@@ -20,7 +20,11 @@
  * being stranded. The verification token is stored only as a sha256, so a
  * leaked store cannot be replayed into a verified account.
  */
+import fs from 'node:fs';
 import crypto from 'node:crypto';
+
+/** Remove a directory if it is there; used to clear per-account folders. */
+const rmDir = (abs) => { try { fs.rmSync(abs, { recursive: true, force: true }); } catch { /* best effort */ } };
 
 const SESSION_TTL_MS = 30 * 24 * 3600 * 1000; // 30 days
 const isEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
@@ -136,6 +140,72 @@ export function createAccounts(store) {
     return publicAccount(a);
   }
 
+  /**
+   * Close an account and remove everything it owns. A partial delete is worse
+   * than none: it leaves a licensee's client data on our disk while telling
+   * them it is gone. So this walks every collection that can carry an account
+   * id, and the caller supplies `purgeSite` because a site owns things
+   * (workspace, uploads, deploy targets, jobs) only the server knows about.
+   *
+   * Not removed: webhook event records, which reference an account id but are
+   * a payment audit trail rather than customer data.
+   */
+  function purge(id, { purgeSite = null } = {}) {
+    const account = store.readJson(acctRel(id));
+    if (!account) return null;
+    const counts = { sites: 0, templates: 0, mappings: 0, keys: 0, batches: 0, sessions: 0 };
+
+    for (const siteId of store.listIds('sites')) {
+      const site = store.readJson(`sites/${siteId}.json`);
+      if (!site || site.account !== id) continue;
+      if (purgeSite) purgeSite(site); else store.deleteJson(`sites/${siteId}.json`);
+      counts.sites += 1;
+    }
+
+    // Per-account folders: templates, mappings, and the batch/studio drafts.
+    for (const [dir, key] of [['templates', 'templates'], ['mappings', 'mappings']]) {
+      for (const name of store.listIds(`${dir}/${id}`)) {
+        store.deleteJson(`${dir}/${id}/${name}.json`);
+        counts[key] += 1;
+      }
+      rmDir(store.path(dir, id));
+    }
+    rmDir(store.path('templates', id)); // any thumbnails sitting beside the records
+
+    for (const batchId of store.listIds('batches')) {
+      const b = store.readJson(`batches/${batchId}.json`);
+      if (b && b.account === id) { store.deleteJson(`batches/${batchId}.json`); counts.batches += 1; }
+    }
+    store.deleteJson(`batches/backlog/${id}.json`);
+    store.deleteJson(`batches/draft/${id}.json`);
+    store.deleteJson(`studio/draft/${id}.json`);
+    store.deleteJson(`connections/${id}.json`);
+
+    // API keys, and the usage counters keyed by them.
+    const keys = store.readJson('keys.json', []);
+    const mine = new Set(keys.filter((k) => k.account === id).map((k) => k.id));
+    if (mine.size) {
+      store.writeJson('keys.json', keys.filter((k) => !mine.has(k.id)));
+      counts.keys = mine.size;
+      const usage = store.readJson('usage.json', {});
+      let touched = false;
+      for (const keyId of mine) if (keyId in usage) { delete usage[keyId]; touched = true; }
+      if (touched) store.writeJson('usage.json', usage);
+    }
+
+    // Every live session, so no browser stays logged into a deleted account.
+    for (const s of store.listIds('sessions')) {
+      const rec = store.readJson(`sessions/${s}.json`);
+      if (rec && rec.account === id) { store.deleteJson(`sessions/${s}.json`); counts.sessions += 1; }
+    }
+
+    const idx = store.readJson(EMAILS, {});
+    delete idx[String(account.email).toLowerCase()];
+    store.writeJson(EMAILS, idx);
+    store.deleteJson(acctRel(id));
+    return counts;
+  }
+
   // ── Sessions ──
   function createSession(accountId) {
     const token = crypto.randomBytes(32).toString('hex');
@@ -159,7 +229,7 @@ export function createAccounts(store) {
   }
 
   return {
-    signup, login, getAccount, setPlan, setOverage, verifyEmail, reissueVerification,
+    signup, login, getAccount, setPlan, setOverage, verifyEmail, reissueVerification, purge,
     createSession, verifySession, destroySession,
   };
 }

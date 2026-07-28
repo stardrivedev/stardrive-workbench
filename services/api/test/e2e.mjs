@@ -66,7 +66,8 @@ function startServer(port, extraEnv = {}) {
   });
 }
 
-async function call(method, pathname, { key, body, base = BASE } = {}) {
+const call = (m, p, o) => callBase(m, p, o);
+async function callBase(method, pathname, { key, body, base = BASE } = {}) {
   const res = await fetch(base + pathname, {
     method,
     headers: {
@@ -140,7 +141,8 @@ await check('unknown route → 404', async () => {
 
 // ── Accounts, sessions, self-service keys, billing ───────────────────────
 console.log('accounts + sessions:');
-const cookieCall = async (method, pathname, { cookie, body, base = BASE } = {}) => {
+const cookieCall = (m, p, o) => cookieCallBase(m, p, o);
+const cookieCallBase = async (method, pathname, { cookie, body, base = BASE } = {}) => {
   const res = await fetch(base + pathname, {
     method,
     headers: { ...(cookie ? { Cookie: cookie } : {}), ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
@@ -1081,6 +1083,62 @@ await check('email verification is dormant when no email provider is configured'
   const bad = await fetch(`${BASE}/auth/verify?token=${'f'.repeat(64)}`, { redirect: 'manual' });
   assert.strictEqual(bad.status, 302);
   assert.match(bad.headers.get('location'), /verified=0/);
+});
+
+await check('an account can take its data with it, and then really leave', async () => {
+  // Its own server: this check signs up several times and would otherwise
+  // trip the per-address signup ration that the suite has already spent.
+  const PORT_E = 4850 + Math.floor(Math.random() * 140);
+  await startServer(PORT_E, { SIGNUP_LIMIT_PER_HOUR: '50' });
+  const base = `http://localhost:${PORT_E}`;
+  const cookieCall = (m, p, o = {}) => cookieCallBase(m, p, { ...o, base });
+  const call = (m, p, o = {}) => callBase(m, p, { ...o, base });
+
+  // A licensee with something to lose: a template, a site, and hosting.
+  const email = `leaver+${Date.now()}@example.com`;
+  const made = await cookieCall('POST', '/auth/signup', { body: { email, password: 'longenough', company: 'Leaving Co' } });
+  assert.strictEqual(made.status, 201);
+  const cookie = `sd_session=${made.token}`;
+  const leaverKey = made.body.apiKey.secret;
+  const accountId = made.body.account.id;
+
+  await call('POST', '/v1/templates', { key: leaverKey, body: auroraBundle });
+  const site = await call('POST', '/v1/sites', {
+    key: leaverKey, body: { templateId: 'aurora-template', config: { siteName: 'Leaving Site' }, assemble: false },
+  });
+  assert.strictEqual(site.status, 201);
+  await call('PUT', '/v1/connections/vercel', { key: leaverKey, body: { token: 'tok-leaving-1234' } });
+
+  // Export: everything we hold, and deliberately nothing we should not.
+  const exported = await cookieCall('GET', '/v1/account/export', { cookie });
+  assert.strictEqual(exported.status, 200);
+  assert.strictEqual(exported.body.account.email, email);
+  assert.strictEqual(exported.body.templates.length, 1, 'their template is in it');
+  assert.strictEqual(exported.body.sites.length, 1, 'their site is in it');
+  assert.strictEqual(exported.body.apiKeys.length, 1, 'their keys are listed');
+  const dump = JSON.stringify(exported.body);
+  assert.strictEqual(dump.includes('tok-leaving-1234'), false, 'the hosting token is NOT exported, it is only stored encrypted');
+  assert.strictEqual(dump.includes(leaverKey), false, 'nor the key secret, which is stored only as a hash');
+
+  // Deleting takes both the password and a typed confirmation.
+  assert.strictEqual((await cookieCall('DELETE', '/v1/account', { cookie, body: { confirm: email } })).status, 403, 'password required');
+  assert.strictEqual((await cookieCall('DELETE', '/v1/account', { cookie, body: { password: 'longenough' } })).status, 400, 'confirmation required');
+  assert.strictEqual((await cookieCall('DELETE', '/v1/account', { cookie, body: { password: 'wrong', confirm: email } })).status, 403);
+
+  const gone = await cookieCall('DELETE', '/v1/account', { cookie, body: { password: 'longenough', confirm: email } });
+  assert.strictEqual(gone.status, 200);
+  assert.strictEqual(gone.body.deleted, true);
+  assert.strictEqual(gone.body.sites, 1);
+  assert.strictEqual(gone.body.templates, 1);
+
+  // And it is really gone: no login, no session, no key, and the email is
+  // free again rather than permanently burned.
+  assert.strictEqual((await cookieCall('POST', '/auth/login', { body: { email, password: 'longenough' } })).status, 401, 'the account is gone');
+  assert.strictEqual((await cookieCall('GET', '/auth/me', { cookie })).status, 401, 'the session died with it');
+  assert.strictEqual((await call('GET', '/v1/templates', { key: leaverKey })).status, 401, 'the API key stopped working');
+  const reused = await cookieCall('POST', '/auth/signup', { body: { email, password: 'longenough' } });
+  assert.strictEqual(reused.status, 201, 'the address can be used again');
+  assert.notStrictEqual(reused.body.account.id, accountId, 'as a genuinely new account');
 });
 
 // ── Studio configured (server-side model key present) ────────────────────
