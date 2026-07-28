@@ -1,9 +1,11 @@
 # Deploying Stardrive
 
-One zero-dependency Node service serves everything: the marketing site (`/`),
-the Workbench console (`/workbench/`), and the v1 API. No build step, no
-`npm install` — `node services/api/server.mjs` is the whole run command. The
-vendored d4 engine (`vendor/d4`) ships with the code, so builds are hermetic.
+One zero-dependency Node service serves the Workbench console (`/workbench/`)
+and the v1 API; `/` redirects into the console. The public marketing site is a
+separate deployment, built with Stardrive itself, and is not bundled here. No
+build step, no `npm install` — `node services/api/server.mjs` is the whole run
+command. The vendored d4 engine (`vendor/d4`) ships with the code, so builds
+are hermetic.
 
 ## Run
 
@@ -119,8 +121,10 @@ is a valid launch topology (no external database required to start).
    the preview screenshot. Core QA (install → build → serve → routes) runs
    without them.
 
-`GET /v1/health` reports `engine`, `qa`, and the configured Studio/copy models;
-the image `HEALTHCHECK` uses it.
+`GET /v1/health` reports `engine`, `qa`, the configured Studio/copy models, and
+`builds` (queue depth, concurrency, free disk, whether pruning is on); the
+image `HEALTHCHECK` uses it. Watch `builds.diskOk` and `builds.queued`: those
+are the two numbers that turn into customer complaints first.
 
 ## Scale-up (post-launch)
 

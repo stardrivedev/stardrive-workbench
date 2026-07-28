@@ -9,9 +9,14 @@ client's answers, and the engine assembles a real, standalone Next.js site —
 QA'd, themed, and deployed to the licensee's own hosting accounts. The same
 deterministic builder that runs Deneb4's studio, productized.
 
-Domain: **stardrive.dev** · Status: **pre-alpha** (field-mapping layer
-shipped and production-proven; API service foundation live behind a dry
-assembly engine — real engine executor is the next chunk)
+Domain: **stardrive.dev** · Status: **pre-launch**. The product is built and
+covered end to end: the real engine assembles genuine Next.js sites through
+the full QA tier (install, compile, serve, check every route), the AI Studio
+designs templates, Sites and Batch Building run the client-facing flow, and
+custom domains close the last mile. What remains before taking money is
+operational rather than functional, and the honest headline is that no code
+path has yet run against a live Stripe, Vercel, GitHub, Resend, or Batch API:
+each is written against a seam and tested with a fake. See `docs/ROADMAP.md`.
 
 ## Why API-first (decided 2026-07-16)
 
