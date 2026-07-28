@@ -641,7 +641,8 @@ await check('connections: encrypted at rest — raw store never contains token p
   assert.strictEqual(raw.includes('"enc"'), true, 'ciphertext structure present');
 });
 await check('connections: unknown provider 422, bad token 400, delete works', async () => {
-  assert.strictEqual((await call('PUT', '/v1/connections/netlify', { key: fullKey, body: { token: 'x'.repeat(20) } })).status, 422);
+  // Netlify became a real provider, so this needs a name that genuinely is not one.
+  assert.strictEqual((await call('PUT', '/v1/connections/heroku', { key: fullKey, body: { token: 'x'.repeat(20) } })).status, 422);
   assert.strictEqual((await call('PUT', '/v1/connections/turso', { key: fullKey, body: { token: 'has spaces' } })).status, 400);
   assert.strictEqual((await call('DELETE', '/v1/connections/github', { key: fullKey })).status, 200);
   assert.strictEqual((await call('DELETE', '/v1/connections/github', { key: fullKey })).status, 404);
@@ -1156,6 +1157,107 @@ await check('with the operator model key set, health advertises the Studio on + 
   assert.strictEqual(health.body.studio.enabled, true);
   assert.strictEqual(health.body.studio.model, 'claude-sonnet-5');
   assert.strictEqual(JSON.stringify(health.body).includes('operator-secret'), false, 'the operator key is never in a response');
+});
+
+// ── Site environment + client handoff ────────────────────────────────────
+console.log('site settings + handoff:');
+await check('a new site already knows what it needs and who owes what', async () => {
+  const created = await call('POST', '/v1/sites', {
+    key: fullKey,
+    body: { templateId: 'd4-site-template', config: { siteName: 'Env Test Co', modules: ['d4-cms-core', 'd4-booking'] } },
+  });
+  assert.strictEqual(created.status, 202);
+  globalThis.__envSite = created.body.siteId;
+  await waitForJob(fullKey, created.body.jobId);
+
+  const { status, body } = await call('GET', `/v1/sites/${globalThis.__envSite}/env`, { key: fullKey });
+  assert.strictEqual(status, 200);
+  const names = body.spec.map((v) => v.name);
+  assert.ok(names.includes('ADMIN_PASSWORD'), 'the one that breaks the CMS is listed');
+  assert.ok(names.includes('RESEND_API_KEY'));
+  assert.strictEqual(body.spec.find((v) => v.name === 'ADMIN_PASSWORD').source, 'managed');
+  assert.ok(body.missing.some((m) => m.name === 'RESEND_API_KEY'), 'and what is still owed is named');
+  assert.ok(body.missing[0].why.length > 0, 'with the consequence spelled out');
+});
+
+await check('supplied keys save, and never come back out through the listing', async () => {
+  const id = globalThis.__envSite;
+  const put = await call('PUT', `/v1/sites/${id}/env`, {
+    key: fullKey,
+    body: { RESEND_API_KEY: 're_live_topsecret', CONTACT_TO_EMAIL: 'owner@example.com' },
+  });
+  assert.strictEqual(put.status, 200);
+  assert.deepStrictEqual(put.body.saved.sort(), ['CONTACT_TO_EMAIL', 'RESEND_API_KEY']);
+
+  const view = await call('GET', `/v1/sites/${id}/env`, { key: fullKey });
+  assert.strictEqual(JSON.stringify(view.body).includes('re_live_topsecret'), false, 'the key never returns through a listing');
+  assert.strictEqual(view.body.set.RESEND_API_KEY.set, true);
+  assert.strictEqual(view.body.set.CONTACT_TO_EMAIL.value, 'owner@example.com', 'an address they typed is theirs to see');
+  assert.strictEqual(view.body.missing.some((m) => m.name === 'RESEND_API_KEY'), false, 'and it stops being missing');
+});
+
+await check('a caller cannot overwrite a managed variable through the settings route', async () => {
+  const id = globalThis.__envSite;
+  const res = await call('PUT', `/v1/sites/${id}/env`, {
+    key: fullKey,
+    body: { ADMIN_PASSWORD: 'hunter2', TURSO_DATABASE_URL: 'libsql://attacker' },
+  });
+  assert.strictEqual(res.status, 400, 'neither name is settable, so there is nothing to save');
+});
+
+await check('the .env download carries the real values, including a generated password', async () => {
+  const id = globalThis.__envSite;
+  const res = await fetch(`${BASE}/v1/sites/${id}/env/file`, { headers: { Authorization: `Bearer ${fullKey}` } });
+  assert.strictEqual(res.status, 200);
+  assert.match(res.headers.get('content-disposition') || '', /\.env"$/);
+  const text = await res.text();
+  assert.match(text, /^RESEND_API_KEY=re_live_topsecret$/m, 'this is the one place the secret is meant to appear');
+  assert.match(text, /^ADMIN_PASSWORD=.{20,}$/m, 'generated, not blank');
+  assert.match(text, /never be committed/);
+});
+
+await check('rotating the admin password changes it and says it needs a republish', async () => {
+  const id = globalThis.__envSite;
+  const before = await (await fetch(`${BASE}/v1/sites/${id}/env/file`, { headers: { Authorization: `Bearer ${fullKey}` } })).text();
+  const rotated = await call('POST', `/v1/sites/${id}/env/rotate-admin`, { key: fullKey, body: {} });
+  assert.strictEqual(rotated.status, 200);
+  assert.ok(rotated.body.password.length >= 20);
+  assert.match(rotated.body.note, /Publish again/, 'the old one still works until they do');
+  const after = await (await fetch(`${BASE}/v1/sites/${id}/env/file`, { headers: { Authorization: `Bearer ${fullKey}` } })).text();
+  assert.notStrictEqual(before, after);
+  assert.ok(after.includes(rotated.body.password));
+});
+
+await check('the handoff is a printable page written for the client, not the developer', async () => {
+  const id = globalThis.__envSite;
+  const res = await fetch(`${BASE}/v1/sites/${id}/handoff`, { headers: { Authorization: `Bearer ${fullKey}` } });
+  assert.strictEqual(res.status, 200);
+  assert.match(res.headers.get('content-type') || '', /text\/html/);
+  const html = await res.text();
+  assert.match(html, /There is no username/);
+  assert.match(html, /Bookings/, 'it lists the tabs this client actually has');
+  assert.strictEqual(html.includes('Menus'), false, 'and not the ones it does not');
+  assert.match(html, /belong to you/, 'ownership stated plainly');
+  assert.strictEqual(html.includes('src="http'), false, 'self-contained so it still opens in five years');
+});
+
+await check('the handoff can be downloaded rather than read in the tab', async () => {
+  const res = await fetch(`${BASE}/v1/sites/${globalThis.__envSite}/handoff?download=1`, { headers: { Authorization: `Bearer ${fullKey}` } });
+  assert.match(res.headers.get('content-disposition') || '', /handoff\.html"$/);
+});
+
+await check('ACCOUNT ISOLATION: another licensee reaches none of it', async () => {
+  const id = globalThis.__envSite;
+  for (const [method, p] of [['GET', 'env'], ['GET', 'env/file'], ['GET', 'handoff']]) {
+    const res = await fetch(`${BASE}/v1/sites/${id}/${p}`, { method, headers: { Authorization: `Bearer ${otherAccountKey}` } });
+    assert.strictEqual(res.status, 404, `${p} should not exist for another account`);
+  }
+});
+
+await check('publishing to Netlify without a token refuses, and names where to get one', async () => {
+  const { status, body } = await call('POST', `/v1/sites/${globalThis.__envSite}/deploy/netlify`, { key: fullKey, body: {} });
+  assert.strictEqual(status, 409, 'nothing is built yet, so that gate fires first');
+  assert.strictEqual(body.error.code, 'not_assembled');
 });
 
 // ── Operator telemetry ───────────────────────────────────────────────────

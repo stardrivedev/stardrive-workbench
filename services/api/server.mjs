@@ -32,8 +32,11 @@ import { generateCopy } from './lib/copy-gen.mjs';
 import { tarGzDir, tarGzDirs } from './lib/archive.mjs';
 import { pushToGitHub } from './lib/deploy.mjs';
 import { deployToVercel, projectName } from './lib/deploy-vercel.mjs';
+import { deployToNetlify, attachNetlifyDomain } from './lib/deploy-netlify.mjs';
 import { normalizeDomain, dnsPlanFor, attachVercel, checkVercel, siteUrlEnv, SITE_URL_ENV } from './lib/domains.mjs';
 import { createEmail } from './lib/email.mjs';
+import { createSiteEnv, specFor, deployEnv, renderEnvFile, missingFrom, SUPPLIED } from './lib/site-env.mjs';
+import { renderHandoffHtml, guideFor, notesFor } from './lib/handoff.mjs';
 import { createOps } from './lib/ops.mjs';
 import { createBatches } from './lib/batches.mjs';
 import { runMapping, validateMapping } from '../../packages/field-mapping/index.mjs';
@@ -72,6 +75,10 @@ function resolveTemplateForJob(account, name) {
 
 const jobs = createJobRunner(store, { engine: ENGINE, assets, engineDir: ENGINE_DIR, resolveTemplate: resolveTemplateForJob });
 const connections = createConnections(store, VAR_DIR);
+// Per-site settings a built site needs on its host: the generated admin
+// password, and the keys only the licensee has. Encrypted under the same
+// secret as hosting tokens.
+const siteEnv = createSiteEnv(store, VAR_DIR);
 const email = createEmail();
 // Operator telemetry: recent errors, request counters, and a once-a-minute
 // watchdog that emails when the disk, the queue, or the error rate goes bad.
@@ -203,6 +210,35 @@ function assertReviewed(site) {
 }
 
 /**
+ * Everything one built site needs in its host's environment.
+ *
+ * One function so the values pushed to a host and the values handed to a
+ * licensee for a host we cannot write to are the same by construction. Two
+ * code paths here would drift, and the failure would be a site that works on
+ * Vercel and quietly does not work anywhere else.
+ *
+ * The database is vendor-neutral: whatever libSQL endpoint the licensee
+ * connected, per-site target first, then their account default.
+ */
+function siteEnvFor(account, site) {
+  const dbSite = connections.getSiteTarget(site.id, 'turso');
+  const dbAcct = connections.get(account).turso;
+  const dbToken = dbSite?.connected
+    ? connections.revealSiteToken(site.id, 'turso')
+    : (dbAcct.connected ? connections.reveal(account, 'turso') : null);
+  return deployEnv({
+    supplied: siteEnv.values(site.id),
+    // The CMS fails closed without this, so a site published without one
+    // arrives with its admin unusable: the one thing the client was promised
+    // they could do themselves.
+    adminPassword: siteEnv.adminPassword(site.id),
+    databaseUrl: dbSite?.url || dbAcct.url,
+    databaseToken: dbToken,
+    siteUrl: siteUrlEnv(site.domain?.name)[SITE_URL_ENV],
+  });
+}
+
+/**
  * Publish one assembled site to Vercel: token resolution, the review gate,
  * the connected database, the canonical-URL variable, and the custom domain.
  * Shared by the per-site route and Batch Building's publish-everything run so
@@ -223,21 +259,7 @@ async function publishSiteToVercel(account, siteId, { token: explicitToken = nul
     throw httpError(422, 'no_target', 'Add a Vercel token to publish: either right here for this site, or once in Hosting as your default so every site reuses it. Get one at vercel.com/account/tokens.');
   }
 
-  // Auto-wire a connected database (per-site target > account default) as
-  // Vercel project env vars, so the CMS admin works on first publish with no
-  // manual env copying. Vendor-neutral: whatever libSQL endpoint the customer
-  // connected, not necessarily Turso.
-  const dbSite = connections.getSiteTarget(s.id, 'turso');
-  const dbAcct = connections.get(account).turso;
-  const dbUrl = dbSite?.url || dbAcct.url;
-  const dbToken = dbSite?.connected ? connections.revealSiteToken(s.id, 'turso') : (dbAcct.connected ? connections.reveal(account, 'turso') : null);
-  // A custom domain has to reach the site's own code too: robots.ts and
-  // sitemap.ts resolve their base URL from NEXT_PUBLIC_SITE_URL, so without
-  // this a site on a custom domain keeps advertising the wrong canonical host.
-  const env = {
-    ...(dbUrl ? { TURSO_DATABASE_URL: dbUrl, ...(dbToken ? { TURSO_AUTH_TOKEN: dbToken } : {}) } : {}),
-    ...siteUrlEnv(s.domain?.name),
-  };
+  const env = siteEnvFor(account, s);
 
   const project = projectName(name || s.config.siteName);
   const result = await deployToVercel({ token, teamId, name: name || s.config.siteName, dir, env: Object.keys(env).length ? env : null });
@@ -1106,6 +1128,137 @@ const ROUTES = [
       };
     },
   },
+
+  // ── Site settings (environment) ────────────────────────────────────────
+  {
+    // What this site needs on its host, split by who is responsible. Values
+    // are never returned: only whether each one is set.
+    method: 'GET', pattern: '/v1/sites/:id/env', scope: 'deploy',
+    handler: ({ params, key }) => {
+      const s = loadSite(params.id, key.account);
+      const modules = Array.isArray(s.config?.modules) ? s.config.modules : [];
+      const spec = specFor(modules, (name) => getTemplate(key.account, name)?.manifest);
+      const stored = siteEnv.values(s.id);
+      return {
+        status: 200,
+        body: {
+          spec,
+          set: siteEnv.masked(s.id),
+          // What still needs an answer before the site works properly once
+          // live. Named plainly, with the consequence attached.
+          missing: missingFrom(spec, stored),
+        },
+      };
+    },
+  },
+  {
+    // Store the keys only the licensee has. Send { RESEND_API_KEY: "..." };
+    // an empty string clears one.
+    method: 'PUT', pattern: '/v1/sites/:id/env', scope: 'deploy', bodyLimit: 20_000,
+    handler: ({ params, body, key }) => {
+      const s = loadSite(params.id, key.account);
+      const values = body?.values && typeof body.values === 'object' ? body.values : body;
+      if (!values || typeof values !== 'object') {
+        throw httpError(400, 'bad_request', 'Send an object of variable names to values.');
+      }
+      const allowed = new Set(Object.keys(SUPPLIED));
+      const saved = [];
+      for (const [name, value] of Object.entries(values)) {
+        // Only the licensee-supplied names. Letting arbitrary names through
+        // would let a caller overwrite ADMIN_PASSWORD or the database URL.
+        if (!allowed.has(name)) continue;
+        siteEnv.setVar(s.id, name, value);
+        saved.push(name);
+      }
+      if (!saved.length) throw httpError(400, 'bad_request', `Nothing to save. Settable: ${[...allowed].join(', ')}.`);
+      return { status: 200, body: { saved, set: siteEnv.masked(s.id) } };
+    },
+  },
+  {
+    // The whole environment as a .env file, for a host Stardrive cannot write
+    // to directly. This DOES contain live secrets, which is why it is a
+    // deliberate, scoped download rather than part of any listing.
+    method: 'GET', pattern: '/v1/sites/:id/env/file', scope: 'deploy',
+    handler: ({ params, key }) => {
+      const s = loadSite(params.id, key.account);
+      const env = siteEnvFor(key.account, s);
+      const body = renderEnvFile(env, s.config?.siteName || s.name || 'this site');
+      return {
+        status: 200,
+        raw: true,
+        buffer: Buffer.from(body, 'utf-8'),
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Content-Disposition': `attachment; filename="${slugify(s.config?.siteName || 'site')}.env"`,
+        },
+      };
+    },
+  },
+  {
+    // The client handoff: a printable page with the sign-in details, what
+    // this particular client can edit, and the honest gaps. Written for the
+    // person who paid for the site, not for a developer.
+    method: 'GET', pattern: '/v1/sites/:id/handoff', scope: 'deploy',
+    handler: ({ params, key, url }) => {
+      const s = loadSite(params.id, key.account);
+      const modules = Array.isArray(s.config?.modules) ? s.config.modules : [];
+      const env = siteEnvFor(key.account, s);
+      const spec = specFor(modules, (name) => getTemplate(key.account, name)?.manifest);
+
+      // The live address, in the order it becomes true: a custom domain, then
+      // wherever it was last published, then nothing worth promising.
+      const live = s.domain?.name
+        ? `https://${s.domain.name}`
+        : (s.deploy?.url ? (s.deploy.url.startsWith('http') ? s.deploy.url : `https://${s.deploy.url}`) : null);
+
+      const account = accounts.getAccount(key.account);
+      const html = renderHandoffHtml({
+        siteName: s.config?.siteName || s.name || 'Your website',
+        siteUrl: live || '(not published yet)',
+        adminUrl: live ? `${live}/admin` : '(available once the site is published)',
+        password: env.ADMIN_PASSWORD,
+        guide: guideFor(modules),
+        notes: notesFor({
+          modules,
+          missingEnv: missingFrom(spec, env),
+          domain: s.domain?.name || null,
+          hasEmail: Boolean(env.RESEND_API_KEY && env.CONTACT_TO_EMAIL),
+        }),
+        preparedBy: account?.company || null,
+        supportEmail: account?.email || null,
+      });
+
+      // ?download=1 saves it; otherwise it opens in the tab for a read-through
+      // before the licensee sends it on.
+      const download = url?.searchParams?.get('download') === '1';
+      return {
+        status: 200,
+        raw: true,
+        buffer: Buffer.from(html, 'utf-8'),
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          ...(download
+            ? { 'Content-Disposition': `attachment; filename="${slugify(s.config?.siteName || 'site')}-handoff.html"` }
+            : {}),
+        },
+      };
+    },
+  },
+  {
+    // A new admin password, for handover or after a leak. Returned once.
+    method: 'POST', pattern: '/v1/sites/:id/env/rotate-admin', scope: 'deploy',
+    handler: ({ params, key }) => {
+      const s = loadSite(params.id, key.account);
+      const password = siteEnv.rotateAdminPassword(s.id);
+      return {
+        status: 200,
+        body: {
+          password,
+          note: 'Publish again to put this live. Until you do, the old password still works on the deployed site.',
+        },
+      };
+    },
+  },
   {
     // The site's connected database (masked): a libSQL-compatible endpoint
     // (Turso is the recommended hosted provider, but any libsql://, https://,
@@ -1156,6 +1309,47 @@ const ROUTES = [
         teamId: typeof body?.teamId === 'string' && body.teamId.trim() ? body.teamId.trim() : null,
         name: body?.name,
       });
+      return { status: 200, body: result };
+    },
+  },
+  {
+    // Publish to Netlify. Same site, same environment, different host: the
+    // point of the product is that the licensee picks, not us.
+    method: 'POST', pattern: '/v1/sites/:id/deploy/netlify', scope: 'deploy', meter: 'sites.deploy',
+    handler: async ({ params, body, key }) => {
+      const s = loadSite(params.id, key.account);
+      assertReviewed(s);
+      const dir = store.path('workspaces', s.id);
+      if (!fs.existsSync(path.join(dir, 'package.json'))) {
+        throw httpError(409, 'not_assembled', 'Build the site before publishing.');
+      }
+      const explicit = typeof body?.token === 'string' && body.token.trim() ? body.token.trim() : null;
+      if (body?.save && explicit) connections.setSiteTarget(s.id, { provider: 'netlify', token: explicit });
+      const acct = connections.get(key.account).netlify;
+      const token = explicit
+        || connections.revealSiteToken(s.id, 'netlify')
+        || (acct.connected ? connections.reveal(key.account, 'netlify') : null);
+      if (!token) {
+        throw httpError(422, 'no_target', 'Add a Netlify personal access token to publish there: either right here for this site, or once in Hosting as your default. Get one at app.netlify.com/user/applications.');
+      }
+
+      const result = await deployToNetlify({
+        token,
+        name: body?.name || s.config?.siteName || s.name,
+        dir,
+        accountSlug: typeof body?.accountSlug === 'string' && body.accountSlug.trim() ? body.accountSlug.trim() : null,
+        env: siteEnvFor(key.account, s),
+      });
+
+      if (s.domain?.name) {
+        // Best effort, exactly as on Vercel: the site IS live, and the domain
+        // is a separate retryable step rather than a reason to fail a publish.
+        try { await attachNetlifyDomain({ token, siteId: result.siteId, domain: s.domain.name }); } catch { /* reported by the domain view */ }
+      }
+
+      const fresh = loadSite(params.id, key.account);
+      fresh.deploy = { provider: 'netlify', url: result.url, at: new Date().toISOString() };
+      store.writeJson(`sites/${fresh.id}.json`, fresh);
       return { status: 200, body: result };
     },
   },

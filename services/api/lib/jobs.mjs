@@ -25,6 +25,7 @@ import { runFullQA, PREVIEW_FILE } from './qa-full.mjs';
 import { injectAssetDisplay } from './asset-injector.mjs';
 import { renderContentModule, PLACEHOLDER_PHRASES } from './content.mjs';
 import { MODULE_SEEDS } from './seed.mjs';
+import { renderDockerfile, renderDeployGuide } from './portable.mjs';
 import { repairTemplateSource } from '../../../packages/template-kit/index.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -490,6 +491,27 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
       log(job, seed.needsFacts
         ? `Seeded ${mod} from the customer's own answers.`
         : `Seeded ${mod} page content from the AI copy.`);
+    }
+
+    // Portability: a Dockerfile and a deploy guide naming real hosts, so the
+    // exported site is runnable anywhere by someone who has never seen
+    // Stardrive. Only variable NAMES go into the guide, never values: this
+    // file ships inside the export and usually ends up in a git repository.
+    {
+      const siteName = site.config?.siteName || site.name || 'This site';
+      const envNames = [...new Set([
+        'ADMIN_PASSWORD',
+        ...(modules.includes('d4-cms-core') ? ['TURSO_DATABASE_URL', 'TURSO_AUTH_TOKEN', 'BLOB_READ_WRITE_TOKEN'] : []),
+        'RESEND_API_KEY', 'CONTACT_TO_EMAIL', 'NEXT_PUBLIC_SITE_URL',
+      ])];
+      fs.writeFileSync(path.join(outDir, 'Dockerfile'), renderDockerfile(siteName));
+      fs.writeFileSync(path.join(outDir, 'DEPLOY.md'), renderDeployGuide({
+        siteName,
+        envNames,
+        needsNode: true, // every d4 site has at least the contact route
+        hasDatabase: modules.includes('d4-cms-core'),
+      }));
+      log(job, 'Wrote Dockerfile and DEPLOY.md: this site runs on any host, not just ours.');
     }
 
     // Repair deterministic, build-breaking mistakes in AI-authored source

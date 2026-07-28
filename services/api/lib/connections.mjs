@@ -24,7 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-export const PROVIDERS = ['vercel', 'turso', 'github'];
+export const PROVIDERS = ['vercel', 'netlify', 'turso', 'github'];
 
 function loadSecret(varDir) {
   if (process.env.STARDRIVE_SECRET) return process.env.STARDRIVE_SECRET;
