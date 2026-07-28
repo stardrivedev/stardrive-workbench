@@ -40,6 +40,9 @@ Everything works dormant; each env var lights up a capability with no code chang
 | Email | `RESEND_API_KEY`, `STARDRIVE_EMAIL_FROM`, `STARDRIVE_LEADS_TO` | Signup welcome + access-request notifications. **Also switches on email verification** (see below). |
 | Rate limit | `RATE_LIMIT_PER_MIN` (120) | Per key. |
 | Signup ration | `SIGNUP_LIMIT_PER_HOUR` (5) | Accounts one IP may CREATE per hour. Rejected attempts (bad password, duplicate email) are free, so a typo never burns a real person's allowance. |
+| Operator telemetry | `STARDRIVE_OPS_TOKEN` | Unlocks `GET /v1/ops`. Not an API-key scope: no licensee should ever read the queue, the disk, or another tenant's error paths. |
+| Alert email | `STARDRIVE_ALERT_TO` (falls back to `STARDRIVE_LEADS_TO`) | Where the watchdog writes when something goes wrong. Needs `RESEND_API_KEY` too. |
+| Queue alarm | `STARDRIVE_QUEUE_ALERT` (25) | Queued builds that count as a backlog worth an email. |
 
 ## Abuse control on the front door
 
@@ -121,10 +124,65 @@ is a valid launch topology (no external database required to start).
    the preview screenshot. Core QA (install → build → serve → routes) runs
    without them.
 
-`GET /v1/health` reports `engine`, `qa`, the configured Studio/copy models, and
-`builds` (queue depth, concurrency, free disk, whether pruning is on); the
-image `HEALTHCHECK` uses it. Watch `builds.diskOk` and `builds.queued`: those
-are the two numbers that turn into customer complaints first.
+7. **Monitoring** (do this before the first paying customer): set
+   `STARDRIVE_OPS_TOKEN`, and `STARDRIVE_ALERT_TO` alongside `RESEND_API_KEY`.
+   Then `POST /v1/ops/test-alert` and confirm the mail arrives.
+
+## Monitoring
+
+The image `HEALTHCHECK` notices a dead process. It notices nothing else, and
+the failures that actually cost a licensee their afternoon are quieter: a full
+disk so every build dies in `npm install`, a wedged queue so a batch of twenty
+sits at "queued" forever, a container crash-looping, 500s pouring out of one
+route.
+
+**`GET /v1/health`** stays public and deliberately coarse: `engine`, `qa`, the
+configured Studio/copy models, a `degraded` flag, and `builds` as
+`{ concurrency, active, queued, accountsWaiting }`. `ok: true` means only "the
+process is answering", and nothing more: letting a full disk flip it false
+would restart-loop the container over a condition a restart cannot fix.
+`degraded: true` is the honest signal, and `/v1/ops` says why.
+
+**`GET /v1/ops`** (`Authorization: Bearer $STARDRIVE_OPS_TOKEN`) is the whole
+picture: uptime, request counters split into client mistakes and our own 5xx,
+free disk, the oldest running build, active alerts, and the last 50 errors with
+their route and code. Query strings are dropped from those records on purpose,
+since that is where verification tokens and checkout session ids live. Without
+the env var the route answers `501 ops_unconfigured` and says how to switch it
+on, rather than sitting open.
+
+- `POST /v1/ops/check` runs the watchdog now instead of waiting out the minute.
+- `POST /v1/ops/test-alert` proves the whole alert path (provider key, sender
+  identity, recipient) before a real failure has to.
+
+**What gets emailed.** A watchdog samples once a minute and mails
+`STARDRIVE_ALERT_TO` when one of these holds:
+
+| Alert | Fires when | Waits first |
+|---|---|---|
+| `disk_low` | Builds are being refused for lack of space | No: waiting will not un-fill it |
+| `queue_stalled` | Work is queued and nothing is running | 5 min |
+| `queue_deep` | `STARDRIVE_QUEUE_ALERT` builds waiting | 5 min |
+| `build_stuck` | The oldest build has run over 45 min | No: the age is the proof |
+| `errors_spiking` | 10+ server errors in 15 min | No |
+| `restart_loop` | 5 starts in an hour replacing dead processes | No |
+| `fatal` | An uncaught exception or unhandled rejection | No |
+
+Each one is sent at most once every six hours, and its recovery is reported
+when the condition clears. The debounce is **persisted**, because the failure
+that most needs an email is a crash loop, and an in-memory debounce resets on
+every crash. A restart only counts toward `restart_loop` if the process it
+replaced both died and did not shut down cleanly, so deploys and rolling
+restarts stay quiet.
+
+Like everything else here it is **dormant when it cannot work**: with no email
+provider or no recipient, every condition is still tracked and still readable
+at `/v1/ops`, it just cannot be pushed anywhere, and `alerting.reason` says
+which of the two is missing.
+
+**Still worth adding from outside:** an external uptime check hitting
+`/v1/health` from another network. Nothing inside the container can tell you
+the container is unreachable.
 
 ## Scale-up (post-launch)
 
@@ -149,4 +207,6 @@ an hour of their builds: a single build queued afterwards runs next, not last.
 Two jobs for the same site never overlap, because they share one workspace
 directory. `GET /v1/health` reports `builds: { concurrency, active, queued,
 accountsWaiting }`, so a backed-up queue is visible from outside instead of
-only surfacing as customers wondering why nothing finished.
+only surfacing as customers wondering why nothing finished. Free disk and the
+oldest running build are on `/v1/ops` instead: they are the operator's
+business, not the internet's.

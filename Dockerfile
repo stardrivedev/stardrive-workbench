@@ -30,10 +30,16 @@ EXPOSE 8080
 #   STARDRIVE_COPY_MODEL      (copywriter model; default gpt-5.5)
 #   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_<PLAN>  (billing)
 #   RESEND_API_KEY, STARDRIVE_EMAIL_FROM, STARDRIVE_LEADS_TO       (email)
+#   STARDRIVE_OPS_TOKEN       (unlocks GET /v1/ops, the operator's own view)
+#   STARDRIVE_ALERT_TO        (watchdog alerts; needs RESEND_API_KEY to send)
 # Browser QA sub-checks (axe, screenshot) skip honestly unless Playwright +
 # chromium are present; core QA (install → next build → serve → routes) runs
 # with npm alone.
 
+# `ok` means the process is answering, and nothing more. A degraded deployment
+# (full disk, stalled queue) stays 200 on purpose: restarting the container
+# cannot fix a full volume, and a HEALTHCHECK that says otherwise would turn
+# one bad condition into a restart loop. `degraded` and /v1/ops carry the rest.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 

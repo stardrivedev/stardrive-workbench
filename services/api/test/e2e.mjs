@@ -1153,6 +1153,108 @@ await check('with the operator model key set, health advertises the Studio on + 
   assert.strictEqual(JSON.stringify(health.body).includes('operator-secret'), false, 'the operator key is never in a response');
 });
 
+// ── Operator telemetry ───────────────────────────────────────────────────
+console.log('ops:');
+await check('public health is coarse: load and a degraded flag, never free disk', async () => {
+  const { body } = await call('GET', '/v1/health');
+  assert.strictEqual(body.degraded, false);
+  assert.deepStrictEqual(Object.keys(body.builds).sort(), ['accountsWaiting', 'active', 'concurrency', 'queued']);
+  assert.strictEqual('diskFreeMb' in body.builds, false, 'the internet does not need our disk numbers');
+});
+
+await check('with no operator token, /v1/ops is honestly dormant rather than open', async () => {
+  const { status, body } = await call('GET', '/v1/ops');
+  assert.strictEqual(status, 501);
+  assert.strictEqual(body.error.code, 'ops_unconfigured');
+  assert.match(body.error.message, /STARDRIVE_OPS_TOKEN/, 'and says how to switch it on');
+});
+
+await check('a licensee API key cannot read the operator view', async () => {
+  const res = await fetch(`${BASE}/v1/ops`, { headers: { Authorization: `Bearer ${fullKey}` } });
+  assert.notStrictEqual(res.status, 200, 'a customer key is not an operator token');
+});
+
+await check('with a token set: wrong token 401, right token returns the whole picture', async () => {
+  const PORT_O = 4900 + Math.floor(Math.random() * 90);
+  await startServer(PORT_O, { STARDRIVE_OPS_TOKEN: 'operator-token-abcdef' });
+  const base = `http://localhost:${PORT_O}`;
+  const opsCall = (m, token) => fetch(base + '/v1/ops', {
+    method: m, headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  assert.strictEqual((await opsCall('GET')).status, 401, 'no token');
+  assert.strictEqual((await opsCall('GET', 'wrong')).status, 401, 'wrong token');
+  assert.strictEqual((await opsCall('GET', 'operator-token-abcdefX')).status, 401, 'a prefix is not enough');
+  const res = await opsCall('GET', 'operator-token-abcdef');
+  assert.strictEqual(res.status, 200);
+  const snap = await res.json();
+  assert.ok(snap.uptimeSec >= 0);
+  assert.ok(snap.requests.requests >= 3, 'the failed attempts were counted');
+  assert.strictEqual(snap.requests.clientErrors >= 3, true, 'as client errors, not ours');
+  assert.ok('diskFreeMb' in snap.builds, 'free disk lives here, behind the token');
+  assert.deepStrictEqual(snap.alerts, [], 'a healthy deployment alerts about nothing');
+  assert.strictEqual(snap.alerting.configured, false, 'no mail provider in this run');
+});
+
+await check('the watchdog can be run on demand, and finds nothing wrong here', async () => {
+  const PORT_O = 5000 + Math.floor(Math.random() * 90);
+  await startServer(PORT_O, { STARDRIVE_OPS_TOKEN: 'tok' });
+  const res = await fetch(`http://localhost:${PORT_O}/v1/ops/check`, {
+    method: 'POST', headers: { Authorization: 'Bearer tok' },
+  });
+  assert.strictEqual(res.status, 200);
+  const body = await res.json();
+  assert.deepStrictEqual(body.alerts, []);
+  assert.strictEqual(body.checked.length, 0, 'nothing to watch on an idle, healthy box');
+  const test = await fetch(`http://localhost:${PORT_O}/v1/ops/test-alert`, {
+    method: 'POST', headers: { Authorization: 'Bearer tok' },
+  });
+  const t = await test.json();
+  assert.strictEqual(t.sent, false);
+  assert.strictEqual(t.reason, 'alerting_unconfigured', 'it says why rather than pretending it sent');
+});
+
+await check('a real bad condition on a real server reaches health and the ops view', async () => {
+  const PORT_O = 5100 + Math.floor(Math.random() * 90);
+  // An absurd disk floor makes the runner refuse builds for lack of space,
+  // which is a genuine condition read off the real queue, not a stubbed one.
+  await startServer(PORT_O, { STARDRIVE_OPS_TOKEN: 'tok', STARDRIVE_MIN_FREE_MB: '99999999' });
+  const base = `http://localhost:${PORT_O}`;
+  assert.strictEqual((await call('GET', '/v1/health', { base })).body.degraded, false, 'nothing has looked yet');
+  const checked = await (await fetch(`${base}/v1/ops/check`, { method: 'POST', headers: { Authorization: 'Bearer tok' } })).json();
+  assert.deepStrictEqual(checked.checked, [{ name: 'disk_low', action: 'alerted' }]);
+  assert.strictEqual((await call('GET', '/v1/health', { base })).body.degraded, true, 'and now the public flag says so');
+  const snap = await (await fetch(`${base}/v1/ops`, { headers: { Authorization: 'Bearer tok' } })).json();
+  assert.strictEqual(snap.builds.diskOk, false);
+  assert.strictEqual(snap.alerts[0].name, 'disk_low');
+  assert.strictEqual(snap.alerts[0].notified, true);
+  assert.strictEqual(snap.alerting.configured, false, 'it recorded it, it just had nowhere to send it');
+});
+
+await check('a real server records its start, and (on POSIX) marks a SIGTERM exit deliberate', async () => {
+  // Its own var dir: this is about one process's boot record, and the rest of
+  // the suite has a dozen servers writing to the shared one.
+  const soloVar = fs.mkdtempSync(path.join(os.tmpdir(), 'stardrive-ops-boot-'));
+  const PORT_O = 5200 + Math.floor(Math.random() * 90);
+  const child = await startServer(PORT_O, { STARDRIVE_VAR_DIR: soloVar });
+  const bootsPath = path.join(soloVar, 'ops', 'boots.json');
+  const first = JSON.parse(fs.readFileSync(bootsPath, 'utf-8'));
+  assert.strictEqual(first.length, 1);
+  assert.strictEqual(first[0].clean, false, 'a running process has not exited yet');
+  assert.strictEqual(first[0].pid, child.pid);
+  // The SIGTERM half only means anything on POSIX: Windows terminates the
+  // process outright rather than delivering the signal, so no handler can run.
+  // Production is a Linux container, where `docker stop` is a real SIGTERM.
+  if (process.platform !== 'win32') {
+    child.kill('SIGTERM');
+    await new Promise((r) => setTimeout(r, 500));
+    const after = JSON.parse(fs.readFileSync(bootsPath, 'utf-8'));
+    assert.strictEqual(after[0].clean, true, 'so the next process does not read a deploy as a crash');
+  } else {
+    child.kill();
+  }
+  fs.rmSync(soloVar, { recursive: true, force: true });
+});
+
 // ── Teardown ─────────────────────────────────────────────────────────────
 for (const c of children) c.kill();
 await new Promise((r) => setTimeout(r, 300));

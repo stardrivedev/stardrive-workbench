@@ -34,6 +34,7 @@ import { pushToGitHub } from './lib/deploy.mjs';
 import { deployToVercel, projectName } from './lib/deploy-vercel.mjs';
 import { normalizeDomain, dnsPlanFor, attachVercel, checkVercel, siteUrlEnv, SITE_URL_ENV } from './lib/domains.mjs';
 import { createEmail } from './lib/email.mjs';
+import { createOps } from './lib/ops.mjs';
 import { createBatches } from './lib/batches.mjs';
 import { runMapping, validateMapping } from '../../packages/field-mapping/index.mjs';
 
@@ -72,6 +73,10 @@ function resolveTemplateForJob(account, name) {
 const jobs = createJobRunner(store, { engine: ENGINE, assets, engineDir: ENGINE_DIR, resolveTemplate: resolveTemplateForJob });
 const connections = createConnections(store, VAR_DIR);
 const email = createEmail();
+// Operator telemetry: recent errors, request counters, and a once-a-minute
+// watchdog that emails when the disk, the queue, or the error rate goes bad.
+// Dormant without an email provider + STARDRIVE_ALERT_TO; readable either way.
+const ops = createOps(store, { email, sample: () => jobs.stats() });
 const livePreview = createLivePreview(); // per-site `next start` on localhost
 
 // Batch Building (Agency tier): overnight bulk builds via the provider Batch
@@ -316,6 +321,26 @@ function resolveMappingBody(body, key) {
   throw httpError(400, 'bad_request', 'A mapping or mappingId is required.');
 }
 
+/**
+ * The operator's own door. Deliberately NOT an API-key scope: keys belong to
+ * licensees, and no licensee should ever read the queue, the disk, or another
+ * tenant's error paths. Compared in constant time so the token cannot be
+ * guessed a byte at a time.
+ */
+function requireOpsToken(req) {
+  const want = process.env.STARDRIVE_OPS_TOKEN || '';
+  if (!want) {
+    throw httpError(501, 'ops_unconfigured',
+      'Operator telemetry is off. Set STARDRIVE_OPS_TOKEN, then read GET /v1/ops with Authorization: Bearer <token>.');
+  }
+  const got = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const a = Buffer.from(got);
+  const b = Buffer.from(want);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    throw httpError(401, 'unauthenticated', 'A valid operator token is required.');
+  }
+}
+
 // ── Routes ───────────────────────────────────────────────────────────────
 // scope: 'public' (no key), 'any' (any valid key), or a named key scope.
 
@@ -324,17 +349,55 @@ const ROUTES = [
     method: 'GET', pattern: '/v1/health', scope: 'public',
     handler: () => {
       const s = studioConfig();
+      const b = jobs.stats();
       return {
         status: 200,
         body: {
+          // `ok` means "the process is answering", and nothing more. The image
+          // HEALTHCHECK reads it, so letting a full disk flip it false would
+          // restart-loop the container over a condition a restart cannot fix.
+          // `degraded` is the honest signal; GET /v1/ops says why.
           ok: true, service: 'stardrive-api', version: VERSION, engine: ENGINE,
           qa: ENGINE === 'real' ? (process.env.STARDRIVE_QA === 'full' ? 'full' : 'structural') : 'dry',
           studio: { enabled: s.configured, model: s.configured ? s.model : null, copyModel: s.configured ? copyModel() : null },
+          degraded: ops.degraded(),
           // Build load, so a backed-up queue is visible from outside instead
           // of only showing up as customers wondering why nothing finished.
-          builds: jobs.stats(),
+          // Coarse on purpose: this endpoint is public, and free disk is the
+          // operator's business, not the internet's.
+          builds: { concurrency: b.concurrency, active: b.active, queued: b.queued, accountsWaiting: b.accountsWaiting },
         },
       };
+    },
+  },
+
+  // Operator telemetry. Not an API-key scope: a licensee key must never read
+  // this, and the operator has no account. It is DORMANT until
+  // STARDRIVE_OPS_TOKEN is set, and says so rather than pretending.
+  {
+    method: 'GET', pattern: '/v1/ops', scope: 'public',
+    handler: ({ req }) => {
+      requireOpsToken(req);
+      return { status: 200, body: ops.snapshot() };
+    },
+  },
+  {
+    // Alerting nobody has ever seen work is not alerting. One button proves
+    // the whole path: provider key, sender identity, recipient.
+    method: 'POST', pattern: '/v1/ops/test-alert', scope: 'public',
+    handler: async ({ req }) => {
+      requireOpsToken(req);
+      const result = await ops.testAlert();
+      return { status: 200, body: { ...result, configured: ops.configured() } };
+    },
+  },
+  {
+    // Run the watchdog on demand, so an operator can see what it currently
+    // makes of the deployment without waiting out the sample interval.
+    method: 'POST', pattern: '/v1/ops/check', scope: 'public',
+    handler: async ({ req }) => {
+      requireOpsToken(req);
+      return { status: 200, body: { checked: await ops.checkNow(), alerts: ops.activeAlerts() } };
     },
   },
   {
@@ -1598,14 +1661,36 @@ const server = createServer(async (req, res) => {
     return res.end(out.buffer);
   }
   return json(res, out.status, out.body);
-});
+}, { onFinish: ops.noteResponse, onError: ops.noteError });
 
 server.listen(PORT, () => {
+  ops.start(); // boot count (crash-loop detection) + the watchdog interval
   console.log(`[stardrive-api] v${VERSION} listening on http://localhost:${PORT} (engine: ${ENGINE}, var: ${VAR_DIR})`);
 });
 
-// Don't leave orphaned `next start` preview servers behind on shutdown.
+/**
+ * A crash used to be a silent restart: the container came back and nobody
+ * knew. Record it, try to get one email out, and then still die, because a
+ * process that has thrown past every handler cannot be trusted to keep
+ * serving. The timeout is there so a slow mail provider cannot hold a broken
+ * process open.
+ */
+const dieAfterAlerting = (kind, err) => {
+  console.error(`[stardrive-api] ${kind}`, err);
+  const done = () => { try { livePreview.stopAll(); } finally { process.exit(1); } };
+  const guard = setTimeout(done, 3_000);
+  guard.unref?.();
+  ops.noteFatal(kind, err).catch(() => {}).finally(() => { clearTimeout(guard); done(); });
+};
+process.on('uncaughtException', (err) => dieAfterAlerting('uncaughtException', err));
+process.on('unhandledRejection', (err) => dieAfterAlerting('unhandledRejection', err));
+
+// Don't leave orphaned `next start` preview servers behind on shutdown, and
+// record that this exit was deliberate so the next process does not read an
+// orderly restart as a crash.
 for (const sig of ['SIGINT', 'SIGTERM']) {
-  process.on(sig, () => { try { livePreview.stopAll(); } finally { process.exit(0); } });
+  process.on(sig, () => {
+    try { ops.noteCleanExit(); livePreview.stopAll(); } finally { process.exit(0); }
+  });
 }
 process.on('exit', () => livePreview.stopAll());

@@ -177,6 +177,7 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
   let rr = 0;                 // rotation cursor
   let active = 0;             // builds in flight
   const activeSites = new Set(); // one build per site: they share a workspace
+  const startedAt = new Map();   // job id → ms, so a wedged build is visible
   const limit = Math.max(1, Number(concurrency) || 1);
 
   const jobPath = (id) => `jobs/${id}.json`;
@@ -280,9 +281,11 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
       const next = takeNext();
       if (!next) return;
       active += 1;
+      startedAt.set(next.id, Date.now());
       if (next.siteId) activeSites.add(next.siteId);
       runJob(next.id).finally(() => {
         active -= 1;
+        startedAt.delete(next.id);
         if (next.siteId) activeSites.delete(next.siteId);
         setImmediate(pump);
       });
@@ -321,6 +324,10 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
       pruneBuilds: PRUNE_BUILDS,
       diskFreeMb: free === null ? null : Math.round(free / 1e6),
       diskOk: free === null ? null : free >= MIN_FREE_BYTES,
+      // How long the longest-running build has been going. A full-QA build is
+      // 3-5 minutes, so a large number here is a wedged install holding a
+      // worker slot, which no count of active jobs would reveal.
+      oldestActiveMs: startedAt.size ? Date.now() - Math.min(...startedAt.values()) : 0,
     };
   };
 

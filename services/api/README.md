@@ -37,6 +37,7 @@ Then open **http://localhost:4650** (the root redirects to the Console):
 
 ```
 node test/e2e.mjs        # the full end-to-end suite (spawns its own servers)
+node test/ops.mjs        # the watchdog: fake clock, fake mailer, fake queue
 ```
 
 `make-key.mjs` still works for minting a key from the CLI (CI, scripts):

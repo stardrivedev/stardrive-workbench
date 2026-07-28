@@ -92,13 +92,22 @@ export function matchRoute(routes, method, pathname) {
   return null;
 }
 
-export function createServer(handler) {
+/**
+ * `onFinish` and `onError` are the telemetry seam (see lib/ops.mjs): every
+ * completed response and every thrown error, offered to an observer that the
+ * transport itself knows nothing about. Both are wrapped, because a monitor
+ * that can take the service down with it is worse than no monitor.
+ */
+export function createServer(handler, { onFinish = null, onError = null } = {}) {
+  const safely = (fn, ...args) => { if (fn) { try { fn(...args); } catch { /* never fail a request over telemetry */ } } };
   return http.createServer((req, res) => {
+    if (onFinish) res.on('finish', () => safely(onFinish, req, res));
     handler(req, res).catch((err) => {
       const status = err.status || 500;
       if (!res.headersSent) {
         fail(res, status, err.code || 'internal', status === 500 ? 'Internal error.' : err.message);
       }
+      safely(onError, err, req);
       if (status === 500) console.error('[stardrive-api]', err);
     });
   });
