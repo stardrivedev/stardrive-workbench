@@ -477,15 +477,19 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
     // Feature-module content seeds: careers/catalog/insights pages read these as
     // their empty-DB fallback, so a fresh build opens with the AI-written rows
     // instead of an empty state. Edits in /admin (a saved collection) override.
-    if (pack) {
-      for (const mod of modules) {
-        const seed = MODULE_SEEDS[mod];
-        if (!seed) continue;
-        const dest = path.join(outDir, seed.file);
-        if (!fs.existsSync(dest)) continue; // module not present → nothing to seed
-        fs.writeFileSync(dest, seed.render(pack));
-        log(job, `Seeded ${mod} page content from the AI copy.`);
-      }
+    // Fact-driven seeds (booking, testimonials, events, locations) run even
+    // with no AI pack: their source is what the operator typed, and a diary or
+    // a testimonial must be exactly that, never something a model wrote.
+    for (const mod of modules) {
+      const seed = MODULE_SEEDS[mod];
+      if (!seed) continue;
+      if (!pack && !seed.needsFacts) continue;
+      const dest = path.join(outDir, seed.file);
+      if (!fs.existsSync(dest)) continue; // module not present → nothing to seed
+      fs.writeFileSync(dest, seed.render(pack, facts, site.config?.siteName || site.name || ''));
+      log(job, seed.needsFacts
+        ? `Seeded ${mod} from the customer's own answers.`
+        : `Seeded ${mod} page content from the AI copy.`);
     }
 
     // Repair deterministic, build-breaking mistakes in AI-authored source

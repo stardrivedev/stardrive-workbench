@@ -1138,7 +1138,10 @@ function refreshSiteSteps() {
 /* ══════════════ Content intake (DFY: facts in → AI writes the site) ══════════════ */
 const FACT_SEP = /\s+[—–-]\s+|\s*[|]\s*/; // "Name - Role" / "A | B" splitters
 
-function parseFact(kind, raw) {
+/** Column keys for a `rows` field, from the field or from its data attribute. */
+const colKeys = (f) => (Array.isArray(f?.columns) ? f.columns.map((c) => c.key) : String(f || '').split(',').filter(Boolean));
+
+function parseFact(kind, raw, cols) {
   const text = raw || '';
   const lines = text.split('\n').map((s) => s.trim()).filter(Boolean);
   switch (kind) {
@@ -1146,17 +1149,36 @@ function parseFact(kind, raw) {
     case 'people': return lines.map((l) => { const [name, role] = l.split(FACT_SEP); return { name: (name || '').trim(), role: (role || '').trim() }; });
     case 'roles': return lines.map((l) => { const [title, ...rest] = l.split(FACT_SEP); return { title: (title || '').trim(), summary: rest.join(' - ').trim() }; });
     case 'products': return lines.map((l) => { const [name, price, ...rest] = l.split(FACT_SEP); return { name: (name || '').trim(), price: (price || '').trim(), note: rest.join(' - ').trim() }; });
+    // Generic N-column rows. One kind serves every module that needs a small
+    // table, so a new module adds a field and touches no UI code. Anything
+    // past the last column folds back into it rather than being dropped.
+    case 'rows': {
+      const keys = colKeys(cols);
+      if (!keys.length) return lines;
+      return lines.map((l) => {
+        const parts = l.split(FACT_SEP).map((p) => p.trim());
+        const row = {};
+        keys.forEach((k, i) => {
+          row[k] = i === keys.length - 1 ? parts.slice(i).join(' - ').trim() : (parts[i] || '');
+        });
+        return row;
+      });
+    }
     default: return text.trim();
   }
 }
 
-function serializeFact(kind, val) {
+function serializeFact(kind, val, cols) {
   if (val == null) return '';
   switch (kind) {
     case 'list': case 'topics': return Array.isArray(val) ? val.join('\n') : '';
     case 'people': return Array.isArray(val) ? val.map((p) => [p.name, p.role].filter(Boolean).join(' - ')).join('\n') : '';
     case 'roles': return Array.isArray(val) ? val.map((r) => [r.title, r.summary].filter(Boolean).join(' - ')).join('\n') : '';
     case 'products': return Array.isArray(val) ? val.map((p) => [p.name, p.price, p.note].filter(Boolean).join(' - ')).join('\n') : '';
+    case 'rows': {
+      const keys = colKeys(cols);
+      return Array.isArray(val) ? val.map((r) => keys.map((k) => r?.[k]).filter(Boolean).join(' - ')).join('\n') : '';
+    }
     default: return String(val);
   }
 }
@@ -1164,16 +1186,19 @@ function serializeFact(kind, val) {
 function factInput(f, val) {
   const req = f.required ? ' <span style="color:var(--bad)">*</span>' : '';
   const help = f.help ? '<p style="font-size:0.76rem;color:var(--muted);margin:0.15rem 0 0.35rem">' + esc(f.help) + '</p>' : '';
-  const v = esc(serializeFact(f.kind, val));
-  const multiline = ['facts', 'list', 'topics', 'people', 'roles', 'products'].includes(f.kind);
+  const cols = colKeys(f).join(',');
+  const v = esc(serializeFact(f.kind, val, f));
+  const multiline = ['facts', 'list', 'topics', 'people', 'roles', 'products', 'rows'].includes(f.kind);
   const ph = f.kind === 'people' ? 'One per line:  Name - Role'
     : f.kind === 'roles' ? 'One per line:  Title - one-line summary'
     : f.kind === 'products' ? 'One per line:  Name - Price - note'
+    : f.kind === 'rows' ? 'One per line:  ' + (f.columns || []).map((c) => c.label).join(' - ')
     : (f.kind === 'list' || f.kind === 'topics') ? 'One per line'
     : f.kind === 'facts' ? 'Notes are fine, the AI turns them into polished copy' : '';
+  const colAttr = cols ? ' data-cols="' + esc(cols) + '"' : '';
   const control = multiline
-    ? '<textarea data-fact="' + f.id + '" data-kind="' + f.kind + '" rows="' + (f.kind === 'facts' ? 4 : 3) + '" placeholder="' + esc(ph) + '" style="width:100%;font-size:0.85rem">' + v + '</textarea>'
-    : '<input data-fact="' + f.id + '" data-kind="' + f.kind + '" type="' + (f.kind === 'email' ? 'email' : f.kind === 'tel' ? 'tel' : 'text') + '" value="' + v + '" style="width:100%">';
+    ? '<textarea data-fact="' + f.id + '" data-kind="' + f.kind + '"' + colAttr + ' rows="' + (f.kind === 'facts' ? 4 : 3) + '" placeholder="' + esc(ph) + '" style="width:100%;font-size:0.85rem">' + v + '</textarea>'
+    : '<input data-fact="' + f.id + '" data-kind="' + f.kind + '"' + colAttr + ' type="' + (f.kind === 'email' ? 'email' : f.kind === 'tel' ? 'tel' : 'text') + '" value="' + v + '" style="width:100%">';
   return '<div class="field"><label>' + esc(f.label) + req + '</label>' + help + control + '</div>';
 }
 
@@ -1212,7 +1237,7 @@ async function saveSiteContent() {
   if (!siteId) return;
   const facts = {};
   document.querySelectorAll('#siteContent [data-fact]').forEach((el) => {
-    facts[el.dataset.fact] = parseFact(el.dataset.kind, el.value);
+    facts[el.dataset.fact] = parseFact(el.dataset.kind, el.value, el.dataset.cols);
   });
   const { status, body } = await api('/v1/sites/' + siteId + '/content', { method: 'PATCH', body: { facts } });
   if (status === 200 && $('#contentReady')) $('#contentReady').innerHTML = readyBadge(body.readiness);
@@ -2237,13 +2262,17 @@ const rowFields = (row) => batchFieldCache.get(fieldsKey(rowModules(row))) || { 
 
 /** Mirrors content.mjs hasValue, for instant per-row feedback. The server
  *  re-checks every row at submit, so this is a hint and never the gate. */
-function factAnswered(kind, v) {
+function factAnswered(kind, v, field) {
   const filled = (x) => typeof x === 'string' && x.trim().length > 0;
   switch (kind) {
     case 'list': case 'topics': return Array.isArray(v) && v.some(filled);
     case 'people': return Array.isArray(v) && v.some((x) => x && filled(x.name));
     case 'roles': return Array.isArray(v) && v.some((x) => x && filled(x.title));
     case 'products': return Array.isArray(v) && v.some((x) => x && filled(x.name));
+    case 'rows': {
+      const first = field?.columns?.[0]?.key || 'name';
+      return Array.isArray(v) && v.some((x) => x && filled(x[first]));
+    }
     default: return filled(v);
   }
 }
@@ -2251,7 +2280,7 @@ function factAnswered(kind, v) {
 /** What this row still needs before it can go into a batch. */
 function rowState(row) {
   const required = rowFields(row).fields.filter((f) => f.required);
-  const missing = required.filter((f) => !factAnswered(f.kind, row.facts?.[f.id]));
+  const missing = required.filter((f) => !factAnswered(f.kind, row.facts?.[f.id], f));
   const blocked = [];
   if (!String(row.siteName || '').trim()) blocked.push('a business name');
   // A row reusing a template is not designing anything, so it needs neither a
@@ -2752,7 +2781,7 @@ $('#batchBuildRows')?.addEventListener('input', (e) => {
     if (pv) pv.textContent = row.prompt || 'Answer "what kind of business is it" above.';
   } else if (el.dataset.fact) {
     row.facts = row.facts || {};
-    row.facts[el.dataset.fact] = parseFact(el.dataset.kind, el.value);
+    row.facts[el.dataset.fact] = parseFact(el.dataset.kind, el.value, el.dataset.cols);
   } else return;
   updateRowPill(row.rowId);
   saveBatchDraft();
