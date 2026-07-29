@@ -545,5 +545,31 @@ button.primary.glow { animation: glowpulse 1.5s ease-in-out infinite; }
 }
 .verifybar.ok { background: var(--good-soft); color: var(--good); }
 .verifybar.bad { background: var(--bad-soft); color: var(--bad); }
+
+/* ── Confirmation dialog ──
+   Replaces window.confirm, whose buttons are always "OK" and "Cancel". On a
+   destructive action that is exactly the wrong wording: the button has to say
+   what it will do. */
+.sd-dialog {
+  border: 1px solid var(--line); border-radius: 12px; padding: 0;
+  background: var(--panel); color: var(--body);
+  max-width: 30rem; width: calc(100% - 2rem);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.18);
+}
+.sd-dialog::backdrop { background: rgb(8 9 14 / 0.55); }
+.sd-dialog-body { padding: 1.25rem 1.4rem 1.3rem; }
+.sd-dialog h2 { font-size: 1.08rem; margin: 0 0 0.5rem; }
+.sd-dialog p { margin: 0; font-size: 0.9rem; line-height: 1.55; white-space: pre-line; }
+.sd-dialog p:empty { display: none; }
+.sd-dialog-actions { display: flex; gap: 0.6rem; justify-content: flex-end; flex-wrap: wrap; margin-top: 1.2rem; }
+/* The destructive action wears the warning, not the accent. --accent-ink, not
+   white: in the dark theme --bad is a light coral, and white on it is around
+   2:1. --accent-ink is the token for text sitting on a strong fill and flips
+   with the theme, giving 6:1 in light and 7:1 in dark. */
+.sd-dialog-actions button.primary.destructive { background: var(--bad); color: var(--accent-ink); }
+@media (max-width: 520px) {
+  .sd-dialog-actions { flex-direction: column-reverse; }
+  .sd-dialog-actions button { width: 100%; }
+}
 .verifybar[hidden] { display: none; }
 .verifybar button { font-size: 0.78rem; padding: 0.2rem 0.6rem; }

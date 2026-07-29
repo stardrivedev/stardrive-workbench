@@ -20,6 +20,7 @@ import assert from 'node:assert';
 import { pathToFileURL } from 'node:url';
 import { REQUIRED_SITE_FILES } from '../../../packages/template-kit/index.mjs';
 import { startServer } from './helpers/server.mjs';
+import { confirmDialog } from './helpers/dialog.mjs';
 
 const spec = process.env.STARDRIVE_PLAYWRIGHT || 'playwright';
 let chromium = null;
@@ -112,6 +113,12 @@ await check('a half-filled brief survives a reload', async () => {
 
 await check('"Start over" clears the saved draft, not just the screen', async () => {
   await page.click('#clearChatBtn');
+  // Discarding a design in progress asks first, and the button says so rather
+  // than offering a bare "OK".
+  const asked = await confirmDialog(page);
+  assert.match(asked.title, /Start over/i);
+  assert.match(asked.confirmLabel, /Start over/i);
+  assert.match(asked.cancelLabel, /Keep working/i);
   await page.waitForFunction(() => document.querySelector('#brBusiness')?.value === '', null, { timeout: 5000 });
   await page.reload({ waitUntil: 'networkidle' });
   await page.click('[data-view="studio"]');

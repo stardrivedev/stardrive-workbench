@@ -73,6 +73,55 @@ window.addEventListener('unhandledrejection', (e) => {
 window.addEventListener('offline', () => showTrouble('You are offline. Stardrive will work again once the connection is back.'));
 window.addEventListener('online', clearTrouble);
 
+/**
+ * Ask before doing something that cannot be taken back.
+ *
+ * window.confirm cannot label its buttons, so every destructive action in here
+ * used to end in a box reading "OK" / "Cancel" and leave the operator to work
+ * out which one deletes the client's site. Two of them had resorted to writing
+ * "OK = build without them / Cancel = go add photos first" into the message,
+ * which is a two-way choice wearing a yes/no dialog. Now the button says what
+ * it does.
+ *
+ * Resolves true for the action, false for the way out. Escape and the backdrop
+ * both mean "no", which is what <dialog> already does; the safe button holds
+ * focus so a stray Return never destroys anything.
+ */
+function confirmAction({ title, body = '', confirmLabel = 'Continue', cancelLabel = 'Cancel', destructive = false }) {
+  const dlg = document.getElementById('confirmDialog');
+  // No dialog element (an older cached page) is no reason to lose the action.
+  if (!dlg?.showModal) return Promise.resolve(window.confirm(title + (body ? '\n\n' + body : '')));
+
+  document.getElementById('confirmTitle').textContent = title;
+  document.getElementById('confirmBody').textContent = body;
+  const go = document.getElementById('confirmGo');
+  const cancel = document.getElementById('confirmCancel');
+  go.textContent = confirmLabel;
+  cancel.textContent = cancelLabel;
+  go.classList.toggle('destructive', destructive);
+
+  return new Promise((resolve) => {
+    const done = () => {
+      dlg.removeEventListener('close', done);
+      resolve(dlg.returnValue === 'go');
+    };
+    dlg.addEventListener('close', done);
+    dlg.returnValue = '';
+    dlg.showModal();
+    // Focus the safe option on anything destructive, the action otherwise.
+    (destructive ? cancel : go).focus();
+  });
+}
+
+/** A passing message with nowhere better to live. Replaces alert(), which
+ *  freezes the tab and announces the origin like a browser malfunction. */
+let noticeTimer = 0;
+function notify(message) {
+  showTrouble(message);
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(clearTrouble, 6000);
+}
+
 /** What a list says while it is fetching, when it is empty, and when it broke.
  *  One shape for all three so the views do not each invent their own. */
 const rowMsg = (cols, text, tone = 'muted') =>
@@ -512,7 +561,11 @@ async function onTemplateAction(e) {
   }
   if (btn.dataset.act === 'refine') { refineTemplate(name); return; }
   if (btn.dataset.act === 'del') {
-    if (!confirm('Delete "' + name + '" from your library?')) return;
+    if (!await confirmAction({
+      title: 'Delete "' + name + '" from your library?',
+      body: 'Sites already built from it are not affected.',
+      confirmLabel: 'Delete template', destructive: true,
+    })) return;
     await api('/v1/templates/' + encodeURIComponent(name), { method: 'DELETE' });
     $('#manifestPanel').innerHTML = '';
     loadTemplates();
@@ -863,7 +916,7 @@ async function restoreStudioDraft() {
  */
 async function refineTemplate(name) {
   const { status, body } = await api('/v1/templates/' + encodeURIComponent(name) + '?include=files');
-  if (status !== 200) { alert(body.error?.message || 'Could not open that template.'); return; }
+  if (status !== 200) { notify(body.error?.message || 'Could not open that template.'); return; }
   const blocks = [
     `=== FILE: manifest.json ===\n${JSON.stringify(body.manifest, null, 2)}\n=== END FILE ===`,
     ...(body.files || []).map((f) => `=== FILE: ${f.path} ===\n${f.content}\n=== END FILE ===`),
@@ -1064,21 +1117,31 @@ $('#downloadGenBtn').addEventListener('click', () => {
   }
 });
 
+const BRIEF_FIELDS = ['#brBusiness', '#brColors', '#brAudience', '#brExtra', '#brVibeCustom'];
+
 $('#clearChatBtn').addEventListener('click', async () => {
-  if (chat.messages.length && !confirm('Start over?\n\nThis design and everything you asked for is discarded.')) return;
+  // It used to ask only when there were chat messages, so a brief typed out by
+  // hand in the guided form was discarded without a word. Anything worth
+  // losing counts: the form, the chosen vibe, or a generated design.
+  const hasBrief = BRIEF_FIELDS.some((s) => $(s)?.value.trim()) || Boolean(currentVibe);
+  if ((chat.messages.length || hasBrief) && !await confirmAction({
+    title: 'Start over?',
+    body: 'This design and everything you asked for is discarded.',
+    confirmLabel: 'Start over', cancelLabel: 'Keep working', destructive: true,
+  })) return;
   chat.messages = [];
   $('#chatlog').innerHTML = '';
   setGenResult('');
   $('#importGenBtn')?.classList.remove('glow');
   const rw = $('#refineWrap'); if (rw) rw.hidden = true;
-  ['#brBusiness', '#brColors', '#brAudience', '#brExtra', '#brVibeCustom', '#chatText'].forEach((s) => { const el = $(s); if (el) el.value = ''; });
+  [...BRIEF_FIELDS, '#chatText'].forEach((s) => { const el = $(s); if (el) el.value = ''; });
   currentVibe = ''; renderVibes();
   studioPreviewSiteId = null;
   await clearStudioDraft();
 });
 
 // The brief is part of the saved draft too, so a half-filled form survives.
-for (const sel of ['#brBusiness', '#brColors', '#brAudience', '#brExtra', '#brVibeCustom']) {
+for (const sel of BRIEF_FIELDS) {
   $(sel)?.addEventListener('input', saveStudioDraft);
 }
 
@@ -1280,7 +1343,7 @@ async function openSiteDetail(siteId) {
 async function approveFromSite(siteId, batchId, customId) {
   if (!batchId || !customId) return;
   const { status, body } = await api('/v1/batches/' + batchId + '/builds/' + customId + '/approve', { method: 'POST' });
-  if (status !== 200) { alert(body.error?.message || 'Could not approve this design.'); return; }
+  if (status !== 200) { notify(body.error?.message || 'Could not approve this design.'); return; }
   openSiteDetail(siteId);
 }
 
@@ -1476,7 +1539,13 @@ async function buildSite(siteId) {
     const st = await api('/v1/sites/' + siteId + '/assets');
     const anyAssets = st.status === 200 && Object.values(st.body.assets || {}).some((a) => a && a.length);
     if (!anyAssets) {
-      const go = confirm('This site has no logo or photos yet.\n\nOK = build without them\nCancel = go add photos first');
+      // A real two-way choice, so both buttons say what they do rather than
+      // the message having to explain what OK and Cancel mean.
+      const go = await confirmAction({
+        title: 'This site has no logo or photos yet.',
+        body: 'The first preview your client sees will use placeholders.',
+        confirmLabel: 'Build without them', cancelLabel: 'Add photos first',
+      });
       if (!go) { $('#siteAssets')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
     }
   }
@@ -1781,7 +1850,11 @@ async function openHandoff(siteId) {
 
 async function rotateAdminPassword(siteId) {
   const out = $('#launchOut');
-  if (!window.confirm('Give this site a new admin password?\n\nThe current one keeps working until you publish again. Anything you have already sent your client will be out of date.')) return;
+  if (!await confirmAction({
+    title: 'Give this site a new admin password?',
+    body: 'The current one keeps working until you publish again. Anything you have already sent your client will be out of date.',
+    confirmLabel: 'Generate a new password',
+  })) return;
   const { status, body } = await api('/v1/sites/' + siteId + '/env/rotate-admin', { method: 'POST', body: {} });
   if (out) {
     out.innerHTML = status === 200
@@ -1883,7 +1956,11 @@ async function checkDomain(siteId) {
 }
 
 async function removeDomain(siteId) {
-  if (!confirm('Stop tracking this domain?\n\nAny DNS records you added stay at your registrar; Stardrive just forgets it.')) return;
+  if (!await confirmAction({
+    title: 'Stop tracking this domain?',
+    body: 'Any DNS records you added stay at your registrar; Stardrive just forgets it.',
+    confirmLabel: 'Stop tracking', destructive: true,
+  })) return;
   await api('/v1/sites/' + siteId + '/domain', { method: 'DELETE' });
   loadDomainPanel(siteId);
 }
@@ -2054,12 +2131,12 @@ $('#view-sites').addEventListener('change', async (e) => {
   if (!input || !input.files.length) return;
   const siteId = $('#siteAssets').dataset.id;
   const file = input.files[0];
-  if (file.size > 8_000_000) { alert('Files must be at most 8 MB.'); input.value = ''; return; }
+  if (file.size > 8_000_000) { notify('That file is too big. Photos must be 8 MB or less.'); input.value = ''; return; }
   const b64 = await fileAsBase64(file);
   const { status, body } = await api('/v1/sites/' + siteId + '/assets/' + input.dataset.upload, {
     method: 'POST', body: { filename: file.name, contentBase64: b64 },
   });
-  if (status !== 201) alert(body.error?.message || 'Upload failed (' + status + ').');
+  if (status !== 201) notify(body.error?.message || 'Upload failed (' + status + ').');
   loadSiteAssets(siteId);
 });
 
@@ -2204,7 +2281,11 @@ $('#connGrid').addEventListener('click', async (e) => {
     }
   }
   if (btn.dataset.act === 'disconnect') {
-    if (!confirm('Disconnect ' + provider + '? Deploys will need it re-added.')) return;
+    if (!await confirmAction({
+      title: 'Disconnect ' + provider + '?',
+      body: 'Sites already published stay where they are, but the next deploy will need this credential added again.',
+      confirmLabel: 'Disconnect', destructive: true,
+    })) return;
     await api('/v1/connections/' + provider, { method: 'DELETE' });
     loadConnections();
   }
@@ -2459,14 +2540,22 @@ $('#keysTable').addEventListener('click', async (e) => {
     const body = await res.json().catch(() => ({}));
     if (res.ok) {
       $('#newKeyOut').innerHTML = '<div class="keyreveal">Rotated <b>' + esc(body.name) + '</b>, the old secret is now dead. New secret (shown once):<code>' + esc(body.secret) + '</code></div>';
-      if (getApiKey() && confirm('Use this rotated key as the active console key too?')) {
+      if (getApiKey() && await confirmAction({
+        title: 'Use this rotated key here too?',
+        body: 'This console will switch to the new secret for its own calls.',
+        confirmLabel: 'Use it here', cancelLabel: 'Leave as is',
+      })) {
         localStorage.setItem('sd.apiKey', body.secret); $('#apiKeyInput').value = body.secret; renderMaskedKey();
       }
     }
     loadKeys();
   }
   if (btn.dataset.keyact === 'revoke') {
-    if (!confirm('Revoke this key? Anything using it will stop working.')) return;
+    if (!await confirmAction({
+      title: 'Revoke this key?',
+      body: 'Anything using it stops working immediately, and it cannot be brought back.',
+      confirmLabel: 'Revoke key', destructive: true,
+    })) return;
     await fetch('/v1/keys/' + btn.dataset.id, { method: 'DELETE' });
     loadKeys();
   }
@@ -3178,7 +3267,11 @@ $('#batchPasteGo')?.addEventListener('click', async () => {
 
 $('#batchClear')?.addEventListener('click', async () => {
   if (!batchDraft.rows.length) return;
-  if (!confirm('Clear all ' + batchDraft.rows.length + ' queued build(s), including any photos uploaded for them?')) return;
+  if (!await confirmAction({
+    title: 'Clear all ' + batchDraft.rows.length + ' queued build' + (batchDraft.rows.length === 1 ? '' : 's') + '?',
+    body: 'Everything typed in, and any photos uploaded for them, is discarded.',
+    confirmLabel: 'Clear the list', cancelLabel: 'Keep them', destructive: true,
+  })) return;
   batchDraft.rows = [];
   batchOpenRow = null;
   await saveBatchDraft({ now: true });
@@ -3246,12 +3339,12 @@ $('#batchBuildRows')?.addEventListener('change', async (e) => {
   const upload = e.target.closest('input[data-brupload]');
   if (upload && upload.files.length) {
     const file = upload.files[0];
-    if (file.size > 8_000_000) { alert('Files must be at most 8 MB.'); upload.value = ''; return; }
+    if (file.size > 8_000_000) { notify('That file is too big. Photos must be 8 MB or less.'); upload.value = ''; return; }
     const b64 = await fileAsBase64(file);
     const { status, body } = await api('/v1/batches/draft/rows/' + row.rowId + '/assets/' + upload.dataset.brupload, {
       method: 'POST', body: { filename: file.name, contentBase64: b64 },
     });
-    if (status !== 201) alert(body.error?.message || 'Upload failed (' + status + ').');
+    if (status !== 201) notify(body.error?.message || 'Upload failed (' + status + ').');
     loadRowPhotos(row.rowId);
   }
 });
@@ -3367,10 +3460,12 @@ $('#batchSubmitBtn')?.addEventListener('click', async () => {
   // Same nudge the interactive build gives: a batch runs for hours, so a build
   // with no logo or photos is worth one question before it goes.
   const bare = batchDraft.rows.filter((r) => !r.photos);
-  if (bare.length && !confirm(
-    bare.length + ' of ' + batchDraft.rows.length + ' build(s) have no logo or photos yet: ' +
-    bare.map((r) => r.name || r.siteName).join(', ') +
-    '.\n\nOK = submit without them\nCancel = go add photos first')) {
+  if (bare.length && !await confirmAction({
+    title: bare.length + ' of ' + batchDraft.rows.length + ' builds have no logo or photos yet.',
+    body: bare.map((r) => r.name || r.siteName).join(', ') +
+      '.\n\nA batch runs for hours, so these would finish with placeholder images.',
+    confirmLabel: 'Submit without them', cancelLabel: 'Add photos first',
+  })) {
     document.querySelector('[data-batchrow="' + bare[0].rowId + '"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     return;
   }
@@ -3424,10 +3519,18 @@ $('#batchList')?.addEventListener('click', async (e) => {
   if (btn.dataset.bact === 'expand') { expandBatch(id); return; }
 
   if (btn.dataset.bact === 'discard') {
-    if (!confirm('Discard this design?\n\nThe site and the template this build generated are both deleted. This cannot be undone.')) return;
+    if (!await confirmAction({
+      title: 'Discard this design?',
+      body: 'The site and the template this build generated are both deleted. This cannot be undone.',
+      confirmLabel: 'Discard design', cancelLabel: 'Keep it', destructive: true,
+    })) return;
   }
   if (btn.dataset.bact === 'publish-all') {
-    if (!confirm('Publish every approved site in this batch?\n\nThey go live on your connected hosting, one after another.')) return;
+    if (!await confirmAction({
+      title: 'Publish every approved site in this batch?',
+      body: 'They go live on your connected hosting, one after another.',
+      confirmLabel: 'Publish them all',
+    })) return;
   }
 
   const ROUTE = {

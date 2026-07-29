@@ -114,9 +114,32 @@ await check('both themes pass, not just the one that happens to be on', async ()
   }
 });
 
+await check('the confirmation dialog is labelled, focused and escapable', async () => {
+  await page.goto(`${BASE}/workbench/#/keys`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('[data-keyact="revoke"]', { timeout: 8000 });
+  await page.click('[data-keyact="revoke"]');
+  await page.waitForSelector('#confirmDialog[open]');
+
+  const bad = await violations();
+  assert.deepStrictEqual(bad, [], `\n        ${bad.join('\n        ')}`);
+
+  // On a destructive action the safe button holds focus, so a stray Return
+  // cannot revoke a key that everything the licensee ships is using.
+  const focused = await page.evaluate(() => document.activeElement?.id);
+  assert.strictEqual(focused, 'confirmCancel', 'focus starts on the destructive button');
+
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.getElementById('confirmDialog')?.open, null, { timeout: 3000 });
+});
+
 await check('the keyboard reaches the navigation, and focus is visible when it does', async () => {
   await page.goto(`${BASE}/workbench/#/home`, { waitUntil: 'networkidle' });
   await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), 'light');
+  // Start from the top of the document rather than from wherever the last
+  // check left the cursor: a hash-only goto does not reload, so focus can be
+  // sitting halfway down the page and Tab would walk away from the sidebar,
+  // not toward it.
+  await page.evaluate(() => document.activeElement?.blur?.());
 
   // Tab until a sidebar link has focus. Someone who cannot use a mouse has to
   // be able to get there at all.

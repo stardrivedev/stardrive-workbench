@@ -447,6 +447,24 @@
     </section>
   </main>
 </div>
+
+<!-- ═══ Confirmation ═══
+     Deleting a template, revoking a key and discarding a design used to go
+     through window.confirm, whose buttons say "OK" and "Cancel" and cannot be
+     told otherwise. On the destructive ones that is the whole question: OK to
+     what? A real dialog names the action on the button, and <dialog> gives the
+     modal focus trap and Escape handling for nothing. -->
+<dialog class="sd-dialog" id="confirmDialog" aria-labelledby="confirmTitle">
+  <form method="dialog" class="sd-dialog-body">
+    <h2 id="confirmTitle"></h2>
+    <p id="confirmBody"></p>
+    <div class="sd-dialog-actions">
+      <button class="ghost" id="confirmCancel" value="cancel" type="submit"></button>
+      <button class="primary" id="confirmGo" value="go" type="submit"></button>
+    </div>
+  </form>
+</dialog>
+
 <script src="/workbench/studio-prompt.js"></script>
 <script src="/workbench/app.js"></script>
 </body>

@@ -18,6 +18,7 @@ import path from 'node:path';
 import assert from 'node:assert';
 import { pathToFileURL } from 'node:url';
 import { startServer } from './helpers/server.mjs';
+import { confirmDialog } from './helpers/dialog.mjs';
 
 const spec = process.env.STARDRIVE_PLAYWRIGHT || 'playwright';
 let chromium = null;
@@ -151,6 +152,8 @@ await check('the handoff reads for the client and lists only their own sections'
 await check('rotating the password changes it and warns it is not live yet', async () => {
   const before = await asUser(`/v1/sites/${globalThis.__site}/env/file`);
   await page.click('[data-siteact="handoff-rotate"]');
+  const asked = await confirmDialog(page);
+  assert.match(asked.confirmLabel, /new password/i, 'the button says what it will do');
   await page.waitForFunction(() => /New password/.test(document.querySelector('#launchOut')?.textContent || ''), null, { timeout: 8000 });
   const shown = await page.textContent('#launchOut');
   assert.match(shown, /Publish again/, 'the old one still works until they do');

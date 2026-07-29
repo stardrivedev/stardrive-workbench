@@ -20,6 +20,7 @@ import assert from 'node:assert';
 import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { startServer } from './helpers/server.mjs';
+import { confirmDialog } from './helpers/dialog.mjs';
 
 const spec = process.env.STARDRIVE_PLAYWRIGHT || 'playwright';
 let chromium = null;
@@ -55,8 +56,10 @@ const EXPECTED = /401 \(Unauthorized\)|501 \(Not Implemented\)|404 \(Not Found\)
 page.on('console', (m) => { if (m.type() === 'error' && !EXPECTED.test(m.text())) errors.push(m.text()); });
 page.on('pageerror', (e) => errors.push(String(e.message)));
 // The submit nudges once when a build has no photos yet; say yes.
-const dialogs = [];
-page.on('dialog', (d) => { dialogs.push(d.message()); d.accept(); });
+// Confirmations are real in-page dialogs now, driven with confirmDialog()
+// where they appear. This stays for any native one a browser raises by itself
+// (a beforeunload, say), which would otherwise hang the run.
+page.on('dialog', (d) => d.accept());
 
 const pill = () => page.locator('[data-batchrow] [data-role="pill"]').first().innerText();
 const rows = () => page.locator('[data-batchrow]').count();
@@ -257,6 +260,12 @@ await check('a complete list reaches the provider seam and reports honestly', as
   await page.waitForFunction(() => document.querySelectorAll('[data-batchrow]').length === 3, null, { timeout: 5000 });
   await page.evaluate(() => { document.querySelector('#batchSubmitOut').innerHTML = ''; });
   await page.click('#batchSubmitBtn');
+  // The photo nudge asks first, and it is a genuine two-way choice, so both
+  // buttons name their own outcome rather than reading OK and Cancel.
+  const nudge = await confirmDialog(page);
+  assert.match(nudge.title, /no logo or photos/i);
+  assert.match(nudge.confirmLabel, /Submit without them/i);
+  assert.match(nudge.cancelLabel, /Add photos first/i);
   // No operator model key on this throwaway server, so the honest 501 shows:
   // the readiness gate is behind us and the request reached the provider seam.
   await page.waitForFunction(
@@ -264,7 +273,6 @@ await check('a complete list reaches the provider seam and reports honestly', as
     null, { timeout: 10000 });
   const msg = await page.locator('#batchSubmitOut').innerText();
   assert.doesNotMatch(msg, /still need answers/, 'the readiness gate passed');
-  assert.ok(dialogs.some((d) => /no logo or photos/.test(d)), 'and the photo nudge asked once first');
 });
 
 await check('a row can build from a template already in the library, and stops asking for a brief', async () => {

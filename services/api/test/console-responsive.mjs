@@ -183,6 +183,33 @@ await check('the API key field is usable rather than a 150px slot', async () => 
   assert.strictEqual(w > 180, true, `the API key input is ${Math.round(w)}px wide`);
 });
 
+await check('the confirmation dialog fits a phone, buttons and all', async () => {
+  await goto('keys');
+  await page.waitForSelector('[data-keyact="revoke"]', { timeout: 8000 });
+  await page.click('[data-keyact="revoke"]');
+  await page.waitForSelector('#confirmDialog[open]');
+  const fit = await page.evaluate(() => {
+    const d = document.getElementById('confirmDialog').getBoundingClientRect();
+    const go = document.getElementById('confirmGo').getBoundingClientRect();
+    const cancel = document.getElementById('confirmCancel').getBoundingClientRect();
+    return {
+      inside: d.left >= 0 && d.right <= window.innerWidth + 1,
+      // Stacked on a narrow screen rather than two buttons squeezed side by
+      // side, and the way out is the one nearest the thumb: on a destructive
+      // action the easiest target should be the harmless one.
+      stacked: Math.abs(go.left - cancel.left) < 2 && go.top !== cancel.top,
+      safeNearestThumb: cancel.top > go.top,
+      pageFits: document.documentElement.scrollWidth <= window.innerWidth + 1,
+    };
+  });
+  assert.strictEqual(fit.inside, true, 'the dialog runs off the side of the screen');
+  assert.strictEqual(fit.stacked, true, 'the buttons are not stacked at 375px');
+  assert.strictEqual(fit.safeNearestThumb, true, 'the destructive button is the one under the thumb');
+  assert.strictEqual(fit.pageFits, true, 'the open dialog made the page scroll sideways');
+  await page.click('#confirmCancel');
+  await page.waitForFunction(() => !document.getElementById('confirmDialog')?.open, null, { timeout: 3000 });
+});
+
 await check('on a laptop the sections are simply there, with no Menu button', async () => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await goto('home');
