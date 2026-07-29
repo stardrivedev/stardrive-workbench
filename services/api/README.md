@@ -36,9 +36,15 @@ Then open **http://localhost:4650** (the root redirects to the Console):
   (plan + usage; Stripe checkout dormant until configured), and the rulebook.
 
 ```
-node test/e2e.mjs        # the full end-to-end suite (spawns its own servers)
-node test/ops.mjs        # the watchdog: fake clock, fake mailer, fake queue
+npm test                 # every suite, sequentially, with a summary
+node test/e2e.mjs        # just the end-to-end suite (spawns its own servers)
+node test/ops.mjs        # just the watchdog: fake clock, fake mailer, fake queue
 ```
+
+The browser suites need Playwright and skip cleanly without it; point
+`STARDRIVE_PLAYWRIGHT` at an install to include them. `npm run test:proof`
+runs the real engine through the full QA tier (npm install, next build, serve,
+check every route) — slow, needs the network, deliberately outside `npm test`.
 
 `make-key.mjs` still works for minting a key from the CLI (CI, scripts):
 `node scripts/make-key.mjs --name "ci" [--scopes …] [--account <id>]`.
@@ -81,7 +87,8 @@ until `STRIPE_SECRET_KEY` (+ `STRIPE_PRICE_<PLAN>` price ids) are set.
 - **Mappings**: `POST /v1/mappings/validate`, `POST /v1/intake/parse`
   (inline or stored mapping), stored-mapping CRUD
   (`PUT|GET|DELETE /v1/mappings/{id}`, `GET /v1/mappings`).
-- **Templates**: `GET /v1/templates` (the six bundled d4 manifests — see
+- **Templates**: `GET /v1/templates` (the fifteen bundled d4 manifests: the
+  base site template, the CMS core, and thirteen feature modules — see
   `data/README.md` for provenance), `GET /v1/templates/{name}`,
   `POST /v1/templates/validate` (full-report manifest validation; the
   `d4-` name prefix is first-party-only, licensee slugs are free-form).
@@ -115,10 +122,15 @@ until `STRIPE_SECRET_KEY` (+ `STRIPE_PRICE_<PLAN>` price ids) are set.
   checks on a real assembled site. (War story: the default QA port was
   4190, which the WHATWG fetch spec silently blocks — "bad port" — so the
   prober now skips fetch-blocked ports.)
-- **Deploy**: `POST /v1/sites/{id}/deploy` pushes the assembled site (only)
-  to a repo the customer owns via their connected **GitHub** token; link it
-  to Vercel and it builds on push. One-click Vercel/Turso provisioning is
-  the next integration.
+- **Publish**: one click to **Vercel**
+  (`POST /v1/sites/{id}/deploy/vercel`) or **Netlify**
+  (`…/deploy/netlify`), each uploading the assembled source so the site's API
+  routes keep working, with a connected database wired in as project env vars.
+  Or `POST /v1/sites/{id}/deploy` pushes the site (only) to a repo the
+  customer owns via their connected **GitHub** token, which reaches any host
+  in two steps. Every credential is the licensee's own, per site or per
+  account, so each client can live in their own hosting. Custom domains
+  attach and their DNS state is reported without inventing records.
 - **Billing**: signature-verified Stripe **webhook** (`POST /webhooks/stripe`)
   flips plans on subscribe/cancel; checkout + webhook are dormant until the
   Stripe keys are set. Token quotas + opt-in overage are enforced now.
@@ -127,8 +139,14 @@ until `STRIPE_SECRET_KEY` (+ `STRIPE_PRICE_<PLAN>` price ids) are set.
 
 ## Honest gaps (pending, by design)
 
-- One-click **Vercel/Turso** provisioning (deploy pushes to GitHub today).
-- Full **browser QA** (headless build + axe/Playwright) as a tier on top of
-  the structural gate, behind an opt-in flag.
-- Turso-backed store · container orchestration · live-key activation of
-  Studio/Stripe/email (the seams are built and tested dormant).
+- **One-click publish beyond Vercel and Netlify** — Cloudflare Pages,
+  Railway and Render are the obvious next targets. A GitHub push already
+  reaches any host in two steps; this is about collapsing that to one.
+- **Vendor-neutral image storage** — CMS uploads still assume Vercel Blob, so
+  a CMS site hosted elsewhere has a broken upload feature until this gets the
+  treatment the database already had.
+- Outbound **webhooks** (`job.completed`, `job.failed`, `usage.threshold`).
+- Turso-backed store · CORS for third-party front ends · **live-key
+  activation** of Studio, Stripe, email and every hosting provider: the seams
+  are built and tested dormant, and no code path has yet run against a live
+  provider.

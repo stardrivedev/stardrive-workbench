@@ -5,6 +5,38 @@ calendar time; Deneb4's own client work takes priority (its launch funds
 this). **Pivoted API-first 2026-07-16** (see README "Why API-first") — the
 former Electron/installer milestones are superseded.
 
+Below M0–M4 this is an append-only log: each milestone records what shipped
+and when, so an entry describing a limitation may have been superseded by a
+later one. The summary directly below is the current position.
+
+## Where it stands (2026-07-29)
+
+The pipeline works end to end on the real engine and is covered by sixteen
+suites, five of them in a browser. Signup is rationed and address-confirmed,
+builds run concurrently and fairly, disk is reclaimed, backups have been
+restored in a drill, monitoring watches and alerts, and an account can export
+its data and leave. The console has been through accessibility, responsive,
+and empty/loading/error passes with suites to hold each one.
+
+**What actually blocks self-serve signup:**
+
+1. **No live provider round trip.** Stripe, Vercel, GitHub, Netlify, Resend
+   and the Batch API are each written against a seam and tested with a fake.
+   That proves the wiring, not the provider. Every one needs a single genuine
+   run, and this is the largest remaining unknown.
+2. **The money path is unproven end to end.** Signup → pick a plan → checkout
+   → webhook flips the plan → quota enforced → overage bills. Every piece
+   exists and is unit-tested; the chain has never run, in test mode or live.
+3. **Nobody outside has used it.** A small beta, onboarded by hand, before
+   the doors open. This is where the estimate is most likely to move.
+
+**Known gaps that are not launch blockers**, carried from M2: outbound
+webhooks, the Turso-backed store swap, CORS for third-party front ends,
+one-click publish beyond Vercel and Netlify (Cloudflare Pages, Railway,
+Render), and vendor-neutral image storage — CMS uploads still assume Vercel
+Blob, so a CMS site hosted elsewhere has a broken upload feature until that
+gets the treatment the database already had.
+
 ## M0 — Scaffold (DONE 2026-07-16)
 Repo, vision, architecture, and the template-author contract committed.
 
@@ -23,7 +55,8 @@ runs server-side, in a CLI, or in a browser preview.
 ## M2 — The Stardrive API (~8–14 sessions; FOUNDATION SHIPPED 2026-07-16)
 `services/api` per `docs/api-design.md`.
 
-**Done (24-check E2E suite over real HTTP, zero runtime deps):**
+**Done (24-check E2E suite over real HTTP, zero runtime deps — that suite has
+since grown to 92 checks, and there are fifteen others beside it):**
 - API-key auth (hashed keys, timing-safe compare, scopes, revocation via
   `make-key.mjs`), per-key token-bucket rate limiting (429 + Retry-After),
   per-key monthly usage metering (`GET /v1/usage`; failures never metered).
@@ -58,18 +91,22 @@ hermetic offline builds):
   push to GitHub (any owner/repo, connect it to any host after), and a
   vendor-neutral database connection (any libSQL-compatible endpoint, Turso
   recommended but not required, self-hosted/no-auth endpoints supported).
-- **Vendor-neutral hosting (Ridhi, 2026-07-22): one-click publish is
-  currently Vercel-only.** She wants this NOT locked to Vercel: an agency
-  should be able to deploy just about anywhere, ideally everywhere, not only
-  Vercel-or-GitHub-then-connect-elsewhere. Scope: additional one-click deploy
-  targets (Netlify, Cloudflare Pages, Railway, Render are the obvious next
-  candidates) behind the same per-site/per-account connection pattern already
-  built for Vercel/GitHub/database, so an agency picks its host rather than
-  being steered to one. GitHub push already reaches "any host" in two steps
-  (push, then connect); this item is about collapsing that to one click for
-  more than just Vercel. See `docs/DIFFERENTIATION.md` for why this matters:
-  it's a named, honest gap versus our own "vendor-neutral" positioning.
-- Full browser QA tier (headless build + axe/Playwright) behind an opt-in flag.
+- **Vendor-neutral hosting (Ridhi, 2026-07-22): one-click publish was
+  Vercel-only.** She wanted this NOT locked to Vercel: an agency should be
+  able to deploy just about anywhere, not only Vercel-or-GitHub-then-connect-
+  elsewhere. **Partly shipped 2026-07-28**: Netlify is a second one-click
+  target behind the same per-site/per-account connection pattern (source is
+  uploaded, not a static export, so the API routes keep working), and every
+  export now carries a `Dockerfile` and a `DEPLOY.md` naming the hosts it runs
+  on, so "anywhere that takes a container" is a real answer rather than a
+  claim. **Still open:** Cloudflare Pages, Railway, Render. See
+  `docs/DIFFERENTIATION.md` for why this matters against our own
+  "vendor-neutral" positioning.
+- ~~Full browser QA tier (headless build + axe/Playwright) behind an opt-in
+  flag~~ — **SHIPPED**: `STARDRIVE_QA=full` runs npm install, next build,
+  serves the result, checks every route, runs axe, checks 375px overflow and
+  console errors, and captures a screenshot (which is what the template
+  library's tiles show).
 - Webhooks (`job.completed`, `job.failed`, `usage.threshold`, Stripe).
 - Turso-backed store swap; container packaging; CORS for the Workbench.
 - Vendor-neutral image storage for the CMS: uploads currently use Vercel
