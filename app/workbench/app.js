@@ -1526,7 +1526,10 @@ async function loadSiteContent(siteId) {
   for (const f of body.fields) (byGroup[f.group] = byGroup[f.group] || []).push(f);
   let html = '<h3 style="margin-top:1.4rem;color:var(--ink)">Tell us about the business</h3>' +
     '<p style="font-size:0.85rem;color:var(--muted);margin:0.3rem 0 0.7rem">Answer the essentials (<span style="color:var(--bad)">*</span>) and the AI writes finished copy for every page, no placeholders, nothing left blank. Optional fields add more when you have them.</p>' +
-    '<div id="contentReady">' + readyBadge(body.readiness) + '</div>';
+    '<div id="contentReady">' + readyBadge(body.readiness) + '</div>' +
+    // The alternative to typing it all in yourself, offered at the moment you
+    // are looking at the questions rather than buried in a menu.
+    '<div id="intakeBlock" data-id="' + esc(siteId) + '"></div>';
   for (const [g, fields] of Object.entries(byGroup)) {
     html += '<div class="card" style="margin-top:0.6rem"><h3 style="margin-top:0">' + esc(body.groups[g] || g) + '</h3>' +
       fields.map((f) => factInput(f, body.facts[f.id])).join('') + '</div>';
@@ -1538,7 +1541,137 @@ async function loadSiteContent(siteId) {
   root.innerHTML = html;
   if (body.copy) renderCopyPreview(body.copy, 'saved');
   if (stepState && stepState.siteId === siteId) { stepState.ready = Boolean(body.readiness?.ready); refreshSiteSteps(); }
+  loadIntakeBlock(siteId);
 }
+
+/* ══════════════ Ask the client (intake links) ══════════════ */
+
+const INTAKE_STATE = {
+  open: { label: 'Waiting on the client', tone: 'muted' },
+  submitted: { label: 'The client has finished', tone: 'good' },
+  adopted: { label: 'Answers taken onto this site', tone: 'good' },
+  expired: { label: 'Expired', tone: 'muted' },
+  revoked: { label: 'Cancelled', tone: 'muted' },
+};
+
+/**
+ * The other way to fill in the intake: send it to the person who knows the
+ * answers. Shown alongside the questions, because that is the moment a
+ * licensee realises they do not know the opening hours.
+ */
+async function loadIntakeBlock(siteId) {
+  const host = $('#intakeBlock');
+  if (!host) return;
+  const { status, body } = await api('/v1/intake-links?site=' + encodeURIComponent(siteId));
+  if (status !== 200) { host.innerHTML = ''; return; }
+  const live = (body.links || []).find((l) => l.status === 'open' || l.status === 'submitted');
+  const done = (body.links || []).filter((l) => l.status === 'adopted');
+
+  if (!live) {
+    host.innerHTML = '<div class="card" style="margin-top:0.6rem">' +
+      '<h3 style="margin-top:0">Would the client rather fill this in?</h3>' +
+      '<p style="font-size:0.85rem;color:var(--muted);margin:0.3rem 0 0.7rem">' +
+      'Send them a link and they answer these questions themselves, in their own words, and upload their own logo and photos. ' +
+      'Nothing they send changes this site until you say so.</p>' +
+      (done.length ? '<p style="font-size:0.82rem;color:var(--good);margin:0 0 0.7rem">Already used once for this site: their answers are in the fields above.</p>' : '') +
+      '<div class="field"><label for="intakeNote">A note for them (optional)</label>' +
+      '<input id="intakeNote" placeholder="e.g. anything you are unsure about, leave blank and we will talk"></div>' +
+      '<button class="ghost" data-intakeact="mint" data-id="' + esc(siteId) + '" type="button">Create a link for the client</button>' +
+      '<div id="intakeOut"></div></div>';
+    return;
+  }
+
+  const state = INTAKE_STATE[live.status] || INTAKE_STATE.open;
+  host.innerHTML = '<div class="card" style="margin-top:0.6rem">' +
+    '<h3 style="margin-top:0">The client\'s own form</h3>' +
+    '<p class="lpReady" style="color:var(--' + state.tone + ')"><b>' + esc(state.label) + '.</b> ' +
+      esc(live.answeredCount ? live.answeredCount + ' answer' + (live.answeredCount === 1 ? '' : 's') + ' so far.' : 'Nothing filled in yet.') +
+      ' <span style="color:var(--muted)">Link expires ' + esc((live.expiresAt || '').slice(0, 10)) + '.</span></p>' +
+    (live.status === 'submitted'
+      ? '<div id="intakeAnswers"></div>' +
+        '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.7rem">' +
+        '<button class="primary" data-intakeact="adopt" data-link="' + esc(live.id) + '" data-id="' + esc(siteId) + '" type="button">Use these answers</button>' +
+        '<button class="ghost danger" data-intakeact="revoke" data-link="' + esc(live.id) + '" data-id="' + esc(siteId) + '" type="button">Cancel the link</button></div>'
+      : '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.5rem">' +
+        '<button class="ghost" data-intakeact="mint" data-id="' + esc(siteId) + '" type="button">Send a fresh link</button>' +
+        '<button class="ghost danger" data-intakeact="revoke" data-link="' + esc(live.id) + '" data-id="' + esc(siteId) + '" type="button">Cancel the link</button></div>') +
+    '<div id="intakeOut"></div></div>';
+
+  if (live.status === 'submitted') renderIntakeAnswers(live.id);
+}
+
+/** What the client actually wrote, so the licensee reads it before adopting. */
+async function renderIntakeAnswers(linkId) {
+  const box = $('#intakeAnswers');
+  if (!box) return;
+  box.innerHTML = '<p style="font-size:0.82rem;color:var(--muted);margin:0">Loading their answers…</p>';
+  const { status, body } = await api('/v1/intake-links/' + encodeURIComponent(linkId));
+  if (status !== 200) { box.innerHTML = '<div class="report err">' + esc(loadError(status, body, 'Could not load their answers')) + '</div>'; return; }
+  const said = body.fields.filter((f) => hasFactValue(body.facts[f.id]));
+  const photoCount = Object.values(body.photos || {}).reduce((n, arr) => n + arr.length, 0);
+  box.innerHTML = '<div class="tscroll"><table class="list"><thead><tr><th>Question</th><th>Their answer</th></tr></thead><tbody>' +
+    said.map((f) => '<tr><td>' + esc(f.label) + '</td><td>' + esc(factToText(body.facts[f.id])) + '</td></tr>').join('') +
+    '</tbody></table></div>' +
+    '<p style="font-size:0.82rem;color:var(--muted);margin:0.5rem 0 0">' +
+      esc(photoCount ? photoCount + ' picture' + (photoCount === 1 ? '' : 's') + ' came with it.' : 'They uploaded no pictures.') +
+      ' Anything you have already typed above wins over their version.</p>';
+}
+
+const hasFactValue = (v) => {
+  if (Array.isArray(v)) return v.length > 0;
+  if (v && typeof v === 'object') return Object.keys(v).length > 0;
+  return String(v ?? '').trim().length > 0;
+};
+
+/** One readable line, whatever kind of answer it is. */
+function factToText(v) {
+  if (Array.isArray(v)) {
+    return v.map((item) => (item && typeof item === 'object' ? Object.values(item).filter(Boolean).join(' — ') : String(item))).join('; ');
+  }
+  return String(v ?? '');
+}
+
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-intakeact]');
+  if (!btn) return;
+  const siteId = btn.dataset.id;
+  const out = () => $('#intakeOut');
+
+  if (btn.dataset.intakeact === 'mint') {
+    const note = $('#intakeNote')?.value.trim() || '';
+    btn.disabled = true;
+    const { status, body } = await api('/v1/sites/' + siteId + '/intake-link', { method: 'POST', body: { note } });
+    btn.disabled = false;
+    if (status !== 201) { out().innerHTML = '<div class="report err">' + esc(body.error?.message || 'Could not create the link.') + '</div>'; return; }
+    // Shown once and only once, so it is worth making easy to copy.
+    out().innerHTML = '<div class="report ok" style="margin-top:0.7rem">' +
+      '<b>Send this to your client.</b> It is shown once: creating another replaces it.' +
+      '<div class="codeblock" style="margin-top:0.5rem"><pre>' + esc(body.url) + '</pre>' +
+      '<button class="copybtn" type="button">Copy</button></div></div>';
+    return;
+  }
+
+  if (btn.dataset.intakeact === 'adopt') {
+    const { status, body } = await api('/v1/intake-links/' + btn.dataset.link + '/adopt', { method: 'POST', body: {} });
+    if (status !== 200) { out().innerHTML = '<div class="report err">' + esc(body.error?.message || 'Could not use those answers.') + '</div>'; return; }
+    notify(body.photos
+      ? `Their answers are in, along with ${body.photos} picture${body.photos === 1 ? '' : 's'}.`
+      : 'Their answers are in.');
+    loadSiteContent(siteId); // the fields above now hold what the client wrote
+    return;
+  }
+
+  if (btn.dataset.intakeact === 'revoke') {
+    if (!await confirmAction({
+      title: 'Cancel the client\'s link?',
+      body: 'The form stops working immediately, and anything they uploaded but you have not taken is deleted.',
+      confirmLabel: 'Cancel the link', cancelLabel: 'Leave it open', destructive: true,
+    })) return;
+    const { status, body } = await api('/v1/intake-links/' + btn.dataset.link, { method: 'DELETE' });
+    if (status !== 200) { out().innerHTML = '<div class="report err">' + esc(body.error?.message || 'Could not cancel it.') + '</div>'; return; }
+    loadIntakeBlock(siteId);
+  }
+});
 
 let contentSaveTimer = null;
 async function saveSiteContent() {

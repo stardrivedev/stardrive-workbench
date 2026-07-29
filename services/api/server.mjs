@@ -27,7 +27,7 @@ import { createStaticServer } from './lib/static.mjs';
 import { createConnections, PROVIDERS } from './lib/connections.mjs';
 import { createAssets, MAX_ASSET_BYTES } from './lib/assets.mjs';
 import { createLivePreview } from './lib/live-preview.mjs';
-import { requirementsFor, readiness, validateFacts, GROUP_LABELS } from './lib/content.mjs';
+import { requirementsFor, clientRequirementsFor, readiness, validateFacts, GROUP_LABELS } from './lib/content.mjs';
 import { generateCopy } from './lib/copy-gen.mjs';
 import { tarGzDir, tarGzDirs } from './lib/archive.mjs';
 import { pushToGitHub } from './lib/deploy.mjs';
@@ -39,6 +39,7 @@ import { createSiteEnv, specFor, deployEnv, renderEnvFile, missingFrom, SUPPLIED
 import { renderHandoffHtml, guideFor, notesFor } from './lib/handoff.mjs';
 import { deployGuide } from './lib/guide.mjs';
 import { createOps } from './lib/ops.mjs';
+import { createIntakeLinks, MAX_SAVES } from './lib/intake-links.mjs';
 import { createBatches } from './lib/batches.mjs';
 import { runMapping, validateMapping } from '../../packages/field-mapping/index.mjs';
 
@@ -70,6 +71,7 @@ const billing = createBilling(accounts, store);
 const catalog = loadCatalog(); // throws at boot if the bundle is bad
 const imported = createImportedStore(store);
 const assets = createAssets(store);
+const intakeLinks = createIntakeLinks(store); // the client's own copy of the form
 
 /** For the real engine: resolve a template to { source, manifest, bundle? }. */
 function resolveTemplateForJob(account, name) {
@@ -123,6 +125,9 @@ const clearCookie = () =>
 // marketing site is a separate deployment (built with Stardrive itself), so we
 // no longer bundle a marketing "face" here.
 const workbench = createStaticServer(path.join(HERE, '..', '..', 'app', 'workbench'));
+// The client's intake form. A separate, much smaller page: the person filling
+// it in is a bakery owner, not a licensee, and should never see a console.
+const intakeApp = createStaticServer(path.join(HERE, '..', '..', 'app', 'intake'));
 
 /** Bundled first (shared, not overridable), then the CALLER's own imports. */
 function getTemplate(account, name) {
@@ -227,6 +232,80 @@ function assertReviewed(site) {
  * The database is vendor-neutral: whatever libSQL endpoint the licensee
  * connected, per-site target first, then their account default.
  */
+/* ── Client intake links ──────────────────────────────────────────────── */
+
+/** The client's uploads live in their own asset bucket until adopted, so a
+ *  half-filled form never puts pictures on a site nobody has approved. */
+const intakeAssetId = (linkId) => `intake-${linkId}`;
+
+/** Which pictures to ask the client for. Deliberately not the full slot list
+ *  the licensee sees: page-by-page hero backgrounds are a design decision, not
+ *  something to put to a bakery. Logo and general photos are theirs to give. */
+function clientPhotoSlots(record) {
+  const site = store.readJson(`sites/${record.siteId}.json`, null);
+  const entry = site ? getTemplate(record.account, site.templateId) : null;
+  const all = assets.slotsFor(entry?.manifest, record.modules);
+  return all.filter((s) => s.id === 'logo' || s.id === 'gallery' || s.id === 'hero');
+}
+
+/** Whose form this is, in the client's words. Falls back to nothing rather
+ *  than leaking an email address to an unauthenticated visitor. */
+function studioNameFor(accountId) {
+  const account = accounts.getAccount(accountId);
+  return String(account?.company || '').trim() || null;
+}
+
+/**
+ * Resolve a public intake token, or refuse in a way that tells the client
+ * something useful without telling a stranger anything at all.
+ *
+ * Throttled per address on every call: the token is the only credential out
+ * here. Reads get a larger allowance than writes because a client filling in a
+ * long form legitimately loads it several times.
+ */
+/**
+ * Save what the client typed. Shared by PATCH (the form's own debounced save)
+ * and POST (the sendBeacon on tab close, which cannot use any other verb).
+ */
+function saveClientFacts({ params, body, req }) {
+  const record = openIntake(params.token, req, { write: true });
+  if (!body || typeof body !== 'object' || !body.facts || typeof body.facts !== 'object' || Array.isArray(body.facts)) {
+    throw httpError(400, 'bad_request', 'Send { facts: { ...fieldId: value } }.');
+  }
+  // Only the fields this site actually asks for. Anything else is either a
+  // stale form or somebody poking, and neither belongs in a client's site.
+  const allowed = new Set(requirementsFor(record.modules).map((f) => f.id));
+  const facts = {};
+  for (const [id, value] of Object.entries(body.facts)) {
+    if (allowed.has(id)) facts[id] = value;
+  }
+  const merged = { ...(record.facts || {}), ...facts };
+  const v = validateFacts(merged, record.modules);
+  if (!v.ok) throw httpError(422, 'invalid_facts', v.errors.join(' '));
+  intakeLinks.saveFacts(record, facts);
+  return { status: 200, body: { saved: true, readiness: readiness(record.facts || {}, record.modules) } };
+}
+
+function openIntake(token, req, { write }) {
+  const limit = write ? 120 : 240;
+  if (!ipThrottle(write ? 'intake-write' : 'intake-read', clientIp(req), limit)) {
+    throw httpError(429, 'rate_limited', 'Too many requests from this address — try again in a little while.');
+  }
+  const record = intakeLinks.find(String(token || ''));
+  if (!record) {
+    throw httpError(404, 'not_found', 'This link is not valid any more. Ask whoever sent it for a new one.');
+  }
+  if (write) {
+    if (record.status === 'adopted') {
+      throw httpError(409, 'already_adopted', 'Your designer has already picked these answers up. Send them any changes directly.');
+    }
+    if ((record.saves || 0) >= MAX_SAVES) {
+      throw httpError(429, 'too_many_saves', 'This form has been saved a great many times. Ask whoever sent it for a fresh link.');
+    }
+  }
+  return record;
+}
+
 /**
  * Everything this site needs on its host, base template included.
  *
@@ -1137,6 +1216,204 @@ const ROUTES = [
       return { status: 200, body: { copy: result.pack, source: result.source } };
     },
   },
+  // ── Client intake links ────────────────────────────────────────────────
+  // The licensee mints a link, the CLIENT fills in their own facts and uploads
+  // their own photos, the licensee adopts the result onto the site. See
+  // lib/intake-links.mjs for why the token is stored only as a hash.
+  {
+    method: 'POST', pattern: '/v1/sites/:id/intake-link', scope: 'sites', bodyLimit: 4_000,
+    handler: ({ params, body, key, url }) => {
+      const site = loadSite(params.id, key.account);
+      // One live link per site: minting a second revokes the first, so an old
+      // email cannot still be filled in after the client has been re-sent it.
+      for (const old of intakeLinks.listFor(key.account, { siteId: site.id })) {
+        if (old.status === 'open') intakeLinks.revoke(old);
+      }
+      const { record, token } = intakeLinks.create({
+        account: key.account,
+        siteId: site.id,
+        siteName: site.config?.siteName || 'your website',
+        modules: Array.isArray(site.config?.modules) ? site.config.modules : [],
+        note: body?.note,
+        ttlDays: Number(body?.ttlDays) || undefined,
+      });
+      return {
+        status: 201,
+        body: {
+          link: intakeLinks.summary(record),
+          // The only time the token exists outside the URL. Not recoverable.
+          url: `${url.origin}/intake/${token}`,
+          note: 'Send this to your client. It is shown once: mint a new one if it is lost, which revokes this.',
+        },
+      };
+    },
+  },
+  {
+    method: 'GET', pattern: '/v1/intake-links', scope: 'sites',
+    handler: ({ key, url }) => ({
+      status: 200,
+      body: {
+        links: intakeLinks
+          .listFor(key.account, { siteId: url.searchParams.get('site') || null })
+          .map((r) => intakeLinks.summary(r)),
+      },
+    }),
+  },
+  {
+    // What the client typed, for the licensee to read before adopting it.
+    method: 'GET', pattern: '/v1/intake-links/:id', scope: 'sites',
+    handler: ({ params, key }) => {
+      const record = intakeLinks.get(String(params.id));
+      if (!record || record.account !== key.account) throw httpError(404, 'not_found', 'No such intake link.');
+      return {
+        status: 200,
+        body: {
+          link: intakeLinks.summary(record),
+          groups: GROUP_LABELS,
+          fields: requirementsFor(record.modules),
+          facts: record.facts || {},
+          photos: assets.state(intakeAssetId(record.id)),
+        },
+      };
+    },
+  },
+  {
+    // Merge the client's answers (and photos) onto the site.
+    method: 'POST', pattern: '/v1/intake-links/:id/adopt', scope: 'sites', meter: 'sites.change',
+    handler: ({ params, key }) => {
+      const record = intakeLinks.get(String(params.id));
+      if (!record || record.account !== key.account) throw httpError(404, 'not_found', 'No such intake link.');
+      const site = loadSite(record.siteId, key.account);
+      const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
+      // The licensee's own answers win: they may have corrected something the
+      // client got wrong, and adopting must not silently undo that.
+      const merged = { ...(record.facts || {}), ...(site.content || {}) };
+      const v = validateFacts(merged, modules);
+      if (!v.ok) throw httpError(422, 'invalid_facts', v.errors.join(' '));
+      site.content = merged;
+      site.copy = null; // facts changed — any written copy is stale
+      site.updatedAt = new Date().toISOString();
+      store.writeJson(`sites/${site.id}.json`, site);
+      const photos = assets.adopt(intakeAssetId(record.id), site.id);
+      intakeLinks.markAdopted(record);
+      return { status: 200, body: { adopted: true, photos, readiness: siteReadiness(site) } };
+    },
+  },
+  {
+    method: 'DELETE', pattern: '/v1/intake-links/:id', scope: 'sites',
+    handler: ({ params, key }) => {
+      const record = intakeLinks.get(String(params.id));
+      if (!record || record.account !== key.account) throw httpError(404, 'not_found', 'No such intake link.');
+      intakeLinks.revoke(record);
+      assets.discard(intakeAssetId(record.id));
+      return { status: 200, body: { revoked: record.id } };
+    },
+  },
+
+  // ── The client's side (no account, no key) ─────────────────────────────
+  // Every one of these is throttled per address: out here the token is the
+  // only credential, and there is no key to rate-limit on.
+  {
+    method: 'GET', pattern: '/v1/public/intake/:token', scope: 'public',
+    handler: ({ params, req }) => {
+      const record = openIntake(params.token, req, { write: false });
+      return {
+        status: 200,
+        body: {
+          siteName: record.siteName,
+          studio: studioNameFor(record.account),
+          note: record.note,
+          groups: GROUP_LABELS,
+          // Worded for the client, not the licensee: see clientRequirementsFor.
+          fields: clientRequirementsFor(record.modules),
+          facts: record.facts || {},
+          photoSlots: clientPhotoSlots(record),
+          photos: assets.state(intakeAssetId(record.id)),
+          submitted: record.status === 'submitted',
+          // Adopted means the designer has the answers and every save from
+          // here would be refused. Say so, rather than handing the client a
+          // form that rejects everything they type into it.
+          closed: record.status === 'adopted',
+          readiness: readiness(record.facts || {}, record.modules),
+        },
+      };
+    },
+  },
+  {
+    // POST is the same save as PATCH, and exists for one reason: navigator
+    // .sendBeacon can only POST, and it is what carries the last few seconds
+    // of a client's typing when they close the tab mid-sentence.
+    method: 'POST', pattern: '/v1/public/intake/:token', scope: 'public', bodyLimit: 200_000,
+    handler: (ctx) => saveClientFacts(ctx),
+  },
+  {
+    method: 'PATCH', pattern: '/v1/public/intake/:token', scope: 'public', bodyLimit: 200_000,
+    handler: (ctx) => saveClientFacts(ctx),
+  },
+  {
+    // The client's own pictures, so the form can show what they have uploaded.
+    // Scoped to their link: the token is the only way in, and it reaches
+    // nothing but its own bucket.
+    method: 'GET', pattern: '/v1/public/intake/:token/photos/:slot/:assetId', scope: 'public',
+    handler: ({ params, req }) => {
+      const record = openIntake(params.token, req, { write: false });
+      const hit = assets.find(intakeAssetId(record.id), String(params.slot), assertUuid(params.assetId, 'photo id'));
+      if (!hit) throw httpError(404, 'not_found', 'That picture is not here.');
+      return { raw: true, status: 200, headers: { 'Content-Type': hit.meta.type, 'Cache-Control': 'no-cache' }, buffer: fsReadFile(hit.abs) };
+    },
+  },
+  {
+    method: 'POST', pattern: '/v1/public/intake/:token/photos/:slot', scope: 'public', bodyLimit: 16_000_000,
+    handler: ({ params, body, req }) => {
+      const record = openIntake(params.token, req, { write: true });
+      const slotDef = clientPhotoSlots(record).find((s) => s.id === String(params.slot));
+      if (!slotDef) throw httpError(422, 'unknown_slot', 'That is not a picture this site asks for.');
+      if (typeof body?.filename !== 'string' || !body.filename.trim() || typeof body?.contentBase64 !== 'string') {
+        throw httpError(400, 'bad_request', 'Body must be { filename, contentBase64 }.');
+      }
+      const buffer = Buffer.from(body.contentBase64, 'base64');
+      if (buffer.length > MAX_ASSET_BYTES) throw httpError(422, 'too_large', `Files must be at most ${Math.round(MAX_ASSET_BYTES / 1e6)} MB.`);
+      const meta = assets.add(intakeAssetId(record.id), slotDef, body.filename.trim(), buffer);
+      return { status: 201, body: { slot: slotDef.id, asset: { id: meta.id, filename: meta.filename } } };
+    },
+  },
+  {
+    method: 'DELETE', pattern: '/v1/public/intake/:token/photos/:slot/:assetId', scope: 'public',
+    handler: ({ params, req }) => {
+      const record = openIntake(params.token, req, { write: true });
+      const removed = assets.remove(intakeAssetId(record.id), String(params.slot), assertUuid(params.assetId, 'photo id'));
+      if (!removed) throw httpError(404, 'not_found', 'That picture is not here.');
+      return { status: 200, body: { deleted: params.assetId } };
+    },
+  },
+  {
+    method: 'POST', pattern: '/v1/public/intake/:token/submit', scope: 'public', bodyLimit: 1_000,
+    handler: ({ params, req }) => {
+      const record = openIntake(params.token, req, { write: true });
+      const state = readiness(record.facts || {}, record.modules);
+      if (!state.ready) {
+        throw httpError(422, 'incomplete', `A few answers are still needed: ${state.missing.map((m) => m.label).join(', ')}.`);
+      }
+      intakeLinks.markSubmitted(record);
+      email.intakeSubmitted?.(accounts.getAccount(record.account), record);
+      return { status: 200, body: { submitted: true } };
+    },
+  },
+  {
+    // Re-open a submitted form: a client who spots a typo should not have to
+    // ask their designer to unlock anything.
+    method: 'POST', pattern: '/v1/public/intake/:token/reopen', scope: 'public', bodyLimit: 1_000,
+    handler: ({ params, req }) => {
+      const record = openIntake(params.token, req, { write: false });
+      if (record.status === 'adopted') {
+        throw httpError(409, 'already_adopted', 'Your designer has already picked these answers up. Send them any changes directly.');
+      }
+      record.status = 'open';
+      record.submittedAt = null;
+      store.writeJson(`intake-links/${record.id}.json`, record);
+      return { status: 200, body: { reopened: true } };
+    },
+  },
   {
     // Re-run assembly with the current config + latest assets. GATED: a site
     // that has not answered its required content cannot build (pass force:true
@@ -1909,6 +2186,18 @@ const server = createServer(async (req, res) => {
     // hosted separately, so the root and anything else redirects into it.
     if (url.pathname.startsWith('/workbench/')) {
       if (workbench(req, res, url.pathname.slice('/workbench'.length))) return;
+      return fail(res, 404, 'not_found', `No ${req.method} ${url.pathname}.`);
+    }
+    // /intake/<token> — one page, whatever the token. The token stays in the
+    // URL for the page's own script to read; it is never a file path.
+    if (url.pathname.startsWith('/intake/')) {
+      const rest = url.pathname.slice('/intake'.length);
+      // Assets (app.js, styles.css) are served by name; anything else is a
+      // token and gets the page itself.
+      const asset = /\.(js|css|svg|png|ico)$/.test(rest) ? rest : '/index.html';
+      // A client's answers must never turn up in a search engine.
+      res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+      if (intakeApp(req, res, asset)) return;
       return fail(res, 404, 'not_found', `No ${req.method} ${url.pathname}.`);
     }
     if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/workbench')) {

@@ -58,5 +58,18 @@ export function createEmail() {
     text: `${lead.name} <${lead.email}> requested access.\n\nCompany: ${lead.company || '(none)'}\n\n${lead.message || '(no message)'}`,
   });
 
-  return { configured, send, welcome, verify, passwordReset, leadNotify };
+  /**
+   * A client has finished the intake form. Worth an email: the whole point of
+   * sending the link was to stop the licensee chasing, so they should not have
+   * to poll the console to find out it came back.
+   */
+  const intakeSubmitted = (account, link) => send({
+    to: account?.email,
+    subject: `${link?.siteName || 'A client'} finished their intake form`,
+    text: `${link?.siteName || 'A client'} has filled in their answers${link?.note ? ` (${link.note})` : ''}.\n\n`
+      + `Open the site in your Workbench, read what they wrote, and adopt it onto the site when you are happy with it. `
+      + `Their photos come with it.\n\nNothing is applied until you adopt it, so a wrong answer cannot change a finished site by itself.`,
+  });
+
+  return { configured, send, welcome, verify, passwordReset, leadNotify, intakeSubmitted };
 }

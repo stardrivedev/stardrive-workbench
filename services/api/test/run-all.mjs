@@ -33,8 +33,9 @@ const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SUITES = [
   'template-kit',
   'accounts', 'site-env', 'seeds', 'ops', 'jobs-runner',
-  'billing-money-path', 'backup-restore', 'batch-integration', 'e2e',
-  'console-a11y', 'console-responsive', 'console-states', 'handoff-ui', 'batch-ui', 'studio-ui',
+  'billing-money-path', 'backup-restore', 'batch-integration', 'intake-links', 'e2e',
+  'console-a11y', 'console-responsive', 'console-states',
+  'intake-ui', 'handoff-ui', 'batch-ui', 'studio-ui',
 ];
 
 /** Suites that live outside this package. */

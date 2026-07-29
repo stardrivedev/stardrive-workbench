@@ -137,6 +137,14 @@ until `STRIPE_SECRET_KEY` (+ `STRIPE_PRICE_<PLAN>` price ids) are set.
 - **Email**: welcome + lead notifications via Resend, dormant until
   `RESEND_API_KEY`. **Fair-use** caps per-generation input.
 
+- **Client intake links**: `POST /v1/sites/{id}/intake-link` mints a URL the
+  licensee sends to their client, who fills in the site's own questions and
+  uploads their logo and photographs with no account, no session and no key.
+  The token is stored only as a sha256, so a stolen var directory yields no
+  working links; writes are throttled per address and capped; and nothing
+  reaches the site until the licensee adopts it, at which point their own
+  corrections win over the client's version.
+
 ## Honest gaps (pending, by design)
 
 - **One-click publish beyond Vercel and Netlify** — Cloudflare Pages,

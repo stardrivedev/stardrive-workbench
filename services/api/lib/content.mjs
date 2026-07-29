@@ -43,9 +43,11 @@ export const GROUP_LABELS = {
 // Content every site needs (the base template always ships home/about/contact).
 const ALWAYS = [
   { id: 'whatYouDo', group: 'identity', label: 'What does the business do?', kind: 'line', required: true,
-    help: 'One plain sentence. The AI turns this into your headline and tagline.' },
+    help: 'One plain sentence. The AI turns this into your headline and tagline.',
+    clientHelp: 'One plain sentence. This becomes the headline on your home page.' },
   { id: 'aboutFacts', group: 'about', label: 'A few facts about the business', kind: 'facts', required: true,
-    help: 'Notes are fine: when it started, the story so far, how you work. The AI writes the About page from these.' },
+    help: 'Notes are fine: when it started, the story so far, how you work. The AI writes the About page from these.',
+    clientHelp: 'Notes are fine, no need for full sentences: when it started, the story so far, how you like to work. Your About page is written from these.' },
   { id: 'mission', group: 'about', label: 'Mission or the difference you make', kind: 'line', required: false,
     help: 'One sentence. Highlighted on the About page.' },
   { id: 'whoYouServe', group: 'about', label: 'Who you serve', kind: 'line', required: false,
@@ -53,7 +55,8 @@ const ALWAYS = [
   { id: 'differentiator', group: 'about', label: 'What makes you different', kind: 'line', required: false,
     help: 'The main reason customers choose you over the alternatives.' },
   { id: 'services', group: 'offerings', label: 'Main services or offerings', kind: 'list', required: true,
-    help: 'List the handful of things you offer. The AI writes a short description for each.' },
+    help: 'List the handful of things you offer. The AI writes a short description for each.',
+    clientHelp: 'List the handful of things you offer, one per line. Each one gets a short description written for it.' },
   { id: 'contactEmail', group: 'contact', label: 'Contact email', kind: 'email', required: true,
     help: 'Where enquiries should go. Shown on the contact page and footer.' },
   { id: 'phone', group: 'contact', label: 'Phone', kind: 'tel', required: false },
@@ -61,9 +64,11 @@ const ALWAYS = [
   { id: 'hours', group: 'contact', label: 'Opening hours', kind: 'hours', required: false,
     help: 'e.g. "Mon–Fri 9–5, closed weekends".' },
   { id: 'team', group: 'team', label: 'Team members', kind: 'people', required: false,
-    help: 'Name and role for each person to feature. The AI writes a short bio.' },
+    help: 'Name and role for each person to feature. The AI writes a short bio.',
+    clientHelp: 'Name and role for anyone you would like on the site. A short introduction is written for each of them.' },
   { id: 'faqTopics', group: 'faq', label: 'Common questions', kind: 'list', required: false,
-    help: 'List questions customers ask; the AI writes clear answers.' },
+    help: 'List questions customers ask; the AI writes clear answers.',
+    clientHelp: 'The questions customers actually ask you. Clear answers are written for each one.' },
   { id: 'socials', group: 'social', label: 'Social links', kind: 'list', required: false,
     help: 'Full URLs, one per profile.' },
 ];
@@ -72,15 +77,18 @@ const ALWAYS = [
 const MODULE_FIELDS = {
   'd4-careers-portal': [
     { id: 'roles', group: 'careers', label: 'Open roles', kind: 'roles', required: true,
-      help: 'A title and one-line summary per role. The AI writes the full posting.' },
+      help: 'A title and one-line summary per role. The AI writes the full posting.',
+      clientHelp: 'A job title and one line about it. The full advert is written from that.' },
   ],
   'd4-catalog': [
     { id: 'products', group: 'store', label: 'Products', kind: 'products', required: true,
-      help: 'Name, price, and a short note per product. The AI writes the descriptions.' },
+      help: 'Name, price, and a short note per product. The AI writes the descriptions.',
+      clientHelp: 'Name, price, and a short note for each item. The descriptions are written from these.' },
   ],
   'd4-insights-blog': [
     { id: 'articleTopics', group: 'blog', label: 'Article topics', kind: 'topics', required: true,
-      help: 'A few topics to launch with. The AI drafts the opening posts.' },
+      help: 'A few topics to launch with. The AI drafts the opening posts.',
+      clientHelp: 'A few subjects you would like to write about. The opening articles are drafted from them.' },
   ],
   // Gallery photos are NOT an intake requirement: they are uploaded in the
   // Photos step (the `gallery` asset compartment), encouraged but skippable, so
@@ -173,6 +181,23 @@ export function requirementsFor(modules = []) {
     if (set.has(mod)) fields.push(...extra);
   }
   return fields;
+}
+
+/**
+ * The same questions, worded for the CLIENT rather than the licensee.
+ *
+ * The default help text explains the machinery ("the AI writes the About page
+ * from these"), which is the right thing to tell a licensee and the wrong
+ * thing to put in front of the business owner filling the form in: it is not
+ * their concern, and plenty of people would rather not be told a machine is
+ * writing about their family bakery. Where a field has a client wording it is
+ * used; where it does not, the plain instruction was already fine for both.
+ */
+export function clientRequirementsFor(modules = []) {
+  return requirementsFor(modules).map(({ clientHelp, ...field }) => ({
+    ...field,
+    ...(clientHelp ? { help: clientHelp } : {}),
+  }));
 }
 
 /** The empty content pack — every section present, nothing filled. Templates

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>About your website</title>
+<link rel="stylesheet" href="/intake/styles.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%235348c7'/%3E%3Ctext x='16' y='22' font-size='17' font-family='Segoe UI' font-weight='800' fill='white' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+<!--
+  The client's side of the build. The person filling this in owns a bakery,
+  not a build pipeline: no jargon, no console, no mention of modules or
+  templates or assembly. Just the questions their website needs answered, in
+  their own words, saved as they go so a phone call in the middle does not
+  cost them the lot.
+-->
+<main class="sheet" id="sheet" aria-busy="true">
+  <p class="loading" id="loading">Loading your form…</p>
+</main>
+
+<template id="tpl-form">
+  <header class="head">
+    <p class="from" id="from"></p>
+    <h1 id="title">About your website</h1>
+    <p class="intro">Tell us about the business in your own words. Short answers are
+      perfectly fine, and nothing here has to be polished: we turn what you write
+      into the finished wording on the site.</p>
+    <p class="note" id="note" hidden></p>
+    <div class="progress">
+      <div class="bar"><span id="bar"></span></div>
+      <p class="progresstext" id="progresstext"></p>
+    </div>
+    <p class="saved" id="saveState" role="status">Your answers save as you type.</p>
+  </header>
+
+  <form id="form" novalidate></form>
+
+  <section class="card" id="photosCard">
+    <h2>Pictures</h2>
+    <p class="help">Your logo and a few photographs of the real thing: your
+      premises, your work, your team. Real pictures make more difference to a
+      website than anything else on this page. JPG, PNG or WebP, up to 8 MB each.</p>
+    <div id="photos"></div>
+  </section>
+
+  <div class="submitrow">
+    <button class="go" id="submit" type="button">I'm finished, send it back</button>
+    <p class="submitnote" id="submitnote"></p>
+  </div>
+</main>
+</template>
+
+<template id="tpl-done">
+  <div class="donecard">
+    <h1>Thank you, that's everything we need.</h1>
+    <p id="donetext">Your answers and pictures are with your designer. They will
+      be in touch when there is something to look at.</p>
+    <p class="donefine">Spotted a mistake? You can still make changes.</p>
+    <button class="ghost" id="reopen" type="button">Change my answers</button>
+  </div>
+</template>
+
+<script src="/intake/app.js"></script>
+</body>
+</html>

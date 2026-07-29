@@ -11,8 +11,8 @@ later one. The summary directly below is the current position.
 
 ## Where it stands (2026-07-29)
 
-The pipeline works end to end on the real engine and is covered by sixteen
-suites, five of them in a browser. Signup is rationed and address-confirmed,
+The pipeline works end to end on the real engine and is covered by eighteen
+suites, six of them in a browser. Signup is rationed and address-confirmed,
 builds run concurrently and fairly, disk is reclaimed, backups have been
 restored in a drill, monitoring watches and alerts, and an account can export
 its data and leave. The console has been through accessibility, responsive,
@@ -29,6 +29,12 @@ and empty/loading/error passes with suites to hold each one.
    exists and is unit-tested; the chain has never run, in test mode or live.
 3. **Nobody outside has used it.** A small beta, onboarded by hand, before
    the doors open. This is where the estimate is most likely to move.
+
+**Shipped since this summary was written**: client intake links (2026-07-29).
+The licensee sends a URL, the client answers the site's own questions in their
+own words and uploads their own logo and photographs with no account, and the
+licensee reads it and adopts it onto the site. This is the first feature that
+takes work off the licensee rather than doing the same work faster.
 
 **Known gaps that are not launch blockers**, carried from M2: outbound
 webhooks, the Turso-backed store swap, CORS for third-party front ends,

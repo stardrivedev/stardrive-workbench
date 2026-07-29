@@ -21,10 +21,13 @@ The job runs in five steps, which is also how the console is laid out.
 2. **Build a client's site.** Name the business, upload their logo and photos,
    choose the sections it needs. The assembler is deterministic: no model
    involved, no surprises. You get a QA report and a live preview.
-3. **Fill in what only the client can give you.** Most settings are generated
-   and managed, including the `/admin` password. A few genuinely belong to the
-   client (an email API key, where enquiries should go), and each site states
-   exactly what is still outstanding, with the consequence of leaving it.
+3. **Get the facts, without doing the typing.** Send the client a link and
+   they answer the questions themselves, in their own words, and upload their
+   own logo and photographs. Nothing they send touches the site until you read
+   it and adopt it. The site's own settings work the same way: most are
+   generated and managed for you, including the `/admin` password, and each
+   site states exactly which of the few that belong to the client are still
+   outstanding, with the consequence of leaving them.
 4. **Publish to hosting you own.** Vercel, Netlify or a GitHub push, using
    **your** credentials so every client can live in their own account. Attach
    their domain. Or export the project with a Dockerfile and run it anywhere.
@@ -85,6 +88,8 @@ Workbench console (app/workbench) ──────┤
                             │              review gate before publishing
                             ├─ Publish     YOUR Vercel / Netlify / GitHub /
                             │              Turso credentials, plus domains
+                            ├─ Intake      a link the CLIENT fills in, holding
+                            │              no account (app/intake)
                             ├─ Handoff     client-facing printable page
                             ├─ Billing     four tiers, quotas, opt-in overage
                             └─ Ops         health, watchdog, alerting, backups
@@ -110,9 +115,12 @@ to a hosted database later does not touch the routes.
 
 ## Repository layout
 
-- `services/api/` — the Stardrive API: 96 routes, and the suites below
+- `services/api/` — the Stardrive API: 109 routes, and the suites below
 - `app/workbench/` — the web console: Studio, Sites, Batch Building, site
   settings, handoff, the going-live guide, plan and usage
+- `app/intake/` — the client's own form, the one page a licensee's client sees.
+  Deliberately separate and much smaller: no console, no jargon, and the
+  questions worded for the business owner rather than for the builder
 - `vendor/d4/` — the vendored engine: the builder, the base site template,
   the CMS core, and thirteen feature modules (gallery, blog, shop, careers,
   bookings, testimonials, team, locations and hours, events, menus, payments,
@@ -127,7 +135,7 @@ to a hosted database later does not touch the routes.
 npm test --prefix services/api          # every suite, with a summary
 ```
 
-Sixteen suites. The browser tier needs Playwright and skips cleanly without
+Eighteen suites. The browser tier needs Playwright and skips cleanly without
 it:
 
 ```
@@ -150,6 +158,11 @@ what they hold:
   and the narrow-screen navigation contract
 - `console-states.mjs` — what the console says when it is empty, when it is
   waiting, and when it cannot reach the server at all
+- `intake-links.mjs` and `intake-ui.mjs` — the client-facing intake link, which
+  is the only surface an unauthenticated stranger can write to. The first
+  covers the boundary (what a revoked, expired, adopted or invented token can
+  reach, and that one licensee's link cannot see another's); the second drives
+  both sides in two browser contexts, because that is the real situation
 - `handoff-ui.mjs`, `batch-ui.mjs`, `studio-ui.mjs` — the three flows a
   licensee actually performs, in a real browser
 - `proof-run.mjs` — the real engine and the full QA tier end to end (npm
