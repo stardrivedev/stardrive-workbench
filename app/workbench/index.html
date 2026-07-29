@@ -51,11 +51,11 @@
     <div class="navlist" id="navList">
     <a class="nav-item" href="#/home" data-view="home"><span class="glyph">⌂</span> Home</a>
 
-    <div class="nav-group">Step 1 · Design a template</div>
+    <div class="nav-group">Design</div>
     <a class="nav-item" href="#/studio" data-view="studio"><span class="glyph">✦</span> AI Studio</a>
     <a class="nav-item" href="#/templates" data-view="templates"><span class="glyph">▦</span> My templates</a>
 
-    <div class="nav-group">Step 2 · Build &amp; ship a site</div>
+    <div class="nav-group">Build &amp; ship</div>
     <a class="nav-item" href="#/sites" data-view="sites"><span class="glyph">▤</span> Sites</a>
     <a class="nav-item" href="#/batch" data-view="batch" id="navBatch" hidden><span class="glyph">⏱</span> Batch Building</a>
 
@@ -98,14 +98,14 @@
 
     <!-- ═══ Home (guided) ═══ -->
     <section class="view" id="view-home">
-      <p class="lede">Welcome, this is <b>your</b> console for building and shipping client websites with Stardrive. It goes in two steps: <b>design a template</b>, then <b>build a site</b> from it for each client. Everything you make is private to your account.</p>
+      <p class="lede">Welcome, this is <b>your</b> console for building and shipping client websites with Stardrive. One job runs from a design to a site the client can log into and edit: the five steps below are that job, in order. Everything you make is private to your account.</p>
 
       <div class="journey">
         <div class="jstep" id="jstep-1">
           <div class="jnum">1</div>
           <div class="jbody">
             <h2>Design a template</h2>
-            <p>Generate one by chatting with AI (no model key needed), upload your own, or start from the shared catalog. This is the look, you reuse it across clients.</p>
+            <p>Generate one by chatting with AI (no model key needed), upload your own, or start from the shared catalog. This is the look, and you reuse it across clients.</p>
             <div class="jstatus" id="homeTemplates">…</div>
             <div class="jactions">
               <a class="primary btnlink" href="#/studio">Generate with AI</a>
@@ -116,8 +116,8 @@
         <div class="jstep" id="jstep-2">
           <div class="jnum">2</div>
           <div class="jbody">
-            <h2>Build a site</h2>
-            <p>Assemble a client's real Next.js site from a template: name it, add their logo and images, watch the QA report, and preview the finished result.</p>
+            <h2>Build a client's site</h2>
+            <p>Name the business, add their logo and photos, pick the sections it needs (a gallery, a shop, bookings, a menu, careers), then build. You get a QA report and a preview of the real thing.</p>
             <div class="jstatus" id="homeSites">…</div>
             <div class="jactions">
               <a class="primary btnlink" href="#/sites">Go to Sites</a>
@@ -127,14 +127,44 @@
         <div class="jstep" id="jstep-3">
           <div class="jnum">3</div>
           <div class="jbody">
-            <h2>Ship it to your hosting</h2>
-            <p>Connect your own GitHub (and Vercel) once, then deploy any site to accounts <b>you</b> own, or export the finished project any time.</p>
-            <div class="jstatus" id="homeHosting">…</div>
+            <h2>Fill in what only the client can give you</h2>
+            <p>Most settings are handled for you, including the admin password their site logs in with. A few are theirs: an email key so the contact form actually sends, and where those messages should go. Each site says exactly what is still outstanding.</p>
+            <div class="jstatus" id="homeSettings">…</div>
             <div class="jactions">
-              <a class="ghost btnlink" href="#/connections">Connect hosting</a>
+              <a class="ghost btnlink" href="#/going-live">What each setting is for</a>
             </div>
           </div>
         </div>
+        <div class="jstep" id="jstep-4">
+          <div class="jnum">4</div>
+          <div class="jbody">
+            <h2>Publish it to hosting you own</h2>
+            <p>Connect your own Vercel, GitHub or Netlify once and deploy to accounts <b>you</b> control, attach the client's domain, or export the project and run it anywhere that takes a container.</p>
+            <div class="jstatus" id="homeHosting">…</div>
+            <div class="jactions">
+              <a class="ghost btnlink" href="#/connections">Connect hosting</a>
+              <a class="ghost btnlink" href="#/going-live">Read the going-live guide</a>
+            </div>
+          </div>
+        </div>
+        <div class="jstep" id="jstep-5">
+          <div class="jnum">5</div>
+          <div class="jbody">
+            <h2>Hand it over</h2>
+            <p>One printable page for the client: where to sign in, the password, and what each part of their admin does, written for them rather than for a developer. Send it, or download it and put it on your own letterhead.</p>
+            <div class="jstatus" id="homeHandoff">…</div>
+            <div class="jactions">
+              <a class="ghost btnlink" href="#/sites">Open a site to hand off</a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Shown only when the plan includes it, same as the sidebar entry. -->
+      <div class="card" id="homeBatchCard" style="margin-top:1.4rem" hidden>
+        <h2>Many at once</h2>
+        <p style="margin:0.3rem 0 0.9rem;font-size:0.92rem">Doing the same job for twenty clients does not mean doing it twenty times. Batch Building takes a list, runs the whole pipeline for each one, and gives you a contact sheet to approve or reject before anything is published.</p>
+        <a class="ghost btnlink" href="#/batch">Open Batch Building</a>
       </div>
 
       <div class="card" style="margin-top:1.4rem">
@@ -181,7 +211,7 @@
 
     <!-- ═══ AI Studio ═══ -->
     <section class="view" id="view-studio">
-      <p class="lede"><b>Step 1 · Design a template.</b> Fill in a few details about the business and the look you want. The AI turns them into a finished, working template, following every rule so it always builds. When it's ready, click <b>Add to my templates</b>; you'll build client sites from it in Step 2.</p>
+      <p class="lede"><b>Design a template.</b> Fill in a few details about the business and the look you want. The AI turns them into a finished, working template, following every rule so it always builds. When it's ready, click <b>Add to my templates</b>; you'll build client sites from it under Sites.</p>
       <div class="studio">
         <div class="studio-side">
           <div class="card" style="margin-bottom:1rem">
@@ -247,7 +277,7 @@
 
     <!-- ═══ Sites ═══ -->
     <section class="view" id="view-sites">
-      <p class="lede"><b>Step 2 · Build a site.</b> Three little steps, in order: <b>create</b> the site, <b>add the client's photos</b>, then <b>build</b>, so the very first preview shows their real images. Each site can deploy to a different account, so you can ship every client to their own hosting.</p>
+      <p class="lede"><b>Build a client's site.</b> Three little steps, in order: <b>create</b> the site, <b>add the client's photos</b>, then <b>build</b>, so the very first preview shows their real images. Each site can deploy to a different account, so you can ship every client to their own hosting.</p>
       <div class="card">
         <h2>Create a site</h2>
         <div class="grid2">
@@ -271,7 +301,7 @@
       <div class="card">
         <h2>Your sites</h2>
         <div class="tscroll"><table class="list" id="sitesTable">
-          <thead><tr><th>Site</th><th>Template</th><th>Last job</th><th>Updated</th><th></th></tr></thead>
+          <thead><tr><th>Site</th><th>Template</th><th>Where it stands</th><th>Updated</th><th></th></tr></thead>
           <tbody><tr><td colspan="5" style="color:var(--muted)">Save an API key to load your sites.</td></tr></tbody>
         </table></div>
         <div id="siteDetail"></div>

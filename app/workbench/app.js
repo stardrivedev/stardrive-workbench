@@ -188,7 +188,16 @@ function setMenu(open) {
   menuBtn.setAttribute('aria-expanded', String(open));
 }
 menuBtn.addEventListener('click', () => setMenu(menuBtn.getAttribute('aria-expanded') !== 'true'));
-navList.addEventListener('click', (e) => { if (e.target.closest('.nav-item')) setMenu(false); });
+navList.addEventListener('click', (e) => {
+  const item = e.target.closest('.nav-item');
+  if (!item) return;
+  setMenu(false);
+  // Pressing the section you are already in used to do nothing at all: the
+  // hash does not change, so no hashchange fires and the view keeps whatever
+  // it loaded minutes ago. Someone waiting on a build presses Sites again
+  // precisely because they want it looked at afresh.
+  if (item.getAttribute('href') === location.hash) route();
+});
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || menuBtn.getAttribute('aria-expanded') !== 'true') return;
   setMenu(false);
@@ -239,33 +248,74 @@ function route() {
 window.addEventListener('hashchange', route);
 
 /* ══════════════ Home (guided journey) ══════════════ */
+const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * The five steps of the job, each reporting where this account actually
+ * stands. It used to describe two steps and stop at "ship it", which left the
+ * two places people get stuck (the settings only the client can answer, and
+ * the handoff) undocumented on the one screen meant to explain the product.
+ *
+ * The sites listing carries the progress fields, so steps 2, 3 and 5 come out
+ * of one request rather than one per site.
+ */
 async function loadHome() {
   if (!getApiKey()) return;
+
   // Step 1, templates (imports beyond the shared catalog).
-  try {
-    const { body } = await api('/v1/templates');
-    const mine = (body.templates || []).filter((t) => t.source !== 'bundled').length;
-    const total = (body.templates || []).length;
+  const tpl = await api('/v1/templates');
+  if (tpl.status === 200) {
+    const mine = (tpl.body.templates || []).filter((t) => t.source !== 'bundled').length;
+    const total = (tpl.body.templates || []).length;
     setStep('jstep-1', 'homeTemplates', mine > 0,
-      mine > 0 ? `You have <span class="ok">${mine} of your own template${mine === 1 ? '' : 's'}</span> (plus ${total - mine} from the catalog).`
+      mine > 0 ? `You have <span class="ok">${plural(mine, 'template')} of your own</span> (plus ${total - mine} from the catalog).`
                : `<span class="todo">No templates of your own yet, the ${total}-design catalog is ready to start from.</span>`);
-  } catch { /* not logged in / no key */ }
-  // Step 2, sites.
-  try {
-    const { body } = await api('/v1/sites');
-    const n = (body.sites || []).length;
-    setStep('jstep-2', 'homeSites', n > 0,
-      n > 0 ? `<span class="ok">${n} site${n === 1 ? '' : 's'} built.</span>` : '<span class="todo">No sites built yet.</span>');
-  } catch { /* ignore */ }
-  // Step 3, hosting.
-  try {
-    const { status, body } = await api('/v1/connections');
-    if (status === 200) {
-      const connected = Object.entries(body.connections).filter(([, c]) => c.connected).map(([p]) => p);
-      setStep('jstep-3', 'homeHosting', connected.length > 0,
-        connected.length ? `<span class="ok">Connected: ${connected.join(', ')}.</span>` : '<span class="todo">No hosting connected yet, you can still export finished sites.</span>');
+  } else {
+    setStep('jstep-1', 'homeTemplates', false, `<span class="todo">${esc(loadError(tpl.status, tpl.body, 'Could not check your library'))}</span>`);
+  }
+
+  // Steps 2, 3 and 5 all read the same roster.
+  const sitesRes = await api('/v1/sites');
+  const sites = sitesRes.status === 200 ? (sitesRes.body.sites || []) : null;
+  if (!sites) {
+    const msg = `<span class="todo">${esc(loadError(sitesRes.status, sitesRes.body, 'Could not check your sites'))}</span>`;
+    for (const [step, id] of [['jstep-2', 'homeSites'], ['jstep-3', 'homeSettings'], ['jstep-5', 'homeHandoff']]) {
+      setStep(step, id, false, msg);
     }
-  } catch { /* ignore */ }
+  } else {
+    const built = sites.filter((s) => s.built);
+    setStep('jstep-2', 'homeSites', built.length > 0,
+      built.length ? `<span class="ok">${plural(built.length, 'site')} built.</span>`
+                   : sites.length ? `<span class="todo">${plural(sites.length, 'site')} created, none built yet.</span>`
+                                  : '<span class="todo">No sites yet.</span>');
+
+    // Step 3 only means anything once something is built, and "done" here means
+    // nothing is outstanding, which is also true of a site that needs nothing.
+    const owing = built.filter((s) => s.settingsOutstanding > 0);
+    setStep('jstep-3', 'homeSettings', built.length > 0 && owing.length === 0,
+      !built.length ? '<span class="todo">Nothing to fill in until a site is built.</span>'
+        : owing.length
+          ? `<span class="todo">${plural(owing.length, 'site')} still waiting on something from the client: `
+            + owing.slice(0, 3).map((s) => esc(s.siteName)).join(', ')
+            + (owing.length > 3 ? ` and ${owing.length - 3} more` : '') + '.</span>'
+          : '<span class="ok">Every built site has what it needs.</span>');
+
+    const live = sites.filter((s) => s.publishedUrl);
+    setStep('jstep-5', 'homeHandoff', live.length > 0,
+      live.length ? `<span class="ok">${plural(live.length, 'site')} published and ready to hand over.</span>`
+                  : '<span class="todo">Nothing published yet, the handoff is ready as soon as one is.</span>');
+
+    // Step 4 reports both halves: somewhere to publish TO, and what has gone.
+    const conn = await api('/v1/connections');
+    const connected = conn.status === 200
+      ? Object.entries(conn.body.connections).filter(([, c]) => c.connected).map(([p]) => p)
+      : [];
+    setStep('jstep-4', 'homeHosting', connected.length > 0,
+      connected.length
+        ? `<span class="ok">Connected: ${esc(connected.join(', '))}.</span>`
+          + (live.length ? ` ${plural(live.length, 'site')} published.` : '')
+        : '<span class="todo">No hosting connected yet, you can still export a finished site and run it anywhere.</span>');
+  }
 }
 function setStep(stepId, statusId, done, html) {
   const el = document.getElementById(statusId);
@@ -1089,7 +1139,7 @@ $('#importGenBtn').addEventListener('click', async () => {
     if (status < 300) {
       $('#importGenBtn')?.classList.remove('glow');
       setGenResult('<div class="card gen-done"><div class="done-badge" style="background:var(--good-soft);color:var(--good)">✓ Added to your templates</div>' +
-        '<p style="font-size:0.9rem;color:var(--body);margin:0.6rem 0 0">"' + esc(bundle.manifest.name) + '" is ready. Head to <b>Step 2 · Sites</b> to build a client site from it.' +
+        '<p style="font-size:0.9rem;color:var(--body);margin:0.6rem 0 0">"' + esc(bundle.manifest.name) + '" is ready. Head to <b>Sites</b> to build a client site from it.' +
         (body.warnings?.length ? ' <span style="color:var(--muted)">(' + body.warnings.length + ' minor lint note(s), see Templates.)</span>' : '') + '</p></div>');
     } else {
       const errs = (body.errors || [body.error?.message || 'rejected']).join('\n- ');
@@ -1232,11 +1282,33 @@ async function loadSites() {
     tr.innerHTML =
       '<td style="color:var(--ink);font-weight:600">' + esc(s.siteName) + '</td>' +
       '<td><code>' + esc(s.templateId) + '</code></td>' +
-      '<td>' + esc(s.lastJobStatus || 'not built') + '</td>' +
+      '<td>' + siteStandingHtml(s) + '</td>' +
       '<td style="color:var(--muted)">' + esc((s.updatedAt || '').slice(0, 16).replace('T', ' ')) + '</td>' +
       '<td><button class="ghost" data-site="' + esc(s.id) + '">View</button></td>';
     tbody.appendChild(tr);
   }
+}
+
+/**
+ * Where a client site actually stands, in the roster.
+ *
+ * This column used to print the raw last-job status, which answers a question
+ * nobody has: "done" told you the build finished, not whether the site is live
+ * or whether it is still waiting on a key from the client. With twenty clients
+ * that is the only thing worth scanning for.
+ */
+function siteStandingHtml(s) {
+  if (s.lastJobStatus === 'failed') return '<span style="color:var(--bad)">build failed</span>';
+  if (s.lastJobStatus === 'running' || s.lastJobStatus === 'queued') return esc(s.lastJobStatus) + '…';
+  if (!s.built) return '<span style="color:var(--muted)">not built</span>';
+  if (s.settingsOutstanding) {
+    return '<span style="color:var(--warn)">needs ' + plural(s.settingsOutstanding, 'setting') + '</span>';
+  }
+  if (s.publishedUrl) {
+    return '<span style="color:var(--good)">published</span>'
+      + (s.domain ? ' <span style="color:var(--muted)">· ' + esc(s.domain) + '</span>' : '');
+  }
+  return '<span style="color:var(--good)">built</span> <span style="color:var(--muted)">· not published</span>';
 }
 
 $('#sitesTable').addEventListener('click', (e) => {
@@ -2719,11 +2791,14 @@ document.addEventListener('click', async (e) => {
 
 /* ══════════════ Batch Building (Agency perk) ══════════════ */
 // The nav item stays hidden until the account's plan includes `batch`.
+/** Batch Building is plan-gated: reveal the sidebar entry and the note about
+ *  it on Home together, so Home never advertises a section that is not there. */
 async function revealBatchNav() {
-  try {
-    const res = await fetch('/v1/billing');
-    if (res.ok && (await res.json()).batch) $('#navBatch').hidden = false;
-  } catch { /* nav stays hidden */ }
+  const { status, body } = await api('/v1/billing', { noKey: true });
+  if (status !== 200 || !body.batch) return;
+  $('#navBatch').hidden = false;
+  const card = $('#homeBatchCard');
+  if (card) card.hidden = false;
 }
 
 const BATCH_STATUS_LABEL = {

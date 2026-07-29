@@ -115,8 +115,12 @@ await check('both themes pass, not just the one that happens to be on', async ()
 });
 
 await check('the confirmation dialog is labelled, focused and escapable', async () => {
+  // A full load, not a hash change: this check needs the keys list actually
+  // fetched, and whether a goto re-runs the router depends on what the check
+  // before it happened to leave in the address bar.
   await page.goto(`${BASE}/workbench/#/keys`, { waitUntil: 'networkidle' });
-  await page.waitForSelector('[data-keyact="revoke"]', { timeout: 8000 });
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForSelector('[data-keyact="revoke"]', { timeout: 15000 });
   await page.click('[data-keyact="revoke"]');
   await page.waitForSelector('#confirmDialog[open]');
 

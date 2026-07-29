@@ -185,7 +185,8 @@ await check('the API key field is usable rather than a 150px slot', async () => 
 
 await check('the confirmation dialog fits a phone, buttons and all', async () => {
   await goto('keys');
-  await page.waitForSelector('[data-keyact="revoke"]', { timeout: 8000 });
+  await page.reload({ waitUntil: 'networkidle' }); // as in the a11y suite: the list must really be fetched
+  await page.waitForSelector('[data-keyact="revoke"]', { timeout: 15000 });
   await page.click('[data-keyact="revoke"]');
   await page.waitForSelector('#confirmDialog[open]');
   const fit = await page.evaluate(() => {

@@ -1223,6 +1223,38 @@ await check('supplied keys save, and never come back out through the listing', a
   assert.strictEqual(view.body.missing.some((m) => m.name === 'RESEND_API_KEY'), false, 'and it stops being missing');
 });
 
+await check('the roster says where each site stands, without a request per site', async () => {
+  // The console shows this on Home and in the Sites table. Doing it from the
+  // listing is the point: twenty clients must not mean twenty round trips.
+  const { status, body } = await call('GET', '/v1/sites', { key: fullKey });
+  assert.strictEqual(status, 200);
+  const site = body.sites.find((s) => s.id === globalThis.__envSite);
+  assert.ok(site, 'the site is in the roster');
+  assert.strictEqual(site.built, true, 'a finished build shows as built');
+  assert.strictEqual(site.publishedUrl, null, 'nothing has been published from this test');
+  assert.strictEqual(site.domain, null, 'and no custom domain is attached');
+
+  // The count must agree with the panel that lists them one by one, or the
+  // roster tells a licensee to go and fix a site that is already finished.
+  const panel = await call('GET', `/v1/sites/${site.id}/env`, { key: fullKey });
+  assert.strictEqual(site.settingsOutstanding, panel.body.missing.length,
+    `roster says ${site.settingsOutstanding}, the panel lists ${panel.body.missing.length}`);
+
+  // Saving the keys really did move the number: this site owes strictly less
+  // than one nobody has touched.
+  const bare = await call('POST', '/v1/sites', {
+    key: fullKey,
+    body: { templateId: 'd4-site-template', config: { siteName: 'Owes Us Things', modules: ['d4-cms-core', 'd4-booking'] } },
+  });
+  await waitForJob(fullKey, bare.body.jobId);
+  const after = await call('GET', '/v1/sites', { key: fullKey });
+  const owes = after.body.sites.find((s) => s.id === bare.body.siteId);
+  assert.strictEqual(owes.settingsOutstanding > site.settingsOutstanding, true,
+    `an untouched site owes more (${owes.settingsOutstanding}) than one filled in (${site.settingsOutstanding})`);
+  // And the roster leaks nothing: no secret travels in a list of twenty sites.
+  assert.strictEqual(JSON.stringify(after.body).includes('re_live_topsecret'), false);
+});
+
 await check('a caller cannot overwrite a managed variable through the settings route', async () => {
   const id = globalThis.__envSite;
   const res = await call('PUT', `/v1/sites/${id}/env`, {

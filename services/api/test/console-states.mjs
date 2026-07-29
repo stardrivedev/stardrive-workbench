@@ -71,8 +71,14 @@ await check('sign in', async () => {
 // A brand new account. Every list should say what to do next, not sit blank.
 await check('a new account is told what to do, not shown an empty box', async () => {
   await page.goto(`${BASE}/workbench/#/sites`, { waitUntil: 'networkidle' });
-  await page.waitForTimeout(400);
-  assert.match(await viewText('sites'), /No sites yet/i, 'Sites says nothing useful when empty');
+  // Waited for rather than slept on: a fixed pause races the Loading state
+  // that now sits between navigating and the answer arriving.
+  await page.waitForFunction(
+    () => /No sites yet/i.test(document.querySelector('#sitesTable tbody')?.textContent || ''),
+    null, { timeout: 8000 },
+  ).catch(async () => {
+    throw new Error(`Sites says nothing useful when empty, it says: "${(await page.textContent('#sitesTable tbody')).trim()}"`);
+  });
 });
 
 await check('no list is left blank: every one either has rows or says why not', async () => {
@@ -89,6 +95,63 @@ await check('no list is left blank: every one either has rows or says why not', 
     if (!text) blank.push(view);
   }
   assert.deepStrictEqual(blank, [], `lists rendering nothing at all: ${blank.join(', ')}`);
+});
+
+// ── Home says where the job actually stands ──────────────────────────────
+await check('Home describes the whole job, not the first half of it', async () => {
+  await page.goto(`${BASE}/workbench/#/home`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(600);
+  const steps = await page.evaluate(() =>
+    [...document.querySelectorAll('#view-home .jstep')].map((el) => el.querySelector('h2')?.textContent.trim()));
+  assert.strictEqual(steps.length, 5, `Home shows ${steps.length} steps: ${steps.join(' | ')}`);
+  // The two places licensees get stuck were missing from the one screen meant
+  // to explain the product.
+  assert.ok(steps.some((s) => /client can give you/i.test(s)), 'the settings the client owes are not explained');
+  assert.ok(steps.some((s) => /Hand it over/i.test(s)), 'the handoff is not mentioned');
+  // And the introduction must not contradict the cards under it.
+  const lede = await page.textContent('#view-home .lede');
+  assert.doesNotMatch(lede, /two steps/i, 'the lede still claims the old two-step shape');
+});
+
+await check('a site that owes something says so on Home and in the roster', async () => {
+  const made = await page.evaluate(async () => {
+    const key = localStorage.getItem('sd.apiKey');
+    const r = await fetch('/v1/sites', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ templateId: 'd4-site-template', config: { siteName: 'Owing Bakery', modules: ['d4-cms-core'] } }),
+    });
+    return r.json();
+  });
+  // Wait for the dry build to land, so "built" is true rather than pending.
+  // Polled from here rather than with waitForFunction: an async predicate
+  // returns a Promise, which is truthy, so the wait can finish on the first
+  // poll and hand back a site that has not been built yet.
+  let settled = null;
+  for (let i = 0; i < 150 && !settled; i += 1) {
+    const status = await page.evaluate(async (jobId) => {
+      const key = localStorage.getItem('sd.apiKey');
+      const j = await (await fetch('/v1/jobs/' + jobId, { headers: { Authorization: 'Bearer ' + key } })).json();
+      return j.status;
+    }, made.jobId);
+    if (status === 'done' || status === 'failed') settled = status;
+    else await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.strictEqual(settled, 'done', 'the dry build should finish');
+
+  // Pressing the section you are already on re-loads it, which is the point of
+  // doing it this way rather than reloading the page: it proves that works.
+  await page.goto(`${BASE}/workbench/#/sites`, { waitUntil: 'networkidle' });
+  await page.click('[data-view="sites"]');
+  await page.waitForFunction(() => /needs \d+ setting/.test(document.querySelector('#sitesTable tbody')?.textContent || ''), null, { timeout: 8000 });
+
+  await page.goto(`${BASE}/workbench/#/home`, { waitUntil: 'networkidle' });
+  await page.waitForFunction(
+    () => /waiting on something from the client/i.test(document.querySelector('#homeSettings')?.textContent || ''),
+    null, { timeout: 8000 },
+  );
+  const named = await page.textContent('#homeSettings');
+  assert.match(named, /Owing Bakery/, 'and it names which client, not just a count');
 });
 
 // ── Waiting ──────────────────────────────────────────────────────────────

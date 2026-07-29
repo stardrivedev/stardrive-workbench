@@ -227,6 +227,25 @@ function assertReviewed(site) {
  * The database is vendor-neutral: whatever libSQL endpoint the licensee
  * connected, per-site target first, then their account default.
  */
+/**
+ * Everything this site needs on its host, base template included.
+ *
+ * The base template declares env of its own, and it was being left out: the
+ * spec was built from `config.modules` alone. On a site with the CMS but no
+ * booking module that meant RESEND_API_KEY and CONTACT_TO_EMAIL were never
+ * asked for, so the settings panel reported nothing outstanding and the
+ * client's contact form quietly filed enquiries in a table instead of emailing
+ * them. Booking happened to redeclare the same two variables, which is why it
+ * looked fine wherever bookings were switched on.
+ */
+function specForSite(account, site) {
+  const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
+  return specFor(
+    [site.templateId, ...modules].filter(Boolean),
+    (name) => getTemplate(account, name)?.manifest,
+  );
+}
+
 function siteEnvFor(account, site) {
   const dbSite = connections.getSiteTarget(site.id, 'turso');
   const dbAcct = connections.get(account).turso;
@@ -932,12 +951,21 @@ const ROUTES = [
           .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
           .map((s) => {
             const last = s.jobs.length ? jobs.get(s.jobs[s.jobs.length - 1]) : null;
+            // How far along each site is, so the console can say where a job
+            // stands without a request per site. Only the supplied bag is read
+            // here: the spec knows which variables are the client's to give, so
+            // no hosting token has to be decrypted to count what is missing.
+            const spec = specForSite(key.account, s);
             return {
               id: s.id,
               siteName: s.config?.siteName ?? '(unnamed)',
               templateId: s.templateId,
               updatedAt: s.updatedAt,
               lastJobStatus: last?.status ?? null,
+              built: s.jobs.some((id) => jobs.get(id)?.status === 'done'),
+              settingsOutstanding: missingFrom(spec, siteEnv.values(s.id)).length,
+              publishedUrl: s.deploy?.url ?? null,
+              domain: s.domain?.name ?? null,
             };
           }),
       },
@@ -1214,8 +1242,7 @@ const ROUTES = [
     method: 'GET', pattern: '/v1/sites/:id/env', scope: 'deploy',
     handler: ({ params, key }) => {
       const s = loadSite(params.id, key.account);
-      const modules = Array.isArray(s.config?.modules) ? s.config.modules : [];
-      const spec = specFor(modules, (name) => getTemplate(key.account, name)?.manifest);
+      const spec = specForSite(key.account, s);
       const stored = siteEnv.values(s.id);
       return {
         status: 200,
@@ -1281,7 +1308,7 @@ const ROUTES = [
       const s = loadSite(params.id, key.account);
       const modules = Array.isArray(s.config?.modules) ? s.config.modules : [];
       const env = siteEnvFor(key.account, s);
-      const spec = specFor(modules, (name) => getTemplate(key.account, name)?.manifest);
+      const spec = specForSite(key.account, s);
 
       // The live address, in the order it becomes true: a custom domain, then
       // wherever it was last published, then nothing worth promising.
