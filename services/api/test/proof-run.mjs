@@ -22,13 +22,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { startServer } from './helpers/server.mjs';
 
-const API_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const varDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stardrive-proof-'));
-const PORT = Number(process.env.STARDRIVE_TEST_PORT || (5400 + Math.floor(Math.random() * 200)));
-const BASE = `http://localhost:${PORT}`;
 
 let failures = 0;
 const check = (name, fn) => Promise.resolve().then(fn).then(
@@ -37,23 +33,14 @@ const check = (name, fn) => Promise.resolve().then(fn).then(
 );
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const server = await new Promise((resolve, reject) => {
-  const child = spawn(process.execPath, ['server.mjs', '--port', String(PORT)], {
-    cwd: API_DIR,
-    env: {
-      ...process.env,
-      STARDRIVE_VAR_DIR: varDir,
-      STARDRIVE_ENGINE: 'real',   // a genuine Next.js site, not the dry stub
-      STARDRIVE_QA: 'full',       // npm install + next build + serve + routes
-      STARDRIVE_LLM_KEY: '',      // no model: nothing here costs money
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let buf = '';
-  const t = setTimeout(() => reject(new Error('server never came up: ' + buf)), 20000);
-  child.stdout.on('data', (d) => { buf += d; if (buf.includes('listening')) { clearTimeout(t); resolve(child); } });
-  child.stderr.on('data', (d) => { buf += d; });
-  child.on('exit', (c) => { clearTimeout(t); reject(new Error(`server exited (${c}): ${buf}`)); });
+const { child: server, port: PORT, base: BASE } = await startServer({
+  varDir,
+  timeoutMs: 20_000,
+  env: {
+    STARDRIVE_ENGINE: 'real',   // a genuine Next.js site, not the dry stub
+    STARDRIVE_QA: 'full',       // npm install + next build + serve + routes
+    STARDRIVE_LLM_KEY: '',      // no model: nothing here costs money
+  },
 });
 
 const api = async (method, p, { key, body, raw } = {}) => {

@@ -47,7 +47,13 @@ const VERSION = '0.1.0';
 
 const args = process.argv.slice(2);
 const portArg = args.indexOf('--port');
-const PORT = Number(portArg >= 0 ? args[portArg + 1] : process.env.PORT) || 4650;
+const portAsked = portArg >= 0 ? args[portArg + 1] : process.env.PORT;
+// Port 0 means "any free port, the OS picks". A plain `|| 4650` would treat
+// that as unset and quietly bind the default instead, so it is spelled out.
+// The tests rely on it: nothing they run can collide with anything else.
+const PORT = portAsked !== undefined && portAsked !== '' && Number.isFinite(Number(portAsked))
+  ? Number(portAsked)
+  : 4650;
 const VAR_DIR = process.env.STARDRIVE_VAR_DIR || path.join(HERE, 'var');
 const ENGINE = process.env.STARDRIVE_ENGINE || 'dry';
 const ENGINE_DIR = path.join(HERE, '..', '..', 'vendor', 'd4'); // vendored d4 assembler + modules
@@ -1931,7 +1937,10 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   ops.start(); // boot count (crash-loop detection) + the watchdog interval
-  console.log(`[stardrive-api] v${VERSION} listening on http://localhost:${PORT} (engine: ${ENGINE}, var: ${VAR_DIR})`);
+  // Report what we actually bound, not what was asked for: with --port 0 they
+  // differ, and this line is how a caller learns which port to talk to.
+  const bound = server.address()?.port ?? PORT;
+  console.log(`[stardrive-api] v${VERSION} listening on http://localhost:${bound} (engine: ${ENGINE}, var: ${VAR_DIR})`);
 });
 
 /**

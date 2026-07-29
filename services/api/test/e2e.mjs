@@ -14,17 +14,18 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import crypto from 'node:crypto';
-import { spawn, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { startServer, stopAll } from './helpers/server.mjs';
 
 const API_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const REPO = path.resolve(API_DIR, '..', '..');
-const PORT_A = 4651;
-const PORT_B = 4652;
-const BASE = `http://localhost:${PORT_A}`;
 
 const varDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stardrive-api-e2e-'));
-const children = [];
+// The main server's address. Assigned once the first server is up: this suite
+// starts a dozen of them and the OS decides every port, so nothing is known
+// until each one reports what it bound.
+let BASE = '';
 let failures = 0;
 
 const check = (name, fn) =>
@@ -47,24 +48,8 @@ function mintKey(name, scopes) {
   return secret;
 }
 
-function startServer(port, extraEnv = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['server.mjs', '--port', String(port)], {
-      cwd: API_DIR,
-      env: { ...process.env, STARDRIVE_VAR_DIR: varDir, ...extraEnv },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    children.push(child);
-    let buf = '';
-    const timer = setTimeout(() => reject(new Error(`Server on :${port} never became ready. Output:\n${buf}`)), 15000);
-    child.stdout.on('data', (d) => {
-      buf += d;
-      if (buf.includes('listening')) { clearTimeout(timer); resolve(child); }
-    });
-    child.stderr.on('data', (d) => { buf += d; });
-    child.on('exit', (code) => reject(new Error(`Server on :${port} exited early (${code}). Output:\n${buf}`)));
-  });
-}
+/** Another server sharing this suite's var dir, on a port the OS picks. */
+const spawnServer = (extraEnv = {}) => startServer({ varDir, env: extraEnv });
 
 const call = (m, p, o) => callBase(m, p, o);
 async function callBase(method, pathname, { key, body, base = BASE } = {}) {
@@ -94,7 +79,7 @@ async function waitForJob(key, jobId, timeoutMs = 8000) {
 const fullKey = mintKey('e2e full', 'mappings,templates,sites,deploy');
 const mappingsOnlyKey = mintKey('e2e mappings-only', 'mappings');
 const otherAccountKey = mintKey('e2e other licensee', 'mappings,templates,sites,deploy');
-await startServer(PORT_A);
+BASE = (await spawnServer()).base;
 
 const coffeeMapping = JSON.parse(
   fs.readFileSync(path.join(REPO, 'packages', 'field-mapping', 'examples', 'coffee-cart.json'), 'utf-8')
@@ -241,10 +226,8 @@ await check('billing webhook: dormant 501 without a secret; with one, a signed c
   // Dormant on the default server (no STRIPE_WEBHOOK_SECRET).
   assert.strictEqual((await call('POST', '/webhooks/stripe', { body: {} })).status, 501);
   // A dedicated server WITH the secret proves the signature check + plan flip.
-  const PORT_W = 4655;
   const secret = 'whsec_e2e_test_secret';
-  await startServer(PORT_W, { STRIPE_WEBHOOK_SECRET: secret });
-  const wbase = `http://localhost:${PORT_W}`;
+  const { base: wbase } = await spawnServer({ STRIPE_WEBHOOK_SECRET: secret });
   // A fresh account to flip.
   const sres = await cookieCall('POST', '/auth/signup', { body: { email: `flip+${Date.now()}@example.com`, password: 'password123' } });
   const acct = sres.body.account.id;
@@ -947,10 +930,13 @@ await check('keys meter separately', async () => {
 
 // ── Real engine (vendored d4 assembler) ──────────────────────────────────
 console.log('real engine:');
+// One real-engine server for the three checks below. It used to be started
+// inside the first check and found by the other two through a hardcoded port
+// number, which is a shared dependency written down nowhere.
+const { base: realBase } = await spawnServer({ STARDRIVE_ENGINE: 'real' });
+
 await check('STARDRIVE_ENGINE=real assembles a genuine Next.js site, QA passes, export is a real tar.gz', async () => {
-  const PORT_D = 4654;
-  await startServer(PORT_D, { STARDRIVE_ENGINE: 'real' });
-  const base = `http://localhost:${PORT_D}`;
+  const base = realBase;
   // Feature toggles map to modules: gallery + blog (each auto-pulls cms-core).
   const mk = await call('POST', '/v1/sites', { key: fullKey, base, body: {
     templateId: 'd4-site-template',
@@ -990,7 +976,7 @@ await check('STARDRIVE_ENGINE=real assembles a genuine Next.js site, QA passes, 
   assert.strictEqual(gen.includes('siteAssets'), true);
 });
 await check('real engine: a bad module fails the job honestly (never a fake pass)', async () => {
-  const base = 'http://localhost:4654';
+  const base = realBase;
   const mk = await call('POST', '/v1/sites', { key: fullKey, base, body: {
     templateId: 'd4-site-template', config: { siteName: 'Broken Co', modules: ['d4-does-not-exist'] },
   } });
@@ -1000,7 +986,7 @@ await check('real engine: a bad module fails the job honestly (never a fake pass
   assert.strictEqual((job.logs.at(-1)?.line || '').includes('Assembly failed'), true);
 });
 await check("real engine: d4 modules layer onto a customer's OWN imported template", async () => {
-  const base = 'http://localhost:4654';
+  const base = realBase;
   // A gate-clean, module-compatible customer base (has package.json, which the
   // assembler needs to merge module deps into).
   const ownTemplate = {
@@ -1042,8 +1028,7 @@ await check("real engine: d4 modules layer onto a customer's OWN imported templa
 // ── Rate limiting (separate low-limit server) ────────────────────────────
 console.log('rate limiting:');
 await check('a burst past the per-key limit gets 429 + Retry-After', async () => {
-  await startServer(PORT_B, { RATE_LIMIT_PER_MIN: '5' });
-  const base = `http://localhost:${PORT_B}`;
+  const { base } = await spawnServer({ RATE_LIMIT_PER_MIN: '5' });
   let last;
   for (let i = 0; i < 7; i++) last = await call('GET', '/v1/usage', { key: fullKey, base });
   assert.strictEqual(last.status, 429);
@@ -1052,11 +1037,7 @@ await check('a burst past the per-key limit gets 429 + Retry-After', async () =>
 });
 
 await check('signup is rationed per address, and only a CREATED account counts', async () => {
-  // A random port: a leftover server from an interrupted run holding a fixed
-  // one makes this look like a product failure when it is a port collision.
-  const PORT_D = 4800 + Math.floor(Math.random() * 150);
-  await startServer(PORT_D, { SIGNUP_LIMIT_PER_HOUR: '2' });
-  const base = `http://localhost:${PORT_D}`;
+  const { base } = await spawnServer({ SIGNUP_LIMIT_PER_HOUR: '2' });
   const signup = (body) => cookieCall('POST', '/auth/signup', { body, base });
 
   // Rejected attempts are free: they cost nothing to serve, and a typo must
@@ -1094,9 +1075,7 @@ await check('email verification is dormant when no email provider is configured'
 await check('an account can take its data with it, and then really leave', async () => {
   // Its own server: this check signs up several times and would otherwise
   // trip the per-address signup ration that the suite has already spent.
-  const PORT_E = 4850 + Math.floor(Math.random() * 140);
-  await startServer(PORT_E, { SIGNUP_LIMIT_PER_HOUR: '50' });
-  const base = `http://localhost:${PORT_E}`;
+  const { base } = await spawnServer({ SIGNUP_LIMIT_PER_HOUR: '50' });
   const cookieCall = (m, p, o = {}) => cookieCallBase(m, p, { ...o, base });
   const call = (m, p, o = {}) => callBase(m, p, { ...o, base });
 
@@ -1150,9 +1129,7 @@ await check('an account can take its data with it, and then really leave', async
 // ── Studio configured (server-side model key present) ────────────────────
 console.log('studio configured:');
 await check('with the operator model key set, health advertises the Studio on + the configured model (key never exposed)', async () => {
-  const PORT_C = 4653;
-  await startServer(PORT_C, { STARDRIVE_LLM_KEY: 'operator-secret-should-never-surface', STARDRIVE_LLM_PROVIDER: 'anthropic', STARDRIVE_LLM_MODEL: 'claude-sonnet-5' });
-  const base = `http://localhost:${PORT_C}`;
+  const { base } = await spawnServer({ STARDRIVE_LLM_KEY: 'operator-secret-should-never-surface', STARDRIVE_LLM_PROVIDER: 'anthropic', STARDRIVE_LLM_MODEL: 'claude-sonnet-5' });
   const health = await call('GET', '/v1/health', { base });
   assert.strictEqual(health.body.studio.enabled, true);
   assert.strictEqual(health.body.studio.model, 'claude-sonnet-5');
@@ -1162,9 +1139,7 @@ await check('with the operator model key set, health advertises the Studio on + 
 // ── Password reset ───────────────────────────────────────────────────────
 console.log('password reset:');
 await check('a known and an unknown address are answered identically', async () => {
-  const PORT_R = 5400 + Math.floor(Math.random() * 90);
-  await startServer(PORT_R, { STARDRIVE_VAR_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'stardrive-reset-')) });
-  const base = `http://localhost:${PORT_R}`;
+  const { base } = await spawnServer({ STARDRIVE_VAR_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'stardrive-reset-')) });
   globalThis.__resetBase = base;
 
   const signup = await call('POST', '/auth/signup', { base, body: { email: 'locked@example.com', password: 'originalpass' } });
@@ -1330,9 +1305,7 @@ await check('a licensee API key cannot read the operator view', async () => {
 });
 
 await check('with a token set: wrong token 401, right token returns the whole picture', async () => {
-  const PORT_O = 4900 + Math.floor(Math.random() * 90);
-  await startServer(PORT_O, { STARDRIVE_OPS_TOKEN: 'operator-token-abcdef' });
-  const base = `http://localhost:${PORT_O}`;
+  const { base } = await spawnServer({ STARDRIVE_OPS_TOKEN: 'operator-token-abcdef' });
   const opsCall = (m, token) => fetch(base + '/v1/ops', {
     method: m, headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
@@ -1351,16 +1324,15 @@ await check('with a token set: wrong token 401, right token returns the whole pi
 });
 
 await check('the watchdog can be run on demand, and finds nothing wrong here', async () => {
-  const PORT_O = 5000 + Math.floor(Math.random() * 90);
-  await startServer(PORT_O, { STARDRIVE_OPS_TOKEN: 'tok' });
-  const res = await fetch(`http://localhost:${PORT_O}/v1/ops/check`, {
+  const { base } = await spawnServer({ STARDRIVE_OPS_TOKEN: 'tok' });
+  const res = await fetch(`${base}/v1/ops/check`, {
     method: 'POST', headers: { Authorization: 'Bearer tok' },
   });
   assert.strictEqual(res.status, 200);
   const body = await res.json();
   assert.deepStrictEqual(body.alerts, []);
   assert.strictEqual(body.checked.length, 0, 'nothing to watch on an idle, healthy box');
-  const test = await fetch(`http://localhost:${PORT_O}/v1/ops/test-alert`, {
+  const test = await fetch(`${base}/v1/ops/test-alert`, {
     method: 'POST', headers: { Authorization: 'Bearer tok' },
   });
   const t = await test.json();
@@ -1369,11 +1341,9 @@ await check('the watchdog can be run on demand, and finds nothing wrong here', a
 });
 
 await check('a real bad condition on a real server reaches health and the ops view', async () => {
-  const PORT_O = 5100 + Math.floor(Math.random() * 90);
   // An absurd disk floor makes the runner refuse builds for lack of space,
   // which is a genuine condition read off the real queue, not a stubbed one.
-  await startServer(PORT_O, { STARDRIVE_OPS_TOKEN: 'tok', STARDRIVE_MIN_FREE_MB: '99999999' });
-  const base = `http://localhost:${PORT_O}`;
+  const { base } = await spawnServer({ STARDRIVE_OPS_TOKEN: 'tok', STARDRIVE_MIN_FREE_MB: '99999999' });
   assert.strictEqual((await call('GET', '/v1/health', { base })).body.degraded, false, 'nothing has looked yet');
   const checked = await (await fetch(`${base}/v1/ops/check`, { method: 'POST', headers: { Authorization: 'Bearer tok' } })).json();
   assert.deepStrictEqual(checked.checked, [{ name: 'disk_low', action: 'alerted' }]);
@@ -1389,8 +1359,7 @@ await check('a real server records its start, and (on POSIX) marks a SIGTERM exi
   // Its own var dir: this is about one process's boot record, and the rest of
   // the suite has a dozen servers writing to the shared one.
   const soloVar = fs.mkdtempSync(path.join(os.tmpdir(), 'stardrive-ops-boot-'));
-  const PORT_O = 5200 + Math.floor(Math.random() * 90);
-  const child = await startServer(PORT_O, { STARDRIVE_VAR_DIR: soloVar });
+  const { child } = await spawnServer({ STARDRIVE_VAR_DIR: soloVar });
   const bootsPath = path.join(soloVar, 'ops', 'boots.json');
   const first = JSON.parse(fs.readFileSync(bootsPath, 'utf-8'));
   assert.strictEqual(first.length, 1);
@@ -1411,7 +1380,7 @@ await check('a real server records its start, and (on POSIX) marks a SIGTERM exi
 });
 
 // ── Teardown ─────────────────────────────────────────────────────────────
-for (const c of children) c.kill();
+stopAll();
 await new Promise((r) => setTimeout(r, 300));
 fs.rmSync(varDir, { recursive: true, force: true });
 

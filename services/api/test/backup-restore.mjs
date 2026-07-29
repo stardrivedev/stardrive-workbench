@@ -18,13 +18,13 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { startServer, stopAll } from './helpers/server.mjs';
 
 const API_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SECRET = 'a-real-deployments-encryption-secret';
 const roots = [];
-const children = [];
 
 let failures = 0;
 const check = (name, fn) => Promise.resolve().then(fn).then(
@@ -34,22 +34,7 @@ const check = (name, fn) => Promise.resolve().then(fn).then(
 
 const tmp = (tag) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), `stardrive-${tag}-`)); roots.push(d); return d; };
 
-function startServer(varDir, secret) {
-  const port = 5000 + Math.floor(Math.random() * 400);
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['server.mjs', '--port', String(port)], {
-      cwd: API_DIR,
-      env: { ...process.env, STARDRIVE_VAR_DIR: varDir, STARDRIVE_SECRET: secret },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    children.push(child);
-    let buf = '';
-    const t = setTimeout(() => reject(new Error(`server never came up on :${port}\n${buf}`)), 15000);
-    child.stdout.on('data', (d) => { buf += d; if (buf.includes('listening')) { clearTimeout(t); resolve({ child, base: `http://localhost:${port}` }); } });
-    child.stderr.on('data', (d) => { buf += d; });
-    child.on('exit', (c) => { clearTimeout(t); reject(new Error(`server exited (${c}) on :${port}\n${buf}`)); });
-  });
-}
+const boot = (varDir, secret) => startServer({ varDir, env: { STARDRIVE_SECRET: secret } });
 
 const api = async (base, method, p, { key, body } = {}) => {
   const res = await fetch(base + p, {
@@ -66,7 +51,7 @@ console.log('backup and restore drill:');
 
 // ── A deployment with real state ─────────────────────────────────────────
 const liveVar = tmp('live');
-const live = await startServer(liveVar, SECRET);
+const live = await boot(liveVar, SECRET);
 let apiKey;
 let siteId;
 
@@ -139,7 +124,7 @@ await check('restore refuses to overwrite a non-empty directory unless told to',
 
 await check('restored with the SAME secret: accounts, keys, sites, and tokens all work', async () => {
   backup('restore', path.join(backupDir, archive), restoredVar);
-  const back = await startServer(restoredVar, SECRET);
+  const back = await boot(restoredVar, SECRET);
 
   const login = await fetch(`${back.base}/auth/login`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -163,7 +148,7 @@ await check('restored with the SAME secret: accounts, keys, sites, and tokens al
 await check('restored with the WRONG secret: it fails honestly instead of silently', async () => {
   const wrongVar = tmp('wrong');
   backup('restore', path.join(backupDir, archive), wrongVar);
-  const bad = await startServer(wrongVar, 'a-completely-different-secret');
+  const bad = await boot(wrongVar, 'a-completely-different-secret');
 
   // Accounts and sites are fine: they are not encrypted.
   const sites = await api(bad.base, 'GET', '/v1/sites', { key: apiKey });
@@ -176,7 +161,7 @@ await check('restored with the WRONG secret: it fails honestly instead of silent
   assert.ok(publish.status >= 400, `publishing fails rather than using a garbled token (got ${publish.status})`);
 });
 
-for (const c of children) { try { c.kill(); } catch { /* already gone */ } }
+stopAll();
 await new Promise((r) => setTimeout(r, 300));
 for (const d of roots) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* windows file locks */ } }
 if (failures) { console.error(`\n${failures} check(s) FAILED.`); process.exit(1); }

@@ -17,11 +17,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
-import { spawn } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { REQUIRED_SITE_FILES } from '../../../packages/template-kit/index.mjs';
-
-const API_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+import { startServer } from './helpers/server.mjs';
 
 const spec = process.env.STARDRIVE_PLAYWRIGHT || 'playwright';
 let chromium = null;
@@ -34,8 +32,6 @@ if (!chromium) {
   process.exit(0);
 }
 
-const PORT = Number(process.env.STARDRIVE_TEST_PORT || (4900 + Math.floor(Math.random() * 200)));
-const BASE = `http://localhost:${PORT}`;
 const varDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stardrive-studioui-'));
 
 let failures = 0;
@@ -44,20 +40,7 @@ const check = async (name, fn) => {
   catch (e) { failures++; console.error(`  FAIL  ${name}\n        ${e.message}`); }
 };
 
-function startServer() {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['server.mjs', '--port', String(PORT)], {
-      cwd: API_DIR, env: { ...process.env, STARDRIVE_VAR_DIR: varDir }, stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let buf = '';
-    const t = setTimeout(() => reject(new Error('server never came up: ' + buf)), 15000);
-    child.stdout.on('data', (d) => { buf += d; if (buf.includes('listening')) { clearTimeout(t); resolve(child); } });
-    child.stderr.on('data', (d) => { buf += d; });
-    child.on('exit', (code) => { clearTimeout(t); reject(new Error(`server exited early (${code}) on :${PORT}. Output:\n${buf}`)); });
-  });
-}
-
-const server = await startServer();
+const { child: server, base: BASE } = await startServer({ varDir });
 const browser = await chromium.launch();
 const page = await browser.newPage();
 const errors = [];
