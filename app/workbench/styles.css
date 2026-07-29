@@ -544,5 +544,6 @@ button.primary.glow { animation: glowpulse 1.5s ease-in-out infinite; }
   background: var(--warn-soft); color: var(--warn); font-size: 0.86rem; line-height: 1.45;
 }
 .verifybar.ok { background: var(--good-soft); color: var(--good); }
+.verifybar.bad { background: var(--bad-soft); color: var(--bad); }
 .verifybar[hidden] { display: none; }
 .verifybar button { font-size: 0.78rem; padding: 0.2rem 0.6rem; }

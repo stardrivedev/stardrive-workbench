@@ -14,17 +14,78 @@ const TEXT_EXT_RE = /\.(ts|tsx|js|jsx|mjs|cjs|css|json|md|svg|txt|html|yml|yaml)
 
 function getApiKey() { return localStorage.getItem('sd.apiKey') || ''; }
 
-async function api(path, { method = 'GET', body, raw } = {}) {
-  const res = await fetch(path, {
-    method,
-    headers: {
-      ...(getApiKey() ? { Authorization: 'Bearer ' + getApiKey() } : {}),
-      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-    },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-  const data = raw ? await res.text() : await res.json().catch(() => ({}));
+/**
+ * A dropped connection is a status, not an exception.
+ *
+ * `fetch` rejects when the network is down, and every caller here awaits it
+ * without a catch, so a flaky connection used to kill the view mid-render:
+ * the table kept its old contents, "Failed to fetch" went to a console nobody
+ * has open, and the licensee saw what looked like an empty account. Returning
+ * status 0 with a real message means every `if (status !== 200)` branch that
+ * already exists says something true instead.
+ */
+const OFFLINE = { code: 'offline', message: 'Could not reach Stardrive. Check your connection, then try again.' };
+
+async function api(path, { method = 'GET', body, raw, noKey } = {}) {
+  let res;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: {
+        ...(!noKey && getApiKey() ? { Authorization: 'Bearer ' + getApiKey() } : {}),
+        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    return { status: 0, ok: false, offline: true, body: { error: OFFLINE } };
+  }
+  const data = raw ? await res.text().catch(() => '') : await res.json().catch(() => ({}));
   return { status: res.status, ok: res.ok, body: data };
+}
+
+/**
+ * The last line of defence.
+ *
+ * Most calls now report their own trouble in place, but this console makes a
+ * lot of them and one that slips through used to fail in total silence: the
+ * view simply never filled in. Anything that rejects without being handled
+ * says so here instead, and a browser that knows it is offline says so before
+ * the user has clicked anything.
+ */
+function showTrouble(message) {
+  const bar = document.getElementById('troubleBanner');
+  if (!bar) return;
+  bar.textContent = message;
+  bar.hidden = false;
+}
+function clearTrouble() {
+  const bar = document.getElementById('troubleBanner');
+  if (bar) { bar.hidden = true; bar.textContent = ''; }
+}
+window.addEventListener('unhandledrejection', (e) => {
+  // A failed fetch is by far the likeliest cause, and the one worth naming.
+  const msg = String(e.reason?.message || e.reason || '');
+  showTrouble(/fetch|network|load failed/i.test(msg)
+    ? OFFLINE.message
+    : 'Something went wrong in the console. Reload the page, and tell us if it keeps happening.');
+});
+window.addEventListener('offline', () => showTrouble('You are offline. Stardrive will work again once the connection is back.'));
+window.addEventListener('online', clearTrouble);
+
+/** What a list says while it is fetching, when it is empty, and when it broke.
+ *  One shape for all three so the views do not each invent their own. */
+const rowMsg = (cols, text, tone = 'muted') =>
+  '<tr><td colspan="' + cols + '" style="color:var(--' + tone + ')">' + esc(text) + '</td></tr>';
+const rowLoading = (cols) => rowMsg(cols, 'Loading…');
+
+/** The message for a failed load, in the caller's own words unless the real
+ *  reason (offline, or a scope the key does not have) is more useful. */
+function loadError(status, body, fallback) {
+  if (status === 0) return OFFLINE.message;
+  if (status === 401) return 'Log in again to continue.';
+  if (status === 403) return body?.error?.message || 'This key lacks the scope for that.';
+  return body?.error?.message || fallback + ' (' + status + ').';
 }
 
 /** The raw Response, for endpoints that return a file rather than JSON
@@ -249,11 +310,8 @@ $('#authForm').addEventListener('submit', async (e) => {
   const data = Object.fromEntries(new FormData(e.target).entries());
   $('#authSubmit').disabled = true;
   try {
-    const res = await fetch('/auth/' + authMode, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) { note.className = 'authnote err'; note.textContent = body.error?.message || 'Something went wrong.'; return; }
+    const { ok, body } = await api('/auth/' + authMode, { method: 'POST', body: data, noKey: true });
+    if (!ok) { note.className = 'authnote err'; note.textContent = body.error?.message || 'Something went wrong.'; return; }
     if (authMode === 'signup' && body.apiKey?.secret) {
       // Auto-adopt the first key for product calls, and reveal it once.
       localStorage.setItem('sd.apiKey', body.apiKey.secret);
@@ -387,14 +445,18 @@ $('#healthCurl').textContent = 'curl ' + location.origin + '/v1/health';
 /* ══════════════ Templates ══════════════ */
 async function loadTemplates() {
   const tbody = $('#templateTable tbody');
+  const grid0 = $('#templateGrid');
   if (!getApiKey()) {
-    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted)">Save an API key to load your library.</td></tr>';
+    tbody.innerHTML = rowMsg(6, 'Save an API key to load your library.');
+    if (grid0) grid0.innerHTML = '';
     return;
   }
+  tbody.innerHTML = rowLoading(6);
   const { status, body } = await api('/v1/templates');
-  if (status === 401 || status === 403) {
-    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--bad)">' +
-      (status === 401 ? 'That key was not accepted.' : 'This key lacks the templates scope.') + '</td></tr>';
+  if (status !== 200) {
+    const msg = status === 401 ? 'That key was not accepted.' : loadError(status, body, 'Could not load your library');
+    tbody.innerHTML = rowMsg(6, msg, 'bad');
+    if (grid0) grid0.innerHTML = '<p style="color:var(--bad);font-size:0.88rem">' + esc(msg) + '</p>';
     return;
   }
   // A grid of designs, not a list of slugs: with twenty generated templates
@@ -1088,16 +1150,17 @@ $('#siteTemplateSel').addEventListener('change', () => { renderAssembleFeatures(
 async function loadSites() {
   const tbody = $('#sitesTable tbody');
   if (!getApiKey()) {
-    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">Save an API key to load your sites.</td></tr>';
+    tbody.innerHTML = rowMsg(5, 'Save an API key to load your sites.');
     return;
   }
+  tbody.innerHTML = rowLoading(5);
   const { status, body } = await api('/v1/sites');
   if (status !== 200) {
-    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--bad)">' + (status === 403 ? 'This key lacks the sites scope.' : 'Could not load sites (' + status + ').') + '</td></tr>';
+    tbody.innerHTML = rowMsg(5, loadError(status, body, 'Could not load sites'), 'bad');
     return;
   }
-  if (!body.sites.length) {
-    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No sites yet, assemble your first one above.</td></tr>';
+  if (!body.sites?.length) {
+    tbody.innerHTML = rowMsg(5, 'No sites yet, assemble your first one above.');
     return;
   }
   tbody.innerHTML = '';
@@ -2102,9 +2165,13 @@ $('#assembleBtn').addEventListener('click', async () => {
 /* ══════════════ Connections ══════════════ */
 async function loadConnections() {
   if (!getApiKey()) { $('#connNote').innerHTML = '<div class="report err">Save an API key first (top right).</div>'; return; }
+  $('#connNote').innerHTML = '<div class="report">Loading…</div>';
   const { status, body } = await api('/v1/connections');
   if (status !== 200) {
-    $('#connNote').innerHTML = '<div class="report err">' + (status === 403 ? 'This key lacks the deploy scope, mint one with --scopes mappings,templates,sites,deploy.' : 'Could not load connections (' + status + ').') + '</div>';
+    const msg = status === 403
+      ? 'This key lacks the deploy scope, mint one with --scopes mappings,templates,sites,deploy.'
+      : loadError(status, body, 'Could not load connections');
+    $('#connNote').innerHTML = '<div class="report err">' + esc(msg) + '</div>';
     return;
   }
   $('#connNote').innerHTML = '';
@@ -2347,10 +2414,16 @@ $('#testKeyBtn').addEventListener('click', async () => {
 /* ══════════════ Self-service keys ══════════════ */
 async function loadKeys() {
   const tbody = $('#keysTable tbody');
-  const res = await fetch('/v1/keys');
-  if (!res.ok) { tbody.innerHTML = '<tr><td colspan="5" style="color:var(--bad)">Log in to manage keys.</td></tr>'; return; }
-  const { keys } = await res.json();
-  if (!keys.length) { tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No keys yet, create one above.</td></tr>'; return; }
+  tbody.innerHTML = rowLoading(5);
+  // noKey: this is a session route, and sending a bearer token that may itself
+  // be revoked would only muddy the reason for a failure.
+  const { status, body } = await api('/v1/keys', { noKey: true });
+  if (status !== 200) {
+    tbody.innerHTML = rowMsg(5, status === 401 ? 'Log in to manage keys.' : loadError(status, body, 'Could not load your keys'), 'bad');
+    return;
+  }
+  const keys = body.keys || [];
+  if (!keys.length) { tbody.innerHTML = rowMsg(5, 'No keys yet, create one above.'); return; }
   tbody.innerHTML = '';
   for (const k of keys) {
     const tr = document.createElement('tr');
@@ -2417,9 +2490,14 @@ $('#testKeyBtn').addEventListener('click', async () => {
 const fmtTokens = (n) => n >= 1e6 ? (n / 1e6).toFixed(n % 1e6 ? 1 : 0) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
 
 async function loadBilling() {
-  const res = await fetch('/v1/billing');
-  if (!res.ok) { $('#planName').textContent = 'log in to view'; return; }
-  const b = await res.json();
+  $('#planName').textContent = 'loading…';
+  const { status, body: b } = await api('/v1/billing', { noKey: true });
+  if (status !== 200) {
+    $('#planName').textContent = status === 401 ? 'log in to view' : 'unavailable';
+    $('#usageBar').innerHTML = '<p style="color:var(--bad);font-size:0.85rem;margin:0">' +
+      esc(loadError(status, b, 'Could not load your plan')) + '</p>';
+    return;
+  }
   const q = b.quota;
   $('#planName').textContent = b.planLabel + (b.plan === 'beta' ? ' · founding beta (free)' : '');
 

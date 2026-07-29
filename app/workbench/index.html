@@ -91,6 +91,11 @@
     <!-- Shown only until the address is confirmed; AI generation waits on it. -->
     <div id="verifyBanner" class="verifybar" hidden></div>
 
+    <!-- The last line of defence. Anything that fails without an error of its
+         own surfaces here, so a dropped connection can never be mistaken for
+         an empty account. role=status so it is announced, not only drawn. -->
+    <div id="troubleBanner" class="verifybar bad" role="status" hidden></div>
+
     <!-- ═══ Home (guided) ═══ -->
     <section class="view" id="view-home">
       <p class="lede">Welcome, this is <b>your</b> console for building and shipping client websites with Stardrive. It goes in two steps: <b>design a template</b>, then <b>build a site</b> from it for each client. Everything you make is private to your account.</p>
