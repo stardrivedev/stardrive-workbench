@@ -79,7 +79,11 @@ async function waitForJob(key, jobId, timeoutMs = 8000) {
 const fullKey = mintKey('e2e full', 'mappings,templates,sites,deploy');
 const mappingsOnlyKey = mintKey('e2e mappings-only', 'mappings');
 const otherAccountKey = mintKey('e2e other licensee', 'mappings,templates,sites,deploy');
-BASE = (await spawnServer()).base;
+// A high per-key limit on the MAIN server. This suite makes over ninety calls
+// on one key and the default is 120/min, so on a loaded machine it used to
+// trip its own rate limiter and fail an unrelated check with a 429. Rate
+// limiting is proved deliberately further down, on a server set to 5/min.
+BASE = (await spawnServer({ RATE_LIMIT_PER_MIN: '100000' })).base;
 
 const coffeeMapping = JSON.parse(
   fs.readFileSync(path.join(REPO, 'packages', 'field-mapping', 'examples', 'coffee-cart.json'), 'utf-8')

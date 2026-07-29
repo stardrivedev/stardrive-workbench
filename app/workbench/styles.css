@@ -57,6 +57,12 @@ h1, h2, h3 { color: var(--ink); margin: 0; text-wrap: balance; }
 code { font-family: var(--mono); font-size: 0.87em; background: var(--code-bg); border: 1px solid var(--line); border-radius: 4px; padding: 0.08em 0.35em; }
 
 .layout { display: grid; grid-template-columns: 15.5rem 1fr; min-height: 100vh; }
+/* A grid track sized `1fr` still refuses to go below its content's min-content
+   width, so one long unbreakable token (an API key, a curl line) used to widen
+   the whole page and give every view a horizontal scrollbar on a phone. This
+   lets the column shrink; the scroll then happens inside .tscroll and <pre>,
+   where it belongs. */
+.layout > * { min-width: 0; }
 
 /* ── Sidebar ── */
 .sidebar {
@@ -66,7 +72,17 @@ code { font-family: var(--mono); font-size: 0.87em; background: var(--code-bg); 
   display: flex; flex-direction: column; gap: 0.25rem;
   position: sticky; top: 0; height: 100vh;
 }
+.navlist { display: flex; flex-direction: column; gap: 0.25rem; flex: 1; min-height: 0; }
 .brand { display: flex; align-items: center; gap: 0.6rem; padding: 0.25rem 0.6rem 1rem; }
+/* Shown only in the narrow layout; see the breakpoint at the end of the file. */
+.menu-btn {
+  display: none; margin-left: auto; flex: none;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 7px;
+  color: var(--body); font: inherit; font-size: 0.85rem; font-weight: 600;
+  padding: 0.4rem 0.8rem; cursor: pointer;
+}
+.menu-btn:hover { border-color: var(--accent); color: var(--accent); }
+.menu-btn[aria-expanded="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .brand .logo {
   width: 1.9rem; height: 1.9rem; border-radius: 7px;
   background: var(--accent); color: var(--accent-ink);
@@ -199,9 +215,15 @@ a.ghost.btnlink:hover { border-color: var(--accent); color: var(--accent); text-
 /* ── Studio features ── */
 .studio-side { display: flex; flex-direction: column; }
 .featurelist { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 0.8rem; }
-.feature { display: flex; align-items: center; gap: 0.45rem; font-size: 0.83rem; cursor: pointer; padding: 0.15rem 0; user-select: none; }
-.feature input { width: 1rem; height: 1rem; accent-color: var(--accent); flex-shrink: 0; }
-.feature.on { color: var(--ink); font-weight: 600; }
+/* Scoped to .featurelist on purpose. These lists sit inside a .field, whose
+   `label { display: block }` and `input { width: 100% }` are the same
+   specificity and come later in this file, so they used to win: every tickbox
+   was stretched across its whole column and the label pushed onto the next
+   line, leaving thirteen boxes floating nowhere near the words they belong
+   to. Scoping puts them back beside their labels. */
+.featurelist .feature { display: flex; align-items: center; gap: 0.45rem; font-size: 0.83rem; cursor: pointer; padding: 0.15rem 0; margin-bottom: 0; color: var(--body); user-select: none; }
+.featurelist .feature input { width: 1rem; height: 1rem; flex: none; accent-color: var(--accent); }
+.featurelist .feature.on { color: var(--ink); font-weight: 600; }
 .featuresummary { margin-top: 0.8rem; font-size: 0.78rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: 0.7rem; }
 .featuresummary b { color: var(--accent); }
 
@@ -265,6 +287,10 @@ button.primary.glow { animation: glowpulse 1.5s ease-in-out infinite; }
 }
 .field input.mono { font-family: var(--mono); font-size: 0.78rem; }
 .checkline { display: flex; gap: 0.45rem; align-items: center; font-size: 0.78rem; color: var(--muted); }
+/* Same trap as .featurelist: these sit in a .field, so without a rule of their
+   own the `input { width: 100% }` above stretched each scope tickbox to fill
+   its share of the row. */
+.checkline input[type="checkbox"] { width: 1rem; height: 1rem; flex: none; accent-color: var(--accent); }
 
 /* ── API reference ── */
 .endpoint { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 0.9rem; background: var(--panel); overflow: hidden; }
@@ -281,12 +307,56 @@ button.primary.glow { animation: glowpulse 1.5s ease-in-out infinite; }
 .kvs .k { color: var(--muted); }
 .kvs .v { font-family: var(--mono); font-size: 0.8rem; color: var(--ink); word-break: break-all; }
 
+/* ── Narrow screens ──────────────────────────────────────────────────────
+   The sidebar used to become a wrapped horizontal strip of every section at
+   once: 378px of nav on a 780px phone, half the screen gone before any
+   content, and the account, status and theme controls hidden outright, so on
+   a phone there was no way to log out or change theme at all.
+
+   It is now a sticky top bar with a Menu button, and the foot travels with
+   the menu instead of disappearing. */
 @media (max-width: 860px) {
   .layout { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; }
-  .sidebar .spacer, .sidebar .foot { display: none; }
-  .main { padding: 1.25rem; }
+  .sidebar {
+    position: sticky; top: 0; z-index: 20; height: auto;
+    border-right: 0; border-bottom: 1px solid var(--line);
+    padding: 0.5rem 0.9rem 0.6rem;
+  }
+  .brand { padding: 0.2rem 0.1rem; }
+  .menu-btn { display: block; }
+  .navlist { display: none; }
+  .navlist.open { display: flex; padding-top: 0.4rem; }
+  .sidebar .spacer { display: none; }
+  .sidebar .foot { margin-top: 0.7rem; }
+  .main { padding: 1.25rem 1.25rem 4rem; }
   .studio { grid-template-columns: 1fr; }
+  /* The API key control is the widest thing in the topbar; stacked and full
+     width it stays usable instead of shrinking to a 150px slot. */
+  .topbar { flex-direction: column; align-items: stretch; gap: 0.6rem; }
+  .keychip { flex-wrap: wrap; }
+  .keychip input { width: auto; max-width: none; flex: 1 1 10rem; }
+  /* Two columns of checkboxes at 375px leaves no room for the labels. */
+  .featurelist { grid-template-columns: 1fr; }
+  /* Method, path and description on one un-wrapping row overflowed. */
+  .endpoint summary { flex-wrap: wrap; }
+  .endpoint .desc { margin-left: 0; flex-basis: 100%; text-align: left; }
+  .kvs { grid-template-columns: 1fr; gap: 0.1rem 0; }
+  .kvs .k { margin-top: 0.4rem; }
+}
+
+/* Phones proper. Cards keep their shape but stop spending a fifth of the
+   width on their own padding. */
+@media (max-width: 520px) {
+  .main { padding: 1rem 0.85rem 4rem; }
+  .card { padding: 0.95rem 1rem; }
+  .jstep { padding: 1rem 1.05rem; gap: 0.8rem; }
+  .topbar h1 { font-size: 1.3rem; }
+  .plangrid, .grid2 { grid-template-columns: 1fr; }
+  .tmpl-grid, .sheet { grid-template-columns: 1fr; }
+  .msg { max-width: 100%; }
+  /* Full-width taps rather than a row of buttons squeezed to a few
+     characters each. */
+  .jactions > .primary, .jactions > a.primary.btnlink { flex: 1 1 100%; text-align: center; }
 }
 
 /* ── Auth gate ── */

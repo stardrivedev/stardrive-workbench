@@ -43,7 +43,12 @@
     <div class="brand">
       <div class="logo">S</div>
       <div><span class="name">Stardrive</span><span class="tag">Workbench</span></div>
+      <!-- Only shown on narrow screens, where the full section list would fill
+           half the viewport before any content. It stays in the markup at every
+           width so CSS alone decides, and the keyboard order never shifts. -->
+      <button class="menu-btn" id="menuBtn" type="button" aria-expanded="false" aria-controls="navList">Menu</button>
     </div>
+    <div class="navlist" id="navList">
     <a class="nav-item" href="#/home" data-view="home"><span class="glyph">⌂</span> Home</a>
 
     <div class="nav-group">Step 1 · Design a template</div>
@@ -69,6 +74,7 @@
       <div style="margin-top:0.5rem"><span class="statusdot" id="statusDot"></span><span id="statusText">checking…</span></div>
       <div id="versionText" style="margin-top:0.25rem"></div>
       <button class="theme-btn" id="themeBtn" type="button">Theme: system</button>
+    </div>
     </div>
   </aside>
 

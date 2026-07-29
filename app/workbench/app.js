@@ -66,6 +66,28 @@ $('#themeBtn').addEventListener('click', () => {
   applyTheme(theme);
 });
 
+/* ══════════════ Narrow-screen menu ══════════════ */
+/* The sections collapse behind a Menu button below 860px. Everything here is
+   about the button telling the truth: aria-expanded matches what is on
+   screen, choosing a section closes the menu (nobody wants to dismiss it
+   themselves after every tap), and Escape gets out. */
+const menuBtn = $('#menuBtn');
+const navList = $('#navList');
+function setMenu(open) {
+  navList.classList.toggle('open', open);
+  menuBtn.setAttribute('aria-expanded', String(open));
+}
+menuBtn.addEventListener('click', () => setMenu(menuBtn.getAttribute('aria-expanded') !== 'true'));
+navList.addEventListener('click', (e) => { if (e.target.closest('.nav-item')) setMenu(false); });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || menuBtn.getAttribute('aria-expanded') !== 'true') return;
+  setMenu(false);
+  menuBtn.focus(); // don't strand focus inside a list that just vanished
+});
+// Widening past the breakpoint shows the list again by CSS alone, so the
+// button must stop claiming it is expanded, or it lies to a screen reader.
+matchMedia('(max-width: 860px)').addEventListener('change', (e) => { if (!e.matches) setMenu(false); });
+
 /* ══════════════ Router ══════════════ */
 const TITLES = {
   home: 'Home', templates: 'My templates', studio: 'AI Studio',
