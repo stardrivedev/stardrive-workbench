@@ -40,6 +40,7 @@ import { renderHandoffHtml, guideFor, notesFor } from './lib/handoff.mjs';
 import { deployGuide } from './lib/guide.mjs';
 import { createOps } from './lib/ops.mjs';
 import { createIntakeLinks, MAX_SAVES } from './lib/intake-links.mjs';
+import { modulesForSite } from './lib/modules.mjs';
 import { createBatches } from './lib/batches.mjs';
 import { runMapping, validateMapping } from '../../packages/field-mapping/index.mjs';
 
@@ -187,10 +188,21 @@ function enqueueAssemble(siteId, accountId) {
   return jobs.enqueue('assemble', siteId, accountId);
 }
 
+/**
+ * What this site is actually built from: what the licensee ticked, plus every
+ * module those require. Never read `config.modules` directly — see
+ * lib/modules.mjs for the three separate bugs that caused.
+ *
+ * The account is needed because an imported template's manifest is private to
+ * the licensee who imported it.
+ */
+function siteModules(account, site) {
+  return modulesForSite(site, (name) => getTemplate(account, name)?.manifest);
+}
+
 /** Readiness for a site given its facts and modules (text answers only). */
-function siteReadiness(site) {
-  const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
-  return readiness(site.content || {}, modules);
+function siteReadiness(site, account = site.account) {
+  return readiness(site.content || {}, siteModules(account, site));
 }
 
 /**
@@ -318,9 +330,8 @@ function openIntake(token, req, { write }) {
  * looked fine wherever bookings were switched on.
  */
 function specForSite(account, site) {
-  const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
   return specFor(
-    [site.templateId, ...modules].filter(Boolean),
+    [site.templateId, ...siteModules(account, site)].filter(Boolean),
     (name) => getTemplate(account, name)?.manifest,
   );
 }
@@ -1097,7 +1108,7 @@ const ROUTES = [
     handler: ({ params, key }) => {
       const site = loadSite(params.id, key.account);
       const entry = getTemplate(key.account, site.templateId);
-      return { status: 200, body: { slots: assets.slotsFor(entry?.manifest, site.config.modules), assets: assets.state(site.id) } };
+      return { status: 200, body: { slots: assets.slotsFor(entry?.manifest, siteModules(key.account, site)), assets: assets.state(site.id) } };
     },
   },
   {
@@ -1105,7 +1116,7 @@ const ROUTES = [
     handler: ({ params, body, key }) => {
       const site = loadSite(params.id, key.account);
       const entry = getTemplate(key.account, site.templateId);
-      const slotDef = assets.slotsFor(entry?.manifest, site.config.modules).find((s) => s.id === String(params.slot));
+      const slotDef = assets.slotsFor(entry?.manifest, siteModules(key.account, site)).find((s) => s.id === String(params.slot));
       if (!slotDef) throw httpError(422, 'unknown_slot', `No compartment "${params.slot}" on this site — GET /v1/sites/${site.id}/assets lists them.`);
       if (typeof body?.filename !== 'string' || !body.filename.trim() || typeof body?.contentBase64 !== 'string') {
         throw httpError(400, 'bad_request', 'Body must be { filename, contentBase64 }.');
@@ -1162,7 +1173,7 @@ const ROUTES = [
     method: 'GET', pattern: '/v1/sites/:id/content', scope: 'sites',
     handler: ({ params, key }) => {
       const site = loadSite(params.id, key.account);
-      const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
+      const modules = siteModules(key.account, site);
       return {
         status: 200,
         body: {
@@ -1183,7 +1194,7 @@ const ROUTES = [
       if (!body || typeof body !== 'object' || Array.isArray(body.facts) || typeof body.facts !== 'object') {
         throw httpError(400, 'bad_request', 'Send { facts: { ...fieldId: value } }.');
       }
-      const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
+      const modules = siteModules(key.account, site);
       const merged = { ...(site.content || {}), ...body.facts };
       const v = validateFacts(merged, modules);
       if (!v.ok) throw httpError(422, 'invalid_facts', v.errors.join(' '));
@@ -1207,7 +1218,7 @@ const ROUTES = [
       // Same token-quota gate as the Studio, before spending any model budget.
       const account = accounts.getAccount(key.account) || { id: key.account, plan: 'beta' };
       gateModelSpend(account);
-      const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
+      const modules = siteModules(key.account, site);
       const result = await generateCopy({ siteName: site.config.siteName, facts: site.content || {}, modules });
       site.copy = result.pack;
       site.updatedAt = new Date().toISOString();
@@ -1233,7 +1244,7 @@ const ROUTES = [
         account: key.account,
         siteId: site.id,
         siteName: site.config?.siteName || 'your website',
-        modules: Array.isArray(site.config?.modules) ? site.config.modules : [],
+        modules: siteModules(key.account, site),
         note: body?.note,
         ttlDays: Number(body?.ttlDays) || undefined,
       });
@@ -1284,7 +1295,7 @@ const ROUTES = [
       const record = intakeLinks.get(String(params.id));
       if (!record || record.account !== key.account) throw httpError(404, 'not_found', 'No such intake link.');
       const site = loadSite(record.siteId, key.account);
-      const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
+      const modules = siteModules(key.account, site);
       // The licensee's own answers win: they may have corrected something the
       // client got wrong, and adopting must not silently undo that.
       const merged = { ...(record.facts || {}), ...(site.content || {}) };
@@ -1432,7 +1443,7 @@ const ROUTES = [
       if (ready.ready && !site.copy) {
         const account = accounts.getAccount(key.account) || { id: key.account, plan: 'beta' };
         gateModelSpend(account);
-        const modules = Array.isArray(site.config?.modules) ? site.config.modules : [];
+        const modules = siteModules(key.account, site);
         const result = await generateCopy({ siteName: site.config.siteName, facts: site.content || {}, modules });
         site.copy = result.pack;
         if (result.tokens) { try { auth.meter(key.id, 'studio.tokens', result.tokens); } catch { /* best-effort */ } }
@@ -1583,7 +1594,7 @@ const ROUTES = [
     method: 'GET', pattern: '/v1/sites/:id/handoff', scope: 'deploy',
     handler: ({ params, key, url }) => {
       const s = loadSite(params.id, key.account);
-      const modules = Array.isArray(s.config?.modules) ? s.config.modules : [];
+      const modules = siteModules(key.account, s);
       const env = siteEnvFor(key.account, s);
       const spec = specForSite(key.account, s);
 

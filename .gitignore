@@ -7,3 +7,6 @@ out/
 
 # Runtime state of the API service (keys, usage, jobs, workspaces) — never committed.
 services/api/var/
+
+# Failing test output, written by test/run-all.mjs.
+services/api/test-logs/

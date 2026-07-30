@@ -17,8 +17,12 @@
  *   STARDRIVE_PLAYWRIGHT=/path/to/node_modules/playwright/index.mjs \
  *     node services/api/test/run-all.mjs
  *
+ * Set STARDRIVE_TEST_REPEAT=N to run the whole set N times and report which
+ * suites failed in any round — the tool for hunting a rare flake.
+ *
  * Run: node services/api/test/run-all.mjs [name ...]
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -32,7 +36,7 @@ const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
  */
 const SUITES = [
   'template-kit',
-  'accounts', 'site-env', 'seeds', 'ops', 'jobs-runner',
+  'accounts', 'site-env', 'seeds', 'module-coverage', 'ops', 'jobs-runner',
   'billing-money-path', 'backup-restore', 'batch-integration', 'intake-links', 'e2e',
   'console-a11y', 'console-responsive', 'console-states',
   'intake-ui', 'handoff-ui', 'batch-ui', 'studio-ui',
@@ -63,30 +67,69 @@ const run = (name) => new Promise((resolve) => {
   child.on('exit', (code) => resolve({ name, code, out, ms: Date.now() - started }));
 });
 
-const results = [];
-for (const name of selected) {
-  process.stdout.write(`  ${name.padEnd(20)}`);
-  const r = await run(name);
-  results.push(r);
-  const secs = `${(r.ms / 1000).toFixed(1)}s`;
-  if (r.code === 0 && /SKIPPED/.test(r.out)) process.stdout.write(`skip  ${secs}\n`);
-  else if (r.code === 0) process.stdout.write(`pass  ${secs}\n`);
-  else process.stdout.write(`FAIL  ${secs}\n`);
+/**
+ * Failing output goes to a file as well as the screen.
+ *
+ * A failure was lost once simply because the run was piped through `tail` and
+ * the detail scrolled past, which left a real flake with no evidence at all.
+ * Printing it is not enough: it has to survive being read carelessly.
+ */
+const LOG_DIR = path.resolve(TEST_DIR, '..', 'test-logs');
+
+const runOnce = async (label) => {
+  const results = [];
+  for (const name of selected) {
+    process.stdout.write(`  ${name.padEnd(20)}`);
+    const r = await run(name);
+    results.push(r);
+    const secs = `${(r.ms / 1000).toFixed(1)}s`;
+    if (r.code === 0 && /SKIPPED/.test(r.out)) process.stdout.write(`skip  ${secs}\n`);
+    else if (r.code === 0) process.stdout.write(`pass  ${secs}\n`);
+    else {
+      fs.mkdirSync(LOG_DIR, { recursive: true });
+      const file = path.join(LOG_DIR, `${name}${label ? `.${label}` : ''}.log`);
+      fs.writeFileSync(file, r.out);
+      r.logFile = file;
+      process.stdout.write(`FAIL  ${secs}\n`);
+    }
+  }
+  return results;
+};
+
+const rounds = Number(process.env.STARDRIVE_TEST_REPEAT || 1);
+const tally = new Map(); // suite -> how many rounds it failed
+let lastResults = [];
+
+for (let round = 1; round <= rounds; round += 1) {
+  if (rounds > 1) console.log(`\n── round ${round} of ${rounds}`);
+  lastResults = await runOnce(rounds > 1 ? `round${round}` : '');
+  for (const r of lastResults.filter((x) => x.code !== 0)) {
+    tally.set(r.name, (tally.get(r.name) || 0) + 1);
+  }
 }
 
-const failed = results.filter((r) => r.code !== 0);
-const skipped = results.filter((r) => r.code === 0 && /SKIPPED/.test(r.out));
+const failed = lastResults.filter((r) => r.code !== 0);
+const skipped = lastResults.filter((r) => r.code === 0 && /SKIPPED/.test(r.out));
 
-// Only failures get their output printed. A passing suite's log is noise; a
-// failing one is the whole reason you ran this.
+// A passing suite's log is noise; a failing one is the whole reason you ran
+// this, so it gets printed in full.
 for (const r of failed) {
   console.error(`\n${'─'.repeat(70)}\n${r.name}\n${'─'.repeat(70)}\n${r.out.trimEnd()}`);
 }
 
-const passed = results.length - failed.length - skipped.length;
-console.log(`\n${passed} passed, ${failed.length} failed, ${skipped.length} skipped.`);
+const passed = lastResults.length - failed.length - skipped.length;
+if (rounds > 1) {
+  console.log(`\n${rounds} rounds. ${tally.size ? 'Suites that failed at least once:' : 'Nothing failed in any round.'}`);
+  for (const [name, n] of [...tally].sort((a, b) => b[1] - a[1])) {
+    console.log(`  ${name.padEnd(20)} failed ${n}/${rounds}`);
+  }
+}
+// The summary line names the failures, so even `| tail -1` says what broke.
+console.log(`\n${passed} passed, ${failed.length} failed, ${skipped.length} skipped.`
+  + (failed.length ? `  FAILED: ${failed.map((r) => r.name).join(', ')}` : ''));
+if (failed.length) console.log(`Full output kept in ${LOG_DIR}`);
 if (skipped.length) {
   console.log(`Skipped for want of Playwright: ${skipped.map((r) => r.name).join(', ')}`);
   console.log('Set STARDRIVE_PLAYWRIGHT to an install to run them.');
 }
-process.exit(failed.length ? 1 : 0);
+process.exit(failed.length || tally.size ? 1 : 0);

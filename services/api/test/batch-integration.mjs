@@ -249,7 +249,10 @@ await check('draft: the build list saves, reports what each row still needs, and
   ]);
   assert.strictEqual(view.rows.length, 1);
   assert.strictEqual(view.rows[0].rowId, rowId, 'the row id is stable, photos can stage against it');
-  assert.deepStrictEqual(view.rows[0].modules, ['d4-careers-portal']);
+  // Careers requires the CMS, so a build of it contains both. Asserting the
+  // ticked list here is what let the third settings bug through: the row said
+  // one module while the assembler built two.
+  assert.deepStrictEqual(view.rows[0].modules, ['d4-careers-portal', 'd4-cms-core']);
   assert.strictEqual(view.rows[0].readiness.submittable, false, 'careers still needs its roles');
   assert.deepStrictEqual(view.rows[0].readiness.missing.map((m) => m.label), ['Open roles']);
   assert.strictEqual(view.counts.ready, 0);

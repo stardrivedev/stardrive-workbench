@@ -135,7 +135,12 @@ to a hosted database later does not touch the routes.
 npm test --prefix services/api          # every suite, with a summary
 ```
 
-Eighteen suites. The browser tier needs Playwright and skips cleanly without
+Failing output is written to `services/api/test-logs/` as well as printed, so
+a failure survives being read through `tail`. `STARDRIVE_TEST_REPEAT=N` runs
+the whole set N times and reports which suites failed in any round, which is
+the tool for hunting a rare flake.
+
+Nineteen suites. The browser tier needs Playwright and skips cleanly without
 it:
 
 ```
@@ -158,6 +163,12 @@ what they hold:
   and the narrow-screen navigation contract
 - `console-states.mjs` — what the console says when it is empty, when it is
   waiting, and when it cannot reach the server at all
+- `module-coverage.mjs` — the standing guard on one bug class. Three times a
+  built site has needed something nobody was asked for, because the asking
+  code worked from a shorter module list than the assembler built from. This
+  asserts the invariant directly, for every module and every pair of them:
+  everything the assembled site declares is accounted for by the code that
+  asks the licensee and the client for things
 - `intake-links.mjs` and `intake-ui.mjs` — the client-facing intake link, which
   is the only surface an unauthenticated stranger can write to. The first
   covers the boundary (what a revoked, expired, adopted or invented token can

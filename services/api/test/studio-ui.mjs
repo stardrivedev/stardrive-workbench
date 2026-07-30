@@ -120,10 +120,27 @@ await check('"Start over" clears the saved draft, not just the screen', async ()
   assert.match(asked.confirmLabel, /Start over/i);
   assert.match(asked.cancelLabel, /Keep working/i);
   await page.waitForFunction(() => document.querySelector('#brBusiness')?.value === '', null, { timeout: 5000 });
+
+  // The draft is really gone SERVER-side. Asserting only that the field is
+  // empty after a sleep can pass for the wrong reason: on a slow machine the
+  // restore may simply not have run yet, and an empty box proves nothing.
+  const stored = await page.evaluate(async () => {
+    const key = localStorage.getItem('sd.apiKey');
+    const r = await fetch('/v1/studio/draft', { headers: { Authorization: 'Bearer ' + key } });
+    return { status: r.status, body: await r.json().catch(() => ({})) };
+  });
+  assert.strictEqual(Boolean(stored.body?.draft?.brief?.business), false,
+    `the draft survived on the server: ${JSON.stringify(stored.body).slice(0, 200)}`);
+
   await page.reload({ waitUntil: 'networkidle' });
   await page.click('[data-view="studio"]');
   await page.waitForSelector('#view-studio.active');
-  await page.waitForTimeout(800);
+  // Wait for the restore to have actually run before checking it restored
+  // nothing: the Studio marks its save state once it has looked.
+  await page.waitForFunction(
+    () => document.querySelector('#studioSaveState') !== null,
+    null, { timeout: 8000 },
+  );
   assert.strictEqual(await page.locator('#brBusiness').inputValue(), '', 'it stays gone');
 });
 

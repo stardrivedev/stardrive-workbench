@@ -16,6 +16,8 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadCatalog } from './templates.mjs';
+import { resolveModules } from './modules.mjs';
 
 const require = createRequire(import.meta.url);
 const PROMPTS = require(path.join(
@@ -27,7 +29,25 @@ export const RULEBOOK_PROMPT = PROMPTS.RULEBOOK_PROMPT;
 export const STUDIO_FORMAT = PROMPTS.STUDIO_FORMAT;
 export const FEATURES = PROMPTS.FEATURES;
 export const featureBlockFor = PROMPTS.featureBlockFor;
-export const modulesForFeatures = PROMPTS.modulesForFeatures;
+/**
+ * Feature ids → the modules the site will ACTUALLY be built from.
+ *
+ * The mapping itself lives in studio-prompt.js because the console needs it in
+ * the browser, where the catalog does not exist. It returns only the modules a
+ * feature names directly, and the assembler then pulls in whatever those
+ * require — so on this side of the wire the answer has to be resolved, or
+ * everything downstream is asked about a shorter site than the one being
+ * built. See lib/modules.mjs for what that cost.
+ */
+export function modulesForFeatures(ids) {
+  const direct = PROMPTS.modulesForFeatures(ids);
+  return resolveModules(direct, (name) => catalog().get(name)?.manifest ?? null);
+}
+
+/** The bundled catalog, read once. Lazily, because loading it at import time
+ *  would make every consumer of this file pay for it. */
+let CATALOG = null;
+const catalog = () => (CATALOG ??= loadCatalog());
 
 /** The full system prompt for one design generation with these feature ids. */
 export function designSystemPrompt(featureIds = []) {

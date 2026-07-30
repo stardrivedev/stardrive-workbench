@@ -772,7 +772,11 @@ await check('batch draft: rows save with readiness, photos stage per row, an emp
   } });
   assert.strictEqual(saved.status, 200);
   const row = saved.body.rows[0];
-  assert.deepStrictEqual(row.modules, ['d4-careers-portal']);
+  // The careers module requires the CMS, so a build of it contains both. This
+  // used to assert the ticked list, which is exactly what the third settings
+  // bug was: everything downstream working from a shorter site than the one
+  // being assembled.
+  assert.deepStrictEqual(row.modules, ['d4-careers-portal', 'd4-cms-core']);
   assert.strictEqual(row.readiness.submittable, false, 'careers has not listed its roles yet');
   assert.deepStrictEqual(row.readiness.missing.map((m) => m.label), ['Open roles']);
 
@@ -908,7 +912,7 @@ await check('content fields: the intake schema for a build that has no site yet'
   assert.strictEqual(base.body.fields.filter((f) => f.required).length, 4, 'four questions every site must answer');
   assert.ok(base.body.groups.identity, 'the group labels come with it');
   const careers = await call('GET', '/v1/content/fields?features=careers', { key: fullKey });
-  assert.deepStrictEqual(careers.body.modules, ['d4-careers-portal']);
+  assert.deepStrictEqual(careers.body.modules, ['d4-careers-portal', 'd4-cms-core'], 'what the feature drags in comes with it');
   assert.ok(careers.body.fields.some((f) => f.id === 'roles' && f.required), 'the module adds its own required question');
 });
 
@@ -1253,6 +1257,33 @@ await check('the roster says where each site stands, without a request per site'
     `an untouched site owes more (${owes.settingsOutstanding}) than one filled in (${site.settingsOutstanding})`);
   // And the roster leaks nothing: no secret travels in a list of twenty sites.
   assert.strictEqual(JSON.stringify(after.body).includes('re_live_topsecret'), false);
+});
+
+await check('a module the licensee never ticked still gets asked about and handed over', async () => {
+  // Ticking "Photo gallery" builds a site with the CMS in it, because the
+  // gallery requires it. config.modules holds only what was ticked, so
+  // everything downstream used to work from a shorter list than the assembler
+  // built from: no BLOB_READ_WRITE_TOKEN asked for (the client's CMS uploads
+  // land on local disk, which a redeploy wipes) and no Pages or Inbox in the
+  // handoff, two things they were told they could do themselves.
+  const made = await call('POST', '/v1/sites', {
+    key: fullKey,
+    body: { templateId: 'd4-site-template', config: { siteName: 'Gallery Only Co', modules: ['d4-gallery-editor'] } },
+  });
+  assert.strictEqual(made.status, 202);
+  await waitForJob(fullKey, made.body.jobId);
+
+  const env = await call('GET', `/v1/sites/${made.body.siteId}/env`, { key: fullKey });
+  const names = env.body.spec.map((v) => v.name);
+  assert.ok(names.includes('BLOB_READ_WRITE_TOKEN'), 'the CMS upload token that came with the gallery is asked for');
+  assert.ok(names.includes('ADMIN_PASSWORD'), 'and the admin password it needs');
+  assert.ok(env.body.missing.some((m) => m.name === 'BLOB_READ_WRITE_TOKEN'), 'and it counts as outstanding until supplied');
+
+  const handoff = await fetch(`${BASE}/v1/sites/${made.body.siteId}/handoff`, { headers: { Authorization: `Bearer ${fullKey}` } });
+  const page = await handoff.text();
+  assert.match(page, /Galleries/, 'the client is told about the gallery they asked for');
+  assert.match(page, /Pages/, 'and the page editor that came with it');
+  assert.match(page, /Inbox/, 'and the inbox their contact form fills');
 });
 
 await check('a caller cannot overwrite a managed variable through the settings route', async () => {
