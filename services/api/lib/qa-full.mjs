@@ -186,8 +186,33 @@ export async function runFullQA({ dir, routes = ['/'], port = 4290, log = () => 
         await page.setViewportSize({ width: 375, height: 800 });
         await page.goto(`${host}/`, { waitUntil: 'networkidle', timeout: 30_000 });
         await page.waitForTimeout(800);
-        const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
-        add('no horizontal overflow at 375px', !overflow);
+        // Name the element, not just the fact. "No horizontal overflow at
+        // 375px: failed" tells whoever has to fix it nothing at all, and this
+        // check gates a build, so it owes them a starting point.
+        const overflow = await page.evaluate(() => {
+          const doc = document.documentElement;
+          const over = doc.scrollWidth - window.innerWidth;
+          if (over <= 1) return null;
+          const describe = (el) => {
+            const id = el.id ? `#${el.id}` : '';
+            const cls = typeof el.className === 'string' && el.className.trim()
+              ? `.${el.className.trim().split(/\s+/).slice(0, 3).join('.')}` : '';
+            return `${el.tagName.toLowerCase()}${id}${cls}`;
+          };
+          const culprits = [];
+          for (const el of document.body.querySelectorAll('*')) {
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 && r.height === 0) continue;
+            if (r.right <= window.innerWidth + 1) continue;
+            // The outermost offender is the useful one: its children overflow
+            // only because it does.
+            if (culprits.some((c) => c.el.contains(el))) continue;
+            culprits.push({ el, text: `${describe(el)} reaches ${Math.round(r.right)}px` });
+          }
+          return { over, culprits: culprits.slice(0, 4).map((c) => c.text) };
+        });
+        add('no horizontal overflow at 375px', !overflow,
+          overflow ? `page is ${overflow.over}px too wide — ${overflow.culprits.join('; ') || 'no single element found, check a min-width or a negative margin'}` : undefined);
 
         add('no console errors on the home page', consoleErrors.length === 0, consoleErrors.slice(0, 2).join(' | ') || undefined);
       } finally {

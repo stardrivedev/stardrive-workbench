@@ -616,7 +616,14 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
       qa: { mode: qaMode, verdict: passed ? 'passed' : 'failed', checks },
     };
     log(job, `QA (${qaMode}): ${passed ? 'PASSED' : 'FAILED'} — ${checks.filter((c) => c.status === 'pass').length}/${checks.length} checks.`);
-    if (!passed) throw new Error('QA failed: ' + checks.filter((c) => c.status === 'fail').map((c) => c.name).join(', '));
+    if (!passed) {
+      // With the detail, not just the name. Every check that can fail records
+      // why, and dropping it here made a failed build say "no horizontal
+      // overflow at 375px" and nothing whatever about where to look.
+      const failed = checks.filter((c) => c.status === 'fail')
+        .map((c) => (c.detail ? `${c.name} — ${c.detail}` : c.name));
+      throw new Error('QA failed: ' + failed.join('; '));
+    }
   }
 
   async function assembleDry(job, site) {

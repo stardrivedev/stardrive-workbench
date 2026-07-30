@@ -20,7 +20,10 @@ export default async function HomePage() {
             <div aria-hidden className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/55 to-black/35" />
           </>
         ) : (
-          <div aria-hidden className="pointer-events-none absolute inset-0">
+          <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+            {/* overflow-hidden above: these blobs sit deliberately outside the
+                hero, and without clipping they widen the page itself and fail
+                the 375px check on every single build. */}
             <div className="absolute -top-32 right-[-12%] h-96 w-96 rounded-full bg-accent/10 blur-3xl" />
             <div className="absolute -bottom-40 left-[-8%] h-80 w-80 rounded-full bg-accent/5 blur-3xl" />
           </div>

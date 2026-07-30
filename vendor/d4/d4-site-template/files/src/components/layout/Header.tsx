@@ -74,17 +74,29 @@ export default function Header() {
         ref={headerRef}
         className="sticky top-0 z-[60] border-b border-heading/10 bg-surface/90 backdrop-blur"
       >
-        <div className="mx-auto flex h-16 max-w-6xl items-center gap-6 px-4 sm:px-6">
+        <div className="mx-auto flex h-16 max-w-6xl items-center gap-3 px-4 sm:gap-6 sm:px-6">
+          {/*
+            min-w-0, not flex-shrink-0. This block was unshrinkable and held a
+            logo up to 200px wide AND the business name, so any client with a
+            logo and a name longer than a word or two pushed the whole page
+            past the edge of a phone. It cannot adapt if it is not allowed to.
+          */}
           <Link
             href="/"
             onClick={() => setOpenGroup(null)}
-            className="flex flex-shrink-0 items-center gap-2.5 text-lg font-semibold tracking-tight text-heading"
+            className="flex min-w-0 items-center gap-2.5 text-lg font-semibold tracking-tight text-heading"
           >
             {siteAssets.logo?.[0] ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={siteAssets.logo[0]} alt="" className="h-11 w-auto max-w-[200px] object-contain" />
+              <img src={siteAssets.logo[0]} alt="" className="h-11 w-auto max-w-[8.5rem] flex-shrink-0 object-contain sm:max-w-[200px]" />
             ) : null}
-            {siteConfig.name}
+            {/* With a logo, the name is redundant on a narrow screen and the
+                logo already says whose site this is. Without one it is the
+                only identification there is, so it always shows and truncates
+                rather than overflowing. */}
+            <span className={siteAssets.logo?.[0] ? "hidden truncate sm:inline" : "truncate"}>
+              {siteConfig.name}
+            </span>
           </Link>
 
           {/* Desktop nav */}
@@ -156,7 +168,9 @@ export default function Header() {
           </div>
 
           {/* Mobile: theme toggle + hamburger */}
-          <div className="ml-auto flex items-center gap-2 lg:hidden">
+          {/* flex-shrink-0: the hamburger is how a phone reaches the whole
+              site, so it is the last thing that may give up space. */}
+          <div className="ml-auto flex flex-shrink-0 items-center gap-2 lg:hidden">
             {darkMode && <ThemeToggle />}
             <button
               type="button"
