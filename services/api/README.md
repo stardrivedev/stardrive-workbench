@@ -137,6 +137,15 @@ until `STRIPE_SECRET_KEY` (+ `STRIPE_PRICE_<PLAN>` price ids) are set.
 - **Email**: welcome + lead notifications via Resend, dormant until
   `RESEND_API_KEY`. **Fair-use** caps per-generation input.
 
+- **Durable storage, wherever the site is hosted**: uploaded images go to
+  Vercel Blob or any S3-compatible bucket (Cloudflare R2, Backblaze B2,
+  Wasabi, MinIO, AWS), whichever credential the site has. Image storage is one
+  requirement with two answers rather than six separate variables, so a
+  licensee on Netlify is never told to fetch a Vercel credential. In
+  production with neither configured the upload is **refused with its reason**
+  rather than written to a disk the next deploy erases, and publishing a site
+  whose admin has no database behind it is refused (`422 no_durable_store`,
+  `force:true` for a throwaway demo).
 - **Client intake links**: `POST /v1/sites/{id}/intake-link` mints a URL the
   licensee sends to their client, who fills in the site's own questions and
   uploads their logo and photographs with no account, no session and no key.
@@ -150,9 +159,6 @@ until `STRIPE_SECRET_KEY` (+ `STRIPE_PRICE_<PLAN>` price ids) are set.
 - **One-click publish beyond Vercel and Netlify** — Cloudflare Pages,
   Railway and Render are the obvious next targets. A GitHub push already
   reaches any host in two steps; this is about collapsing that to one.
-- **Vendor-neutral image storage** — CMS uploads still assume Vercel Blob, so
-  a CMS site hosted elsewhere has a broken upload feature until this gets the
-  treatment the database already had.
 - Outbound **webhooks** (`job.completed`, `job.failed`, `usage.threshold`).
 - Turso-backed store · CORS for third-party front ends · **live-key
   activation** of Studio, Stripe, email and every hosting provider: the seams

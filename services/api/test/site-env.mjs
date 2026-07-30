@@ -249,11 +249,23 @@ await check('the in-app guide is built from the same definitions the deploy path
   const guide = deployGuide();
   // If these could drift, the page in the app would describe a product that
   // no longer exists. Deriving them is the whole point.
-  assert.deepStrictEqual(
-    guide.environment.supplied.map((v) => v.name).sort(),
-    Object.keys(SUPPLIED).sort(),
-    'every setting the licensee owes is on the page'
-  );
+  //
+  // Every variable must be findable, but not necessarily as its own row: a
+  // requirement with alternatives (image storage) appears once, with its
+  // options named underneath, which is the point of grouping it. So the
+  // invariant is reachability, not a flat one-to-one list.
+  const onThePage = new Set();
+  for (const entry of guide.environment.supplied) {
+    if (entry.oneOf) for (const opt of entry.oneOf) for (const v of opt.vars) onThePage.add(v);
+    else onThePage.add(entry.name);
+  }
+  const unreachable = Object.entries(SUPPLIED)
+    // The optional extras of a group (endpoint, region, public URL) have
+    // defaults and are deliberately not put in front of a licensee here.
+    .filter(([, def]) => !def.optionalWithin)
+    .map(([name]) => name)
+    .filter((name) => !onThePage.has(name));
+  assert.deepStrictEqual(unreachable, [], 'every setting the licensee owes is on the page');
   assert.deepStrictEqual(
     guide.environment.managed.map((v) => v.name).sort(),
     Object.keys(MANAGED).sort(),

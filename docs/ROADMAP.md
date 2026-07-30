@@ -36,12 +36,19 @@ own words and uploads their own logo and photographs with no account, and the
 licensee reads it and adopts it onto the site. This is the first feature that
 takes work off the licensee rather than doing the same work faster.
 
+**Shipped 2026-07-30**: vendor-neutral image storage, which was the last
+correctness gap of any size. Uploads now go to Vercel Blob or any
+S3-compatible bucket, the local-disk fallback is development-only (in
+production the upload is refused with its reason rather than accepted and
+erased by the next deploy), and publishing a site whose admin has no database
+behind it is refused outright. Also found and fixed by the proof run: the base
+template failed the full QA tier's own 375px overflow check, which meant
+nobody could have shipped with STARDRIVE_QA=full at all.
+
 **Known gaps that are not launch blockers**, carried from M2: outbound
-webhooks, the Turso-backed store swap, CORS for third-party front ends,
+webhooks, the Turso-backed store swap, CORS for third-party front ends, and
 one-click publish beyond Vercel and Netlify (Cloudflare Pages, Railway,
-Render), and vendor-neutral image storage — CMS uploads still assume Vercel
-Blob, so a CMS site hosted elsewhere has a broken upload feature until that
-gets the treatment the database already had.
+Render).
 
 ## M0 — Scaffold (DONE 2026-07-16)
 Repo, vision, architecture, and the template-author contract committed.

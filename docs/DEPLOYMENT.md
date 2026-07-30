@@ -195,8 +195,22 @@ Every variable a built site needs falls into exactly one of three buckets, and
 | Bucket | Examples | Who fills it |
 |---|---|---|
 | **Managed** | `ADMIN_PASSWORD`, `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `NEXT_PUBLIC_SITE_URL` | Stardrive, automatically, on every publish |
-| **Supplied** | `RESEND_API_KEY`, `CONTACT_TO_EMAIL`, `BLOB_READ_WRITE_TOKEN` | The licensee, once per site, in the Workbench |
+| **Supplied** | `RESEND_API_KEY`, `CONTACT_TO_EMAIL`, and image storage (below) | The licensee, once per site, in the Workbench |
 | **Optional** | anything a module declares and nobody set | Nobody. The feature stays dormant and says so. |
+
+**Image storage is one requirement with two answers**, because the right one
+depends on the host: `BLOB_READ_WRITE_TOKEN` (Vercel Blob), or `S3_BUCKET` +
+`S3_ACCESS_KEY_ID` + `S3_SECRET_ACCESS_KEY` for any S3-compatible bucket
+(Cloudflare R2, Backblaze B2, Wasabi, MinIO, AWS), optionally with
+`S3_ENDPOINT`, `S3_REGION` and `S3_PUBLIC_BASE_URL`. Either one satisfies it,
+and the Workbench offers whichever suits the hosting that licensee has
+connected. With neither set a production site **refuses uploads and says why**,
+rather than writing them to a disk the next deploy erases.
+
+Publishing a site whose admin has no database behind it is refused for the
+same reason (`422 no_durable_store`): the client would change their opening
+hours, watch it save, and lose it on the next deploy. `force: true` gets past
+it for a throwaway demo.
 
 `ADMIN_PASSWORD` is generated per site and is **stable**: rotating it on every
 publish would silently lock out a client who wrote it down. `POST
@@ -232,8 +246,10 @@ is supported through the git path instead.
 
 **The one constraint worth knowing before promising anything:** a site with an
 admin area or any form is an application, not a folder of files, so it needs a
-host that runs Node. That rules out plain S3, GitHub Pages and basic shared
-hosting. `DEPLOY.md` says so in the client's copy too.
+host that runs Node. That rules out static-only hosting: a plain S3 or R2
+bucket, GitHub Pages, basic shared hosting. (An S3 bucket is still exactly
+right for the site's *uploaded images* — storing files and running an
+application are different jobs.) `DEPLOY.md` says so in the client's copy too.
 
 ## Handing a site to the client
 

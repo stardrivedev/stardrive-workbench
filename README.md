@@ -31,6 +31,10 @@ The job runs in five steps, which is also how the console is laid out.
 4. **Publish to hosting you own.** Vercel, Netlify or a GitHub push, using
    **your** credentials so every client can live in their own account. Attach
    their domain. Or export the project with a Dockerfile and run it anywhere.
+   Images and content go somewhere durable wherever you host: Vercel Blob, or
+   any S3-compatible bucket (Cloudflare R2, Backblaze B2, Wasabi, MinIO, AWS),
+   and publishing an admin with no database behind it is refused rather than
+   handed to a client who would lose their work on the next deploy.
 5. **Hand it over.** A printable page written for the client rather than for a
    developer: where to sign in, the password, and what each part of their
    admin does.
@@ -140,7 +144,7 @@ a failure survives being read through `tail`. `STARDRIVE_TEST_REPEAT=N` runs
 the whole set N times and reports which suites failed in any round, which is
 the tool for hunting a rare flake.
 
-Nineteen suites. The browser tier needs Playwright and skips cleanly without
+Twenty suites. The browser tier needs Playwright and skips cleanly without
 it:
 
 ```
@@ -176,9 +180,15 @@ what they hold:
   both sides in two browser contexts, because that is the real situation
 - `handoff-ui.mjs`, `batch-ui.mjs`, `studio-ui.mjs` — the three flows a
   licensee actually performs, in a real browser
+- `s3-signing.mjs` — the object-storage request signing, checked against the
+  documented SigV4 steps recomputed independently plus a frozen signature. It
+  is the one piece here that fails late and quietly: a signing bug compiles,
+  deploys, and only shows itself when a client uploads a photograph weeks later
 - `proof-run.mjs` — the real engine and the full QA tier end to end (npm
   install, next build, serve, check every route). Slow, needs the network, and
-  not in the default run: `npm run test:proof --prefix services/api`
+  not in the default run: `npm run test:proof --prefix services/api`. It is
+  also the only thing that catches a layout regression in the shipped template,
+  which is exactly how the base template was found failing our own 375px check
 
 ## Running it
 

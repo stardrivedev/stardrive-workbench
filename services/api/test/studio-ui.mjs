@@ -165,6 +165,20 @@ await check('the shared catalog is not offered for refining', async () => {
 
 await check('a template reopens in the Studio ready to refine', async () => {
   await page.locator('#templateGrid .tmpl-card', { hasText: 'harbour-light' }).locator('[data-act="refine"]').click();
+  // Two separate things can go wrong here and they used to look identical:
+  // the click never reaching a handler (the grid re-renders underneath it),
+  // and the handler running but failing to open the view. Wait for each in
+  // turn so a failure says which.
+  await page.waitForFunction(() => location.hash === '#/studio', null, { timeout: 8000 })
+    .catch(async () => {
+      const diag = await page.evaluate(() => ({
+        hash: location.hash,
+        trouble: document.getElementById('troubleBanner')?.hidden === false
+          ? document.getElementById('troubleBanner')?.textContent : null,
+        cards: document.querySelectorAll('#templateGrid .tmpl-card').length,
+      }));
+      throw new Error(`Refine never navigated. ${JSON.stringify(diag)}`);
+    });
   await page.waitForSelector('#view-studio.active', { timeout: 8000 });
   await page.waitForSelector('#refineWrap:not([hidden])', { timeout: 8000 });
   // #chatlog sits inside a collapsed <details>, so read textContent.

@@ -12,7 +12,7 @@
  * within a month, and wrong documentation is worse than none: it costs the
  * reader the time to follow it plus the time to discover it lied.
  */
-import { MANAGED, SUPPLIED } from './site-env.mjs';
+import { MANAGED, SUPPLIED, SUPPLIED_GROUPS } from './site-env.mjs';
 
 /**
  * Where a Stardrive site can go. `how` is the mechanism, which is what decides
@@ -51,11 +51,32 @@ export const HOW_LABELS = {
  * plainly is half the value of this page.
  */
 export function environmentGuide() {
+  // Grouped requirements are listed ONCE with their alternatives, not once per
+  // variable. Image storage has two valid answers depending on the host, and
+  // spelling out six variables here would undo the whole point of grouping
+  // them in the settings panel.
+  const seen = new Set();
+  const supplied = [];
+  for (const [name, v] of Object.entries(SUPPLIED)) {
+    if (v.group) {
+      if (seen.has(v.group)) continue;
+      seen.add(v.group);
+      const group = SUPPLIED_GROUPS[v.group];
+      supplied.push({
+        name: v.group,
+        label: group.label,
+        why: group.why,
+        secret: false,
+        oneOf: group.options.map((o) => ({ label: o.label, vars: o.vars })),
+        where: group.options.map((o) => o.label).join(', or '),
+      });
+      continue;
+    }
+    supplied.push({ name, label: v.label, where: v.where, why: v.why, secret: Boolean(v.secret) });
+  }
   return {
     managed: Object.entries(MANAGED).map(([name, why]) => ({ name, why })),
-    supplied: Object.entries(SUPPLIED).map(([name, v]) => ({
-      name, label: v.label, where: v.where, why: v.why, secret: Boolean(v.secret),
-    })),
+    supplied,
   };
 }
 

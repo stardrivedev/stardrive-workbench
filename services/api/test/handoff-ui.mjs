@@ -215,6 +215,12 @@ await check('Going live explains the whole job without leaving the app', async (
 
   assert.match(text, /Settings you supply/);
   assert.match(text, /Resend API key/, 'named, with what it is for');
+  // Image storage is one requirement with two answers here too, not six
+  // variables presented as though all of them were needed.
+  assert.match(text, /Somewhere to keep uploaded images/);
+  assert.match(text, /either one/i, 'stated as a choice');
+  assert.match(text, /S3_BUCKET/, 'with the S3 option spelled out');
+  assert.match(text, /BLOB_READ_WRITE_TOKEN/, 'and the Vercel one');
   assert.match(text, /Handled for you/, 'and what they never have to touch');
   assert.match(text, /ADMIN_PASSWORD/);
   assert.match(text, /runs Node/, 'the constraint that bites is on the page');

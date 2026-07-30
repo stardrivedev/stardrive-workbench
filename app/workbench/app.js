@@ -979,7 +979,12 @@ async function refineTemplate(name) {
   addMsg('systemnote', `Opened "${name}" from your library. Describe any change and press Refine; importing again under the same name replaces it.`);
   renderGenOutcome(blocks);
   const rw = $('#refineWrap'); if (rw) rw.hidden = false;
-  location.hash = '#/studio';
+  // Assigning the hash only navigates when it CHANGES: arriving here already
+  // on #/studio would leave the licensee looking at the page they were on,
+  // with no sign that anything happened. Same trap as pressing the section you
+  // are already in.
+  if (location.hash === '#/studio') route();
+  else location.hash = '#/studio';
   saveStudioDraft();
   setTimeout(() => $('#refineWrap')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 120);
 }
@@ -2747,8 +2752,18 @@ async function renderGoingLive() {
     '<span style="color:var(--body)">' + esc(s.detail) + '</span></li>').join('');
 
   const supplied = (body.environment?.supplied || []).map((v) =>
-    '<tr><td><b>' + esc(v.label) + '</b><br><code style="font-size:0.76rem">' + esc(v.name) + '</code></td>' +
-    '<td>' + esc(v.why) + (v.where ? '<br><span style="color:var(--muted)">Get it from ' + esc(v.where) + '</span>' : '') + '</td></tr>').join('');
+    '<tr><td><b>' + esc(v.label) + '</b>' +
+      // A requirement with alternatives names them rather than pretending its
+      // group key is a variable somebody should go and set.
+      (v.oneOf
+        ? '<br><span style="font-size:0.76rem;color:var(--muted)">either one</span>'
+        : '<br><code style="font-size:0.76rem">' + esc(v.name) + '</code>') + '</td>' +
+    '<td>' + esc(v.why) +
+      (v.oneOf
+        ? '<ul style="margin:0.35rem 0 0;padding-left:1.1rem;font-size:0.8rem">' + v.oneOf.map((o) =>
+          '<li>' + esc(o.label) + ': <code style="font-size:0.72rem">' + o.vars.map(esc).join('</code> <code style="font-size:0.72rem">') + '</code></li>').join('') + '</ul>'
+        : (v.where ? '<br><span style="color:var(--muted)">Get it from ' + esc(v.where) + '</span>' : '')) +
+    '</td></tr>').join('');
 
   const managed = (body.environment?.managed || []).map((v) =>
     '<tr><td><code style="font-size:0.76rem">' + esc(v.name) + '</code></td><td>' + esc(v.why) + '</td></tr>').join('');
