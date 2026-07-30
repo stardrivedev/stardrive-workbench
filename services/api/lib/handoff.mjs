@@ -56,7 +56,7 @@ export function guideFor(modules = []) {
  * lives, what needs their own account, what nobody has set up yet. Honest
  * gaps belong in a handoff, not in a support ticket three weeks later.
  */
-export function notesFor({ modules = [], missingEnv = [], domain = null, hasEmail = false }) {
+export function notesFor({ modules = [], missingEnv = [], domain = null, hasEmail = false, hasDatabase = true }) {
   const notes = [];
   if (!domain) {
     notes.push('This site is live on its hosting address. If you have your own web address, it can be pointed here at any time.');
@@ -74,9 +74,17 @@ export function notesFor({ modules = [], missingEnv = [], domain = null, hasEmai
     notes.push('Check your working hours in the Bookings tab before you share the booking page. Customers can only book times you have marked as working.');
   }
   for (const item of missingEnv) {
-    if (item.name === 'BLOB_READ_WRITE_TOKEN') {
-      notes.push('Image uploads are not set up for permanent storage yet. Photos you upload may not survive the next update to your site.');
+    // The group name, since image storage has two valid answers and the gap is
+    // reported once rather than once per variable.
+    if (item.name === 'imageStorage' || item.name === 'BLOB_READ_WRITE_TOKEN') {
+      notes.push('Permanent storage for uploaded images is not set up yet. Until it is, your site will refuse new photo uploads rather than accept them and lose them later. Ask whoever built your site to finish this.');
     }
+  }
+  // The counterpart nobody had written. If the CMS has no database behind it,
+  // the client's edits go to a file on the server that the next update wipes,
+  // and they would have no way of knowing until their work vanished.
+  if (modules.includes('d4-cms-core') && !hasDatabase) {
+    notes.push('IMPORTANT: this site does not yet have a permanent database, so changes you make in your dashboard may be lost the next time the site is updated. Do not rely on it for anything you cannot retype until whoever built your site has connected one.');
   }
   return notes;
 }

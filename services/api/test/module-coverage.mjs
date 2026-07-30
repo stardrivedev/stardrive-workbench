@@ -30,7 +30,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { specFor, missingFrom, SUPPLIED, MANAGED, deployEnv } from '../lib/site-env.mjs';
+import { specFor, missingFrom, SUPPLIED, SUPPLIED_GROUPS, MANAGED, deployEnv } from '../lib/site-env.mjs';
 import { resolveModules } from '../lib/modules.mjs';
 import { guideFor } from '../lib/handoff.mjs';
 import { loadCatalog } from '../lib/templates.mjs';
@@ -211,6 +211,80 @@ check('every vendored module is in the catalog, so none can be built but unliste
     .filter((d) => d.startsWith('d4-') && d !== 'd4-site-builder');
   const missing = vendored.filter((name) => !catalog.get(name));
   assert.deepStrictEqual(missing, [], `vendored but not in the catalog: ${missing.join(', ')}`);
+});
+
+check('the catalog is byte-identical to the manifests actually built from', () => {
+  // data/README.md calls these "verbatim copies", and nothing enforced it. If
+  // they drift, the API asks the licensee for one set of variables while the
+  // engine builds a site that reads another — the same bug class as the three
+  // this file already guards, in a new place.
+  const drifted = [];
+  for (const name of catalog.keys()) {
+    const vendorPath = path.join(HERE, '..', '..', '..', 'vendor', 'd4', name, 'manifest.json');
+    if (!fs.existsSync(vendorPath)) { drifted.push(`${name}: no vendored manifest`); continue; }
+    const a = fs.readFileSync(path.join(HERE, '..', 'data', 'catalog', `${name}.json`), 'utf-8').replace(/\r\n/g, '\n');
+    const b = fs.readFileSync(vendorPath, 'utf-8').replace(/\r\n/g, '\n');
+    if (a !== b) drifted.push(name);
+  }
+  assert.deepStrictEqual(drifted, [], `catalog and vendor manifests differ: ${drifted.join(', ')}`);
+});
+
+// ── 6. Either/or requirements ────────────────────────────────────────────
+check('every grouped variable belongs to a group that exists and can be satisfied', () => {
+  const problems = [];
+  for (const [name, def] of Object.entries(SUPPLIED)) {
+    if (!def.group) continue;
+    const group = SUPPLIED_GROUPS[def.group];
+    if (!group) { problems.push(`${name} claims group "${def.group}", which is not defined`); continue; }
+    // A variable in a group must either be part of an option or be marked
+    // optional within it. Anything else can never be asked for coherently.
+    const inAnOption = group.options.some((o) => o.vars.includes(name));
+    if (!inAnOption && !def.optionalWithin) {
+      problems.push(`${name} is in group "${def.group}" but in none of its options`);
+    }
+  }
+  for (const [key, group] of Object.entries(SUPPLIED_GROUPS)) {
+    assert.ok(group.options.length >= 2, `group "${key}" with fewer than two options is not a choice`);
+    for (const opt of group.options) {
+      assert.ok(opt.vars.length, `group "${key}" option "${opt.id}" requires nothing`);
+      for (const v of opt.vars) {
+        if (!SUPPLIED[v]) problems.push(`group "${key}" option "${opt.id}" wants ${v}, which is not a supplied variable`);
+      }
+    }
+  }
+  assert.deepStrictEqual(problems, [], `\n        ${problems.join('\n        ')}`);
+});
+
+check('one complete option satisfies the group, and a half-filled one does not', () => {
+  const spec = specFor([BASE, 'd4-cms-core'], manifestOf);
+  const missingNames = (env) => missingFrom(spec, env).map((m) => m.name);
+
+  assert.ok(missingNames({}).includes('imageStorage'),
+    'a site with no storage at all reports the requirement');
+  assert.strictEqual(missingNames({}).filter((n) => n.startsWith('S3_') || n === 'BLOB_READ_WRITE_TOKEN').length, 0,
+    'and reports it once, not once per variable');
+
+  for (const env of [
+    { BLOB_READ_WRITE_TOKEN: 'vercel_blob_token' },
+    { S3_BUCKET: 'b', S3_ACCESS_KEY_ID: 'k', S3_SECRET_ACCESS_KEY: 's' },
+  ]) {
+    assert.strictEqual(missingNames(env).includes('imageStorage'), false,
+      `${Object.keys(env).join('+')} should satisfy image storage on its own`);
+  }
+
+  // Half of one option is not an answer: uploads would fail at runtime.
+  assert.ok(missingNames({ S3_BUCKET: 'b' }).includes('imageStorage'),
+    'a bucket with no keys is not working storage');
+  assert.ok(missingNames({ S3_BUCKET: 'b', S3_ACCESS_KEY_ID: 'k' }).includes('imageStorage'),
+    'nor a bucket and half a key pair');
+});
+
+check('the optional S3 extras are never what stands between a site and being ready', () => {
+  // Endpoint, region and public URL all have sane defaults. Treating them as
+  // outstanding would leave an AWS-hosted site permanently "incomplete".
+  const spec = specFor([BASE, 'd4-cms-core'], manifestOf);
+  const env = { S3_BUCKET: 'b', S3_ACCESS_KEY_ID: 'k', S3_SECRET_ACCESS_KEY: 's', RESEND_API_KEY: 'r', CONTACT_TO_EMAIL: 'e' };
+  assert.deepStrictEqual(missingFrom(spec, env), [], 'a fully configured S3 site owes nothing');
 });
 
 if (failures) { console.error(`\n${failures} check(s) FAILED.`); process.exit(1); }

@@ -546,6 +546,16 @@ button.primary.glow { animation: glowpulse 1.5s ease-in-out infinite; }
 .verifybar.ok { background: var(--good-soft); color: var(--good); }
 .verifybar.bad { background: var(--bad-soft); color: var(--bad); }
 
+/* The offer to hand the questions to the client. A disclosure rather than a
+   card: it sits under the form it is an alternative to, and stays shut unless
+   somebody wants it. */
+.intake-offer > summary {
+  cursor: pointer; font-size: 0.86rem; color: var(--muted);
+  padding: 0.35rem 0; list-style-position: outside;
+}
+.intake-offer > summary:hover { color: var(--accent); }
+.intake-offer[open] > summary { color: var(--accent); font-weight: 600; }
+
 /* ── Confirmation dialog ──
    Replaces window.confirm, whose buttons are always "OK" and "Cancel". On a
    destructive action that is exactly the wrong wording: the button has to say

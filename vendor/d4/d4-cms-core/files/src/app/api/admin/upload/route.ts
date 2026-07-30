@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import path from "path";
 import { isAuthenticated } from "@/lib/cms/auth";
+import { hasObjectStore, putObject } from "@/lib/cms/object-store";
 
 const ALLOWED_TYPES: Record<string, string> = {
   "image/jpeg": ".jpg",
@@ -39,23 +40,46 @@ export async function POST(req: Request) {
     .replace(/[^a-z0-9-_]+/g, "-")
     .slice(0, 80);
   const name = `${safeBase}-${Date.now().toString(36)}${ext}`;
+  const key = `uploads/${stamp}/${name}`;
   const buffer = Buffer.from(await file.arrayBuffer());
 
-  if (process.env.BLOB_READ_WRITE_TOKEN) {
+  if (hasObjectStore()) {
     try {
-      const { put } = await import("@vercel/blob");
-      const blob = await put(`uploads/${stamp}/${name}`, buffer, {
-        access: "public",
-        contentType: file.type,
-      });
-      return NextResponse.json({ url: blob.url });
+      const stored = await putObject(key, buffer, file.type);
+      return NextResponse.json({ url: stored.url });
     } catch (e) {
-      console.error("blob upload failed:", e);
-      return NextResponse.json({ error: "Could not store the file." }, { status: 500 });
+      console.error("upload failed:", e);
+      // The real reason, not "something went wrong": this lands in front of
+      // the site owner, who can do nothing with a generic apology but could
+      // forward "the bucket name is wrong" to whoever set the site up.
+      const reason = e instanceof Error ? e.message : "Could not store the file.";
+      return NextResponse.json({ error: reason }, { status: 500 });
     }
   }
 
-  // No Blob token configured: local-dev fallback, writes under public/uploads.
+  /**
+   * No object storage configured.
+   *
+   * In development, writing under public/uploads is convenient and harmless.
+   * In production it is a trap: the file lands on the server's own disk, the
+   * upload appears to work, and the next deploy erases it. Vercel, Netlify,
+   * Railway, Render and every container host do exactly that. Refusing here
+   * costs the owner one confusing minute; accepting costs them their
+   * photographs weeks later, silently.
+   */
+  if (process.env.NODE_ENV === "production") {
+    return NextResponse.json(
+      {
+        error:
+          "This site has nowhere permanent to keep uploaded files, so the " +
+          "upload was refused rather than lost later. Whoever set the site " +
+          "up needs to connect image storage (Vercel Blob, or any " +
+          "S3-compatible storage such as Cloudflare R2 or Backblaze B2).",
+      },
+      { status: 503 }
+    );
+  }
+
   const dir = path.join(process.cwd(), "public", "uploads", stamp);
   try {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });

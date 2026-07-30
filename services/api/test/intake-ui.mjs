@@ -111,15 +111,32 @@ await check('the licensee signs up and creates a site needing answers', async ()
   throw new Error('the build never finished');
 });
 
-await check('the offer to let the client fill it in sits beside the questions', async () => {
+await check('sending it to the client is an offer, not the first thing asked', async () => {
   await shop.goto(`${BASE}/workbench/#/sites?site=${globalThis.__site}`, { waitUntil: 'networkidle' });
-  await shop.waitForSelector('#intakeBlock .card', { timeout: 10000 });
-  const text = await shop.textContent('#intakeBlock');
-  assert.match(text, /Would the client rather fill this in/i);
-  assert.match(text, /until you say so/i, 'and it says plainly that nothing changes without them');
+  await shop.waitForSelector('#intakeOffer .intake-offer', { timeout: 10000 });
+
+  // A licensee usually has these answers already. The questions must come
+  // first, and the offer must not open the form with a decision about who
+  // fills it in.
+  const order = await shop.evaluate(() => {
+    const q = document.querySelector('#siteContent .card');
+    const offer = document.querySelector('#intakeOffer');
+    if (!q || !offer) return 'missing';
+    // eslint-disable-next-line no-bitwise
+    return (q.compareDocumentPosition(offer) & Node.DOCUMENT_POSITION_FOLLOWING) ? 'offer-after' : 'offer-before';
+  });
+  assert.strictEqual(order, 'offer-after', 'the offer sits above the questions');
+  assert.strictEqual(await shop.isVisible('[data-intakeact="mint"]'), false, 'and it starts collapsed rather than demanding a choice');
+
+  const summary = await shop.textContent('#intakeOffer summary');
+  assert.match(summary, /Rather have the client answer these/i);
 });
 
 await check('creating a link shows it once, ready to send', async () => {
+  await shop.click('#intakeOffer summary'); // open the disclosure
+  await shop.waitForSelector('#intakeNote', { timeout: 5000 });
+  assert.match(await shop.textContent('#intakeOffer'), /until you read it and say so/i,
+    'it says plainly that nothing changes without them');
   await shop.fill('#intakeNote', 'Anything you are unsure about, leave blank.');
   await shop.click('[data-intakeact="mint"]');
   await shop.waitForSelector('#intakeOut .codeblock pre', { timeout: 8000 });
@@ -221,6 +238,17 @@ await check('the licensee sees it come back, and reads it before using it', asyn
   assert.match(shown, /Sourdough loaves; Pastries; Celebration cakes/, 'a list reads as a list');
   assert.match(shown, /1 picture came with it/);
   assert.match(shown, /Anything you have already typed above wins/, 'and it says whose version wins');
+
+  // Once a link IS out, whether the client has replied is the first thing
+  // worth knowing, so the status goes above the questions even though the
+  // offer that created it sat below them.
+  const order = await shop.evaluate(() => {
+    const status = document.querySelector('#intakeBlock');
+    const q = document.querySelector('#siteContent .card');
+    // eslint-disable-next-line no-bitwise
+    return (status.compareDocumentPosition(q) & Node.DOCUMENT_POSITION_FOLLOWING) ? 'status-first' : 'questions-first';
+  });
+  assert.strictEqual(order, 'status-first', 'a reply the licensee has not read is buried below the form');
 });
 
 await check('adopting fills in the site and brings the picture with it', async () => {
@@ -258,7 +286,8 @@ await check('cancelling a link asks first, in words that name the consequence', 
     await new Promise((r) => setTimeout(r, 100));
   }
   await shop.goto(`${BASE}/workbench/#/sites?site=${second.json.siteId}`, { waitUntil: 'networkidle' });
-  await shop.waitForSelector('[data-intakeact="mint"]', { timeout: 10000 });
+  await shop.waitForSelector('#intakeOffer summary', { timeout: 10000 });
+  await shop.click('#intakeOffer summary');
   await shop.click('[data-intakeact="mint"]');
   await shop.waitForSelector('#intakeOut .codeblock pre', { timeout: 8000 });
 
@@ -269,7 +298,10 @@ await check('cancelling a link asks first, in words that name the consequence', 
   assert.match(asked.title, /Cancel the client's link/i);
   assert.match(asked.body, /uploaded but you have not taken is deleted/i);
   assert.match(asked.confirmLabel, /Cancel the link/i);
-  await shop.waitForSelector('[data-intakeact="mint"]', { timeout: 10000 });
+  // Back to the offer, collapsed again: with no link out there is nothing to
+  // report, only something to offer.
+  await shop.waitForSelector('#intakeOffer summary', { timeout: 10000 });
+  assert.strictEqual(await shop.isVisible('[data-intakeact="mint"]'), false);
 });
 
 /**

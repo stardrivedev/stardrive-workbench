@@ -234,6 +234,30 @@ function assertReviewed(site) {
 }
 
 /**
+ * Refuse to publish an admin that has nowhere to keep what it edits.
+ *
+ * A site with the CMS and no database connected falls back to a SQLite file on
+ * the server's own disk. It works. The client logs in, changes their opening
+ * hours, sees it save — and the next deploy erases it, with no error anywhere.
+ * That is worse than a failed publish by a wide margin, because the failure
+ * lands weeks later on the person who trusted the site.
+ *
+ * So this refuses, the same way publishing already refuses without a deploy
+ * target. `force` stays for the case the gate would otherwise get wrong: a
+ * throwaway demo, where nobody is going to edit anything.
+ */
+function assertDurableStore(account, site, force = false) {
+  if (force) return;
+  if (!siteModules(account, site).includes('d4-cms-core')) return; // no admin, nothing to lose
+  const env = siteEnvFor(account, site);
+  if (String(env.TURSO_DATABASE_URL ?? '').trim()) return;
+  throw httpError(422, 'no_durable_store',
+    'This site has an admin your client can edit, but no database connected, so everything they '
+    + 'change would be lost on the next deploy. Connect one under Hosting (any libSQL-compatible '
+    + 'endpoint; Turso is the easy one), or publish with force:true if this is a throwaway demo.');
+}
+
+/**
  * Everything one built site needs in its host's environment.
  *
  * One function so the values pushed to a host and the values handed to a
@@ -360,13 +384,14 @@ function siteEnvFor(account, site) {
  * Shared by the per-site route and Batch Building's publish-everything run so
  * a bulk publish is exactly the same operation, N times.
  */
-async function publishSiteToVercel(account, siteId, { token: explicitToken = null, teamId = null, name = null } = {}) {
+async function publishSiteToVercel(account, siteId, { token: explicitToken = null, teamId = null, name = null, force = false } = {}) {
   const s = loadSite(siteId, account);
   assertReviewed(s);
   const dir = store.path('workspaces', s.id);
   if (!fs.existsSync(path.join(dir, 'package.json'))) {
     throw httpError(409, 'not_assembled', 'Build the site before publishing.');
   }
+  assertDurableStore(account, s, force);
   const acct = connections.get(account).vercel;
   const token = explicitToken
     || connections.revealSiteToken(s.id, 'vercel')
@@ -1464,6 +1489,7 @@ const ROUTES = [
       if (!fs.existsSync(path.join(dir, 'package.json'))) {
         throw httpError(409, 'not_assembled', 'Build the site before deploying.');
       }
+      assertDurableStore(key.account, s, body?.force === true);
       // Per-client targets: each site can ship to its OWN GitHub account.
       // Resolution: this request's fields > this site's saved target > the
       // account default from Connections. Sending token/owner/repo with
@@ -1540,6 +1566,12 @@ const ROUTES = [
           // What still needs an answer before the site works properly once
           // live. Named plainly, with the consequence attached.
           missing: missingFrom(spec, stored),
+          // Where this licensee actually publishes, so a requirement with two
+          // valid answers can put the one suiting their host first rather than
+          // sending somebody on Netlify to fetch a Vercel credential.
+          connectedHosts: Object.entries(connections.get(key.account))
+            .filter(([, c]) => c.connected)
+            .map(([provider]) => provider),
         },
       };
     },
@@ -1616,6 +1648,7 @@ const ROUTES = [
           missingEnv: missingFrom(spec, env),
           domain: s.domain?.name || null,
           hasEmail: Boolean(env.RESEND_API_KEY && env.CONTACT_TO_EMAIL),
+          hasDatabase: Boolean(String(env.TURSO_DATABASE_URL ?? '').trim()),
         }),
         preparedBy: account?.company || null,
         supportEmail: account?.email || null,
@@ -1701,6 +1734,7 @@ const ROUTES = [
         token: typeof body?.token === 'string' && body.token.trim() ? body.token.trim() : null,
         teamId: typeof body?.teamId === 'string' && body.teamId.trim() ? body.teamId.trim() : null,
         name: body?.name,
+        force: body?.force === true,
       });
       return { status: 200, body: result };
     },
@@ -1716,6 +1750,7 @@ const ROUTES = [
       if (!fs.existsSync(path.join(dir, 'package.json'))) {
         throw httpError(409, 'not_assembled', 'Build the site before publishing.');
       }
+      assertDurableStore(key.account, s, body?.force === true);
       const explicit = typeof body?.token === 'string' && body.token.trim() ? body.token.trim() : null;
       if (body?.save && explicit) connections.setSiteTarget(s.id, { provider: 'netlify', token: explicit });
       const acct = connections.get(key.account).netlify;

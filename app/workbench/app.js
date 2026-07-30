@@ -1527,13 +1527,19 @@ async function loadSiteContent(siteId) {
   let html = '<h3 style="margin-top:1.4rem;color:var(--ink)">Tell us about the business</h3>' +
     '<p style="font-size:0.85rem;color:var(--muted);margin:0.3rem 0 0.7rem">Answer the essentials (<span style="color:var(--bad)">*</span>) and the AI writes finished copy for every page, no placeholders, nothing left blank. Optional fields add more when you have them.</p>' +
     '<div id="contentReady">' + readyBadge(body.readiness) + '</div>' +
-    // The alternative to typing it all in yourself, offered at the moment you
-    // are looking at the questions rather than buried in a menu.
+    // Where the STATUS of a client's link goes, once one is out. Above the
+    // questions on purpose: whether they have replied is the first thing the
+    // licensee needs to know when they open this. The OFFER to send one is a
+    // different thing and lives below the questions, see #intakeOffer.
     '<div id="intakeBlock" data-id="' + esc(siteId) + '"></div>';
   for (const [g, fields] of Object.entries(byGroup)) {
     html += '<div class="card" style="margin-top:0.6rem"><h3 style="margin-top:0">' + esc(body.groups[g] || g) + '</h3>' +
       fields.map((f) => factInput(f, body.facts[f.id])).join('') + '</div>';
   }
+  // The offer to hand the questions over, AFTER them: most of the time the
+  // licensee already has these answers and simply wants to type them, so the
+  // form must not open with a decision about who fills it in.
+  html += '<div id="intakeOffer" data-id="' + esc(siteId) + '"></div>';
   html += '<div style="display:flex;gap:0.6rem;margin-top:0.7rem;flex-wrap:wrap;align-items:center">' +
     '<button class="primary" data-contentact="generate" data-id="' + esc(siteId) + '">✍ Write the copy with AI</button>' +
     '<span style="font-size:0.8rem;color:var(--muted)">Preview the words before you build.</span></div>' +
@@ -1555,33 +1561,50 @@ const INTAKE_STATE = {
 };
 
 /**
- * The other way to fill in the intake: send it to the person who knows the
- * answers. Shown alongside the questions, because that is the moment a
- * licensee realises they do not know the opening hours.
+ * The other way to fill the intake in: send it to the person who knows the
+ * answers.
+ *
+ * Deliberately two mount points. The OFFER goes below the questions and starts
+ * collapsed, because a licensee usually has these answers already and wants to
+ * type them; opening the form with "who should fill this in?" puts a decision
+ * in front of work that needs none. The STATUS of a link that is already out
+ * goes above the questions, because whether the client has replied is the
+ * first thing worth knowing when you come back to a site.
  */
 async function loadIntakeBlock(siteId) {
-  const host = $('#intakeBlock');
-  if (!host) return;
+  const statusHost = $('#intakeBlock');   // above the questions
+  const offerHost = $('#intakeOffer');    // below them
+  if (!statusHost && !offerHost) return;
+  const clear = () => { if (statusHost) statusHost.innerHTML = ''; if (offerHost) offerHost.innerHTML = ''; };
   const { status, body } = await api('/v1/intake-links?site=' + encodeURIComponent(siteId));
-  if (status !== 200) { host.innerHTML = ''; return; }
+  if (status !== 200) { clear(); return; }
   const live = (body.links || []).find((l) => l.status === 'open' || l.status === 'submitted');
   const done = (body.links || []).filter((l) => l.status === 'adopted');
+  clear();
 
+  // ── No link out: an offer, kept small and kept out of the way ──────────
+  // Most of the time the licensee already has these answers. Sending them to
+  // the client is the alternative, not the first decision to make, so this
+  // renders after the questions and opens closed.
   if (!live) {
-    host.innerHTML = '<div class="card" style="margin-top:0.6rem">' +
-      '<h3 style="margin-top:0">Would the client rather fill this in?</h3>' +
-      '<p style="font-size:0.85rem;color:var(--muted);margin:0.3rem 0 0.7rem">' +
-      'Send them a link and they answer these questions themselves, in their own words, and upload their own logo and photos. ' +
-      'Nothing they send changes this site until you say so.</p>' +
-      (done.length ? '<p style="font-size:0.82rem;color:var(--good);margin:0 0 0.7rem">Already used once for this site: their answers are in the fields above.</p>' : '') +
+    if (!offerHost) return;
+    offerHost.innerHTML = '<details class="intake-offer" style="margin-top:0.9rem">' +
+      '<summary>Rather have the client answer these? Send them the questions.</summary>' +
+      '<div class="card" style="margin-top:0.5rem">' +
+      '<p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.7rem">' +
+      'They fill in the same questions in their own words and upload their own logo and photos. ' +
+      'Nothing they send changes this site until you read it and say so.</p>' +
+      (done.length ? '<p style="font-size:0.82rem;color:var(--good);margin:0 0 0.7rem">Used once already for this site: their answers are in the fields above.</p>' : '') +
       '<div class="field"><label for="intakeNote">A note for them (optional)</label>' +
       '<input id="intakeNote" placeholder="e.g. anything you are unsure about, leave blank and we will talk"></div>' +
       '<button class="ghost" data-intakeact="mint" data-id="' + esc(siteId) + '" type="button">Create a link for the client</button>' +
-      '<div id="intakeOut"></div></div>';
+      '<div id="intakeOut"></div></div></details>';
     return;
   }
 
+  // ── A link is out: that is status, not an offer, so it goes up top ─────
   const state = INTAKE_STATE[live.status] || INTAKE_STATE.open;
+  const host = statusHost || offerHost;
   host.innerHTML = '<div class="card" style="margin-top:0.6rem">' +
     '<h3 style="margin-top:0">The client\'s own form</h3>' +
     '<p class="lpReady" style="color:var(--' + state.tone + ')"><b>' + esc(state.label) + '.</b> ' +
@@ -1935,6 +1958,49 @@ async function loadEnvPanel(siteId) {
   host.innerHTML = envPanelHtml(siteId, body);
 }
 
+// Switching between the two ways of answering an either/or requirement. Only
+// the visible pane's inputs are read on save, so picking S3 does not also send
+// an empty Vercel token that would look like an attempt to clear one.
+document.addEventListener('click', (e) => {
+  const tab = e.target.closest('[data-envopt]');
+  if (!tab) return;
+  const [key] = tab.dataset.envopt.split(':');
+  for (const other of document.querySelectorAll(`[data-envopt^="${key}:"]`)) {
+    const on = other === tab;
+    other.classList.toggle('on', on);
+    other.setAttribute('aria-selected', String(on));
+  }
+  for (const pane of document.querySelectorAll(`[data-envpane^="${key}:"]`)) {
+    pane.hidden = pane.dataset.envpane !== tab.dataset.envopt;
+  }
+});
+
+/** A readable name for an either/or requirement, even once it is satisfied and
+ *  has therefore dropped out of the missing list that carries the label. */
+function groupLabel(key, spec) {
+  if (spec?.label) return spec.label;
+  return key === 'imageStorage' ? 'Somewhere to keep uploaded images' : key;
+}
+
+/** Fallback grouping when the server is not currently reporting the group,
+ *  which happens exactly when it is already satisfied. */
+function inferOptions(vars) {
+  const s3 = vars.filter((v) => v.name.startsWith('S3_') && !v.optionalWithin).map((v) => v.name);
+  const blob = vars.filter((v) => v.name === 'BLOB_READ_WRITE_TOKEN').map((v) => v.name);
+  const out = [];
+  if (blob.length) out.push({ id: 'vercelBlob', label: 'Vercel Blob', vars: blob, suitsHost: 'vercel' });
+  if (s3.length) out.push({ id: 's3', label: 'S3-compatible storage', vars: s3, suitsHost: 'any' });
+  return out.length ? out : [{ id: 'only', label: 'Settings', vars: vars.map((v) => v.name) }];
+}
+
+/** Show the option that suits where this licensee actually publishes. Telling
+ *  someone on Netlify to fetch a Vercel token is how a good tool loses trust. */
+function preferHostOption(options, connectedHosts) {
+  if (connectedHosts.includes('vercel')) return options.find((o) => o.suitsHost === 'vercel') || null;
+  if (connectedHosts.length) return options.find((o) => o.suitsHost === 'any') || null;
+  return null;
+}
+
 function envPanelHtml(siteId, d) {
   const info = (id, text) => '<button class="infoBtn" type="button" data-info="' + id + '" aria-label="What is this?">i</button>' +
     '<div class="tip" id="' + id + '" hidden>' + text + '</div>';
@@ -1942,7 +2008,7 @@ function envPanelHtml(siteId, d) {
   const supplied = (d.spec || []).filter((v) => v.source === 'supplied');
   const managed = (d.spec || []).filter((v) => v.source === 'managed');
 
-  const fields = supplied.map((v) => {
+  const oneField = (v) => {
     const set = d.set?.[v.name];
     const value = set?.value ? esc(set.value) : '';
     const state = set?.set
@@ -1956,7 +2022,58 @@ function envPanelHtml(siteId, d) {
         ' value="' + value + '" placeholder="' + (set?.set && v.secret ? 'saved, type to replace' : esc(v.name)) + '"' +
         ' autocomplete="off" style="width:100%">' +
     '</div>';
+  };
+
+  /**
+   * Some requirements have two good answers and the right one depends on the
+   * host: image storage is Vercel Blob or any S3-compatible bucket. Rendering
+   * six independent boxes would tell a licensee on Netlify to go and fetch a
+   * Vercel credential, and make a finished site look five things short. One
+   * requirement, the options as tabs, the one suiting their host first.
+   */
+  const groups = new Map();
+  const standalone = [];
+  for (const v of supplied) {
+    if (!v.group) { standalone.push(v); continue; }
+    if (!groups.has(v.group)) groups.set(v.group, []);
+    groups.get(v.group).push(v);
+  }
+
+  const groupHtml = [...groups].map(([key, vars]) => {
+    const spec = (d.missing || []).find((m) => m.group === key);
+    // Options come from the server so the console does not have its own copy
+    // of what satisfies what. Once satisfied it drops out of `missing`, so
+    // fall back to grouping by which variables are already saved.
+    const options = spec?.options || inferOptions(vars);
+    const satisfiedBy = options.find((o) => o.vars.every((n) => d.set?.[n]?.set));
+    const preferred = preferHostOption(options, d.connectedHosts || []);
+    const chosen = satisfiedBy || preferred || options[0];
+    const extras = vars.filter((v) => v.optionalWithin);
+
+    return '<div class="field envgroup">' +
+      '<label>' + esc(groupLabel(key, spec)) + ' ' +
+        (satisfiedBy
+          ? '<span style="color:var(--ok);font-size:0.78rem">✓ ' + esc(satisfiedBy.label) + '</span>'
+          : '<span style="color:var(--muted);font-size:0.78rem">not set</span>') + '</label>' +
+      '<p style="font-size:0.76rem;color:var(--muted);margin:0.1rem 0 0.5rem">' +
+        esc(spec?.why || 'Either one of these is enough.') + '</p>' +
+      '<div class="btabs" role="tablist">' + options.map((o) =>
+        '<button type="button" role="tab" data-envopt="' + esc(key) + ':' + esc(o.id) + '"' +
+        (o.id === chosen.id ? ' class="on" aria-selected="true"' : ' aria-selected="false"') + '>' +
+        esc(o.label) + '</button>').join('') + '</div>' +
+      options.map((o) =>
+        '<div data-envpane="' + esc(key) + ':' + esc(o.id) + '"' + (o.id === chosen.id ? '' : ' hidden') + '>' +
+          o.vars.map((n) => oneField(vars.find((v) => v.name === n) || { name: n, label: n })).join('') +
+          (o.id === 's3' && extras.length
+            ? '<details style="margin-top:0.2rem"><summary style="font-size:0.8rem;color:var(--muted);cursor:pointer">' +
+              'Endpoint, region and public URL (only for non-AWS storage)</summary>' +
+              extras.map(oneField).join('') + '</details>'
+            : '') +
+        '</div>').join('') +
+    '</div>';
   }).join('');
+
+  const fields = standalone.map(oneField).join('') + groupHtml;
 
   const managedList = managed.map((v) =>
     '<li><code>' + esc(v.name) + '</code> ' + esc(v.managedBy || '') + '</li>').join('');
@@ -1986,6 +2103,10 @@ function envPanelHtml(siteId, d) {
 async function saveEnv(siteId) {
   const values = {};
   document.querySelectorAll('[data-env]').forEach((el) => {
+    // The hidden half of an either/or is not an answer. Sending its empty
+    // boxes would read as "clear the Vercel token I saved last week" purely
+    // because the licensee is looking at the S3 tab.
+    if (el.closest('[data-envpane][hidden]')) return;
     // An untouched secret field is blank on purpose; sending that blank would
     // erase a key the licensee saved earlier and never meant to change.
     if (el.type === 'password' && !el.value) return;

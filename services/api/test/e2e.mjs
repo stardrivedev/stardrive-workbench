@@ -64,10 +64,10 @@ async function callBase(method, pathname, { key, body, base = BASE } = {}) {
   return { status: res.status, headers: res.headers, body: await res.json() };
 }
 
-async function waitForJob(key, jobId, timeoutMs = 8000) {
+async function waitForJob(key, jobId, timeoutMs = 8000, base = undefined) {
   const start = Date.now();
   for (;;) {
-    const { status, body } = await call('GET', `/v1/jobs/${jobId}`, { key });
+    const { status, body } = await call('GET', `/v1/jobs/${jobId}`, { key, ...(base ? { base } : {}) });
     assert.strictEqual(status, 200);
     if (body.status === 'done' || body.status === 'failed') return body;
     if (Date.now() - start > timeoutMs) throw new Error(`Job ${jobId} still ${body.status} after ${timeoutMs}ms.`);
@@ -974,8 +974,15 @@ await check('STARDRIVE_ENGINE=real assembles a genuine Next.js site, QA passes, 
   const buf = Buffer.from(await exp.arrayBuffer());
   assert.strictEqual(buf[0] === 0x1f && buf[1] === 0x8b, true, 'gzip magic bytes');
   assert.strictEqual(buf.length > 1000, true, 'non-trivial archive');
-  // Deploy of a real, assembled site with no target anywhere → clear guidance.
-  const dep = await call('POST', `/v1/sites/${mk.body.siteId}/deploy`, { key: fullKey, base, body: {} });
+  // This site has a gallery and a blog, so it has the CMS, so it has an admin
+  // with no database behind it: publishing is refused before the missing
+  // hosting credential is even reached.
+  const ungated = await call('POST', `/v1/sites/${mk.body.siteId}/deploy`, { key: fullKey, base, body: {} });
+  assert.strictEqual(ungated.status, 422);
+  assert.strictEqual(ungated.body.error.code, 'no_durable_store');
+
+  // Past that gate, the no-target guidance is the next thing they meet.
+  const dep = await call('POST', `/v1/sites/${mk.body.siteId}/deploy`, { key: fullKey, base, body: { force: true } });
   assert.strictEqual(dep.status, 422);
   assert.strictEqual(dep.body.error.code, 'no_target');
   assert.strictEqual(dep.body.error.message.includes('different account'), true);
@@ -1275,15 +1282,83 @@ await check('a module the licensee never ticked still gets asked about and hande
 
   const env = await call('GET', `/v1/sites/${made.body.siteId}/env`, { key: fullKey });
   const names = env.body.spec.map((v) => v.name);
-  assert.ok(names.includes('BLOB_READ_WRITE_TOKEN'), 'the CMS upload token that came with the gallery is asked for');
+  assert.ok(names.includes('BLOB_READ_WRITE_TOKEN'), 'the CMS upload storage that came with the gallery is asked for');
+  assert.ok(names.includes('S3_BUCKET'), 'by either route, so a non-Vercel host is catered for');
   assert.ok(names.includes('ADMIN_PASSWORD'), 'and the admin password it needs');
-  assert.ok(env.body.missing.some((m) => m.name === 'BLOB_READ_WRITE_TOKEN'), 'and it counts as outstanding until supplied');
+  assert.ok(env.body.missing.some((m) => m.group === 'imageStorage'),
+    'and it counts as outstanding until one of the two is supplied');
 
   const handoff = await fetch(`${BASE}/v1/sites/${made.body.siteId}/handoff`, { headers: { Authorization: `Bearer ${fullKey}` } });
   const page = await handoff.text();
   assert.match(page, /Galleries/, 'the client is told about the gallery they asked for');
   assert.match(page, /Pages/, 'and the page editor that came with it');
   assert.match(page, /Inbox/, 'and the inbox their contact form fills');
+});
+
+await check('image storage is one requirement with two answers, not six boxes', async () => {
+  const id = globalThis.__envSite;
+  const before = await call('GET', `/v1/sites/${id}/env`, { key: fullKey });
+  const storage = before.body.missing.filter((m) => m.group === 'imageStorage' || /S3_|BLOB_/.test(m.name));
+  assert.strictEqual(storage.length, 1, `reported ${storage.length} times: ${storage.map((m) => m.name).join(', ')}`);
+  assert.strictEqual(storage[0].name, 'imageStorage', 'as the requirement, not as a variable');
+  assert.ok(storage[0].options.length >= 2, 'and it offers both ways of answering it');
+  assert.ok(storage[0].options.some((o) => o.vars.includes('BLOB_READ_WRITE_TOKEN')));
+  assert.ok(storage[0].options.some((o) => o.vars.includes('S3_BUCKET')));
+
+  // Either option, on its own, settles it. A licensee on Netlify must never be
+  // told to go and fetch a Vercel credential.
+  const s3 = await call('PUT', `/v1/sites/${id}/env`, {
+    key: fullKey,
+    body: { S3_BUCKET: 'client-images', S3_ACCESS_KEY_ID: 'AKIAEXAMPLE', S3_SECRET_ACCESS_KEY: 'secret-half' },
+  });
+  assert.strictEqual(s3.status, 200, s3.text ?? JSON.stringify(s3.body));
+  const after = await call('GET', `/v1/sites/${id}/env`, { key: fullKey });
+  assert.strictEqual(after.body.missing.some((m) => m.group === 'imageStorage'), false,
+    'S3 credentials alone satisfy image storage');
+  assert.strictEqual(JSON.stringify(after.body).includes('secret-half'), false,
+    'and the secret half never comes back out');
+});
+
+await check('publishing an admin with nowhere to keep what it edits is refused', async () => {
+  // On the REAL engine, because the gate only makes sense once a site actually
+  // exists to publish: the dry engine never writes a package.json, so every
+  // publish stops earlier at not_assembled.
+  //
+  // A CMS site with no database falls back to a file on the server's own disk.
+  // It works, the client edits their opening hours, and the next deploy erases
+  // it. Refusing is the kinder failure by a wide margin.
+  const made = await call('POST', '/v1/sites', {
+    key: fullKey, base: realBase,
+    body: { templateId: 'd4-site-template', config: { siteName: 'No Database Co', modules: ['d4-cms-core'] } },
+  });
+  assert.strictEqual(made.status, 202, JSON.stringify(made.body));
+  const job = await waitForJob(fullKey, made.body.jobId, 30000, realBase);
+  assert.strictEqual(job.status, 'done', 'the site really assembled');
+  const id = made.body.siteId;
+
+  for (const p of ['/deploy', '/deploy/vercel', '/deploy/netlify']) {
+    const res = await call('POST', `/v1/sites/${id}${p}`, { key: fullKey, base: realBase, body: {} });
+    assert.strictEqual(res.status, 422, `${p} allowed it (${res.status})`);
+    assert.strictEqual(res.body.error.code, 'no_durable_store', `${p}: ${res.body.error.code}`);
+    assert.match(res.body.error.message, /lost on the next deploy/i, 'and says what would actually happen');
+  }
+
+  // force is the way past it for a throwaway demo, and gets far enough to fail
+  // on the missing hosting credential instead.
+  const forced = await call('POST', `/v1/sites/${id}/deploy`, { key: fullKey, base: realBase, body: { force: true } });
+  assert.notStrictEqual(forced.body.error?.code, 'no_durable_store', 'force:true is honoured');
+  assert.strictEqual(forced.body.error?.code, 'no_target', `got ${forced.body.error?.code}`);
+});
+
+await check('a site with no admin at all is never asked for a database it cannot use', async () => {
+  const made = await call('POST', '/v1/sites', {
+    key: fullKey, base: realBase,
+    body: { templateId: 'd4-site-template', config: { siteName: 'Brochure Only Co', modules: [] } },
+  });
+  await waitForJob(fullKey, made.body.jobId, 30000, realBase);
+  const res = await call('POST', `/v1/sites/${made.body.siteId}/deploy`, { key: fullKey, base: realBase, body: {} });
+  assert.notStrictEqual(res.body.error?.code, 'no_durable_store', 'nothing here can lose anything');
+  assert.strictEqual(res.body.error?.code, 'no_target');
 });
 
 await check('a caller cannot overwrite a managed variable through the settings route', async () => {

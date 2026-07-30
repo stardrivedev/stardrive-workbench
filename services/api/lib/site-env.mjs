@@ -73,10 +73,87 @@ export const SUPPLIED = {
   BLOB_READ_WRITE_TOKEN: {
     label: 'Vercel Blob token',
     where: 'Vercel dashboard, Storage, Blob',
-    why: 'Where images uploaded in /admin are stored. Without it uploads fall back to the local disk, which most hosts wipe on every deploy.',
+    why: 'Somewhere permanent to keep images uploaded in /admin. One of two options, and the easy one if this site is on Vercel.',
     secret: true,
+    group: 'imageStorage',
+  },
+  S3_BUCKET: {
+    label: 'Storage bucket name',
+    where: 'Cloudflare R2, Backblaze B2, Wasabi, MinIO or AWS S3',
+    why: 'Somewhere permanent to keep images uploaded in /admin, on any host. The other option, and the one to use anywhere but Vercel.',
+    secret: false,
+    group: 'imageStorage',
+  },
+  S3_ACCESS_KEY_ID: {
+    label: 'Storage access key ID',
+    where: 'Alongside the bucket, wherever it lives',
+    why: 'Identifies the account writing to the bucket.',
+    secret: false,
+    group: 'imageStorage',
+  },
+  S3_SECRET_ACCESS_KEY: {
+    label: 'Storage secret access key',
+    where: 'Shown once when the key pair is created',
+    why: 'The other half of the storage key pair.',
+    secret: true,
+    group: 'imageStorage',
+  },
+  S3_ENDPOINT: {
+    label: 'Storage endpoint',
+    where: 'e.g. https://<account>.r2.cloudflarestorage.com',
+    why: 'Needed for anything other than AWS itself. Leave blank for AWS S3.',
+    secret: false,
+    group: 'imageStorage',
+    optionalWithin: true,
+  },
+  S3_REGION: {
+    label: 'Storage region',
+    where: 'e.g. auto for R2, us-east-1 for AWS',
+    why: 'Defaults to us-east-1 when blank.',
+    secret: false,
+    group: 'imageStorage',
+    optionalWithin: true,
+  },
+  S3_PUBLIC_BASE_URL: {
+    label: 'Public URL for the bucket',
+    where: 'Your CDN or public bucket address, if it differs from the endpoint',
+    why: 'Where visitors read the images back from. Leave blank to use the endpoint.',
+    secret: false,
+    group: 'imageStorage',
+    optionalWithin: true,
   },
 };
+
+/**
+ * Groups where any ONE complete option satisfies the requirement.
+ *
+ * Image storage has two perfectly good answers and the right one depends on
+ * where the site is hosted. Listing six variables as individually outstanding
+ * would tell a licensee on Netlify to go and fetch a Vercel credential, and
+ * make a finished site look like it was missing five things.
+ */
+export const SUPPLIED_GROUPS = {
+  imageStorage: {
+    label: 'Somewhere to keep uploaded images',
+    why: 'Without one of these, images your client uploads in /admin have nowhere permanent to go, and the site refuses the upload rather than losing it on the next deploy.',
+    options: [
+      { id: 'vercelBlob', label: 'Vercel Blob', vars: ['BLOB_READ_WRITE_TOKEN'], suitsHost: 'vercel' },
+      {
+        id: 's3',
+        label: 'S3-compatible (Cloudflare R2, Backblaze B2, Wasabi, MinIO, AWS)',
+        vars: ['S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'],
+        suitsHost: 'any',
+      },
+    ],
+  },
+};
+
+/** Is one option of a group fully answered? */
+export function groupSatisfied(groupKey, env) {
+  const group = SUPPLIED_GROUPS[groupKey];
+  if (!group) return false;
+  return group.options.some((opt) => opt.vars.every((name) => String(env?.[name] ?? '').trim()));
+}
 
 const ADMIN_ALPHABET = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -124,7 +201,18 @@ export function specFor(modules = [], resolveManifest = () => null) {
       ...v,
       source: MANAGED[v.name] ? 'managed' : supplied ? 'supplied' : 'optional',
       ...(MANAGED[v.name] ? { managedBy: MANAGED[v.name] } : {}),
-      ...(supplied ? { label: supplied.label, where: supplied.where, why: supplied.why, secret: supplied.secret } : {}),
+      ...(supplied
+        ? {
+          label: supplied.label,
+          where: supplied.where,
+          why: supplied.why,
+          secret: supplied.secret,
+          // Carried through so missingFrom and the console can treat an
+          // either/or as one requirement rather than several.
+          ...(supplied.group ? { group: supplied.group } : {}),
+          ...(supplied.optionalWithin ? { optionalWithin: true } : {}),
+        }
+        : {}),
     };
   }).sort((a, b) => {
     const order = { supplied: 0, managed: 1, optional: 2 };
@@ -256,7 +344,33 @@ export function renderEnvFile(env, siteName = 'this site') {
 
 /** What is still missing before this site works properly once published. */
 export function missingFrom(spec, env) {
-  return spec
-    .filter((v) => v.source === 'supplied' && !String(env?.[v.name] ?? '').trim())
-    .map((v) => ({ name: v.name, label: v.label ?? v.name, why: v.why ?? '', where: v.where ?? '' }));
+  const out = [];
+  const groupsSeen = new Set();
+  for (const v of spec) {
+    if (v.source !== 'supplied') continue;
+
+    // A grouped variable is never reported on its own: the group is one
+    // requirement with two answers, and reporting six boxes would both
+    // overstate the work and point a Netlify licensee at a Vercel credential.
+    if (v.group) {
+      if (groupsSeen.has(v.group)) continue;
+      groupsSeen.add(v.group);
+      if (groupSatisfied(v.group, env)) continue;
+      const group = SUPPLIED_GROUPS[v.group];
+      out.push({
+        name: v.group,
+        group: v.group,
+        label: group.label,
+        why: group.why,
+        where: group.options.map((o) => o.label).join(', or '),
+        options: group.options,
+      });
+      continue;
+    }
+
+    if (!String(env?.[v.name] ?? '').trim()) {
+      out.push({ name: v.name, label: v.label ?? v.name, why: v.why ?? '', where: v.where ?? '' });
+    }
+  }
+  return out;
 }

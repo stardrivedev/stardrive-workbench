@@ -128,6 +128,36 @@ await check('saving a key persists it, and the input never echoes it back', asyn
   assert.strictEqual(stored.json.missing.some((m) => m.name === 'RESEND_API_KEY'), false);
 });
 
+await check('image storage is offered as a choice, and only the chosen half is sent', async () => {
+  // Two valid answers, and the right one depends on the host. Six independent
+  // boxes would tell somebody on Netlify to fetch a Vercel credential.
+  await page.waitForSelector('#envBlock .envgroup', { timeout: 8000 });
+  const group = await page.textContent('#envBlock .envgroup');
+  assert.match(group, /Somewhere to keep uploaded images/i);
+  assert.match(group, /Vercel Blob/);
+  assert.match(group, /S3-compatible/);
+
+  // Only the visible option's inputs go to the server. Saving from the S3 tab
+  // must not send an empty Vercel token, which would read as "clear the one I
+  // saved last week".
+  await page.click('[data-envopt="imageStorage:s3"]');
+  await page.waitForSelector('[data-envpane="imageStorage:s3"]:not([hidden])');
+  assert.strictEqual(await page.isVisible('[data-env="BLOB_READ_WRITE_TOKEN"]'), false,
+    'the other option is hidden, not merely unfocused');
+  await page.fill('[data-env="S3_BUCKET"]', 'otley-images');
+  await page.fill('[data-env="S3_ACCESS_KEY_ID"]', 'AKIAEXAMPLE');
+  await page.fill('[data-env="S3_SECRET_ACCESS_KEY"]', 's3-secret-value');
+  await page.click('[data-siteact="env-save"]');
+  await page.waitForFunction(() => /Saved/.test(document.querySelector('#launchOut')?.textContent || ''), null, { timeout: 8000 });
+
+  const stored = await asUser(`/v1/sites/${globalThis.__site}/env`);
+  assert.strictEqual(stored.json.set.S3_BUCKET.value, 'otley-images');
+  assert.strictEqual(stored.json.set.S3_SECRET_ACCESS_KEY.set, true);
+  assert.strictEqual(stored.text.includes('s3-secret-value'), false, 'and the secret never comes back');
+  assert.strictEqual(stored.json.missing.some((m) => m.group === 'imageStorage'), false,
+    'the requirement is settled by the S3 option alone');
+});
+
 await check('leaving a secret field blank does not erase the saved key', async () => {
   // The commonest way to lose a key: come back, change the email, save.
   await page.fill('[data-env="CONTACT_TO_EMAIL"]', 'newowner@example.com');
@@ -147,6 +177,22 @@ await check('the handoff reads for the client and lists only their own sections'
   assert.strictEqual(res.text.includes('Menus'), false, 'and no menu');
   assert.strictEqual(/Email delivery is not switched on/.test(res.text), false,
     'the email warning is gone now that a key is saved');
+});
+
+await check('the handoff warns about the client\'s own edits, not only their photos', async () => {
+  // This site has an admin and no database connected, so anything the client
+  // changes goes to a file the next deploy erases. The handoff warned about
+  // images and said nothing about content, which is the half that matters
+  // more: they will spend an evening writing their About page.
+  const res = await asUser(`/v1/sites/${globalThis.__site}/handoff`);
+  assert.match(res.text, /does not yet have a permanent database/i,
+    'the client is told their edits are not being kept');
+  assert.match(res.text, /may be lost the next time the site is updated/i,
+    'in terms of what actually happens to them');
+  // Image storage was settled by the S3 credentials saved earlier, so that
+  // warning is correctly absent: the two are independent.
+  assert.strictEqual(/photo uploads/i.test(res.text), false,
+    'no image warning once storage is configured, whichever of the two was used');
 });
 
 await check('rotating the password changes it and warns it is not live yet', async () => {
