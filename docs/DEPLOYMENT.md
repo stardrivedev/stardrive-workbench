@@ -31,6 +31,7 @@ Everything works dormant; each env var lights up a capability with no code chang
 | Real site assembly + export | `STARDRIVE_ENGINE=real` | Ships already; produces real Next.js sites. |
 | Encrypt stored hosting tokens | `STARDRIVE_SECRET` | **Required in prod.** A `var/secret.key` is auto-generated in dev; production must set this from a real secret store. |
 | Secure session cookies | `STARDRIVE_SECURE_COOKIES=1` | Set behind HTTPS. |
+| Links that leave the server | `STARDRIVE_PUBLIC_URL` | **Set this in prod.** Your real public address, scheme included. Used for verification, password-reset and client intake links. Without it they are built from the request's Host header: always `http://` behind a TLS proxy, and set by whoever is calling. |
 | Template Studio (model) | `STARDRIVE_LLM_KEY` (+ `STARDRIVE_LLM_PROVIDER`, `STARDRIVE_LLM_MODEL`) | Operator's own key; customers never bring one. Studio template generation defaults to `gpt-5.6-sol`. |
 | Copywriter (model) | `STARDRIVE_COPY_MODEL` (default `gpt-5.5`) | The site copywriter runs on a lighter model than the Studio to save tokens; same key/provider. Copy never uses em-dashes. |
 | Fair-use caps | `STARDRIVE_LLM_MAX_TURNS` (40), `STARDRIVE_LLM_MAX_INPUT_CHARS` (300k) | Defaults are sane; tune per model. |
@@ -106,27 +107,50 @@ layout changes. A backup nobody has restored is a hope, not a backup.
 The whole product is one container. A single instance with a persistent volume
 is a valid launch topology (no external database required to start).
 
-1. **Build & run the image** (`Dockerfile` at the repo root):
+1. **Make `prod.env`**: `node services/api/scripts/make-prod-env.mjs`. It copies
+   `docs/prod.env.example`, generates the two values nobody issues you
+   (`STARDRIVE_SECRET` and `STARDRIVE_OPS_TOKEN`), writes the file `0600`, and
+   refuses to overwrite an existing one. It does **not** print the secrets;
+   pass `--print-secret` when you are ready to copy `STARDRIVE_SECRET` into a
+   password manager, which you should do the day it exists. Keep it there,
+   apart from any backup of the data: restore without it and every stored
+   hosting token is undecryptable.
+
+   `prod.env` is gitignored via `*.env`. `docs/prod.env.example` is not, so no
+   real value ever goes in it.
+2. **Fill in what only you can fetch**: `STARDRIVE_LLM_KEY` (platform.openai.com,
+   and the account needs credit or every generation is a 502) and
+   `STARDRIVE_PUBLIC_URL` (your real public address, scheme included). The image
+   already sets `STARDRIVE_ENGINE=real`, `STARDRIVE_QA=full`,
+   `STARDRIVE_SECURE_COOKIES=1`, `STARDRIVE_VAR_DIR=/data`.
+3. **Build & run the image** (`Dockerfile` at the repo root):
    `docker build -t stardrive . && docker run -p 8080:8080 -v stardrive-data:/data --env-file prod.env stardrive`
-2. **Set the required secrets** in `prod.env`: `STARDRIVE_SECRET` (encrypts
-   stored hosting tokens — REQUIRED), `STARDRIVE_LLM_KEY` (turns the Studio +
-   copywriter on). The image already sets `STARDRIVE_ENGINE=real`,
-   `STARDRIVE_QA=full`, `STARDRIVE_SECURE_COOKIES=1`, `STARDRIVE_VAR_DIR=/data`.
-3. **Domain + TLS**: put stardrive.dev in front of `:8080` behind HTTPS (any
-   reverse proxy / platform TLS). The root redirects to `/workbench/`.
-4. **Payments** (when ready): add `STRIPE_SECRET_KEY`, `STRIPE_PRICE_STARTER|STUDIO|AGENCY`,
+4. **Domain + TLS**: put stardrive.dev in front of `:8080` behind HTTPS (any
+   reverse proxy / platform TLS). The root redirects to `/workbench/`. Make
+   `STARDRIVE_PUBLIC_URL` match it exactly; the service warns on boot if it is
+   unset in production.
+5. **Email — do this BEFORE you open signup, not after.** Add `RESEND_API_KEY`,
+   `STARDRIVE_EMAIL_FROM` and `STARDRIVE_LEADS_TO`. The sending address's domain
+   must be verified in Resend (Domains, add it, set the DNS records) or every
+   send fails. Setting this is also what switches email verification on, so
+   adding it later splits your accounts into two cohorts: everyone created
+   before it is verified forever, everyone after must confirm.
+
+   This is **not** the same slot as a client site's Resend key. Those are set
+   per site in the Workbench under Site settings, and belong to whoever owns
+   that client's hosting.
+6. **Monitoring** (before the first paying customer): `STARDRIVE_OPS_TOKEN` is
+   already generated in `prod.env`; add `STARDRIVE_ALERT_TO` alongside
+   `RESEND_API_KEY`. Then `POST /v1/ops/test-alert` and confirm the mail
+   arrives. That one call exercises provider key, sender identity and recipient
+   together, which is the whole path, before a real failure has to.
+7. **Payments** (when ready): add `STRIPE_SECRET_KEY`, `STRIPE_PRICE_STARTER|STUDIO|AGENCY`,
    and `STRIPE_WEBHOOK_SECRET`; point a Stripe webhook at `POST /webhooks/stripe`.
    The checkout + plan-flip code is built and tested; it activates on these keys.
-5. **Email** (when ready): add `RESEND_API_KEY`, `STARDRIVE_EMAIL_FROM`,
-   `STARDRIVE_LEADS_TO`. Signup welcomes + access-request notifications activate.
-6. **Browser QA sub-checks** (optional): add Playwright + chromium to the image
+8. **Browser QA sub-checks** (optional): add Playwright + chromium to the image
    and set `STARDRIVE_PLAYWRIGHT`/`STARDRIVE_AXE` for the accessibility check and
    the preview screenshot. Core QA (install → build → serve → routes) runs
    without them.
-
-7. **Monitoring** (do this before the first paying customer): set
-   `STARDRIVE_OPS_TOKEN`, and `STARDRIVE_ALERT_TO` alongside `RESEND_API_KEY`.
-   Then `POST /v1/ops/test-alert` and confirm the mail arrives.
 
 ## Monitoring
 

@@ -1,6 +1,11 @@
 node_modules/
 .env
 .env.*
+# Operator secrets for a real deployment. The runbook tells you to create
+# `prod.env` at the repo root, and neither rule above matches that name, so it
+# gets its own: a single `git add .` would otherwise publish STARDRIVE_SECRET,
+# the model key and the Stripe keys in one commit.
+*.env
 dist/
 out/
 .DS_Store
