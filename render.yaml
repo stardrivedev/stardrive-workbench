@@ -1,0 +1,114 @@
+# Deploy Stardrive to Render.
+#
+# This file IS the setup. In the Render dashboard: New -> Blueprint -> pick the
+# stardrive-workbench repo. Render reads this, creates the service, attaches the
+# disk, and prompts for the three secrets below. There is nothing to configure
+# by hand afterwards except the custom domain.
+#
+# WHY A HOST AT ALL, GIVEN THE DOCKERFILE: the Dockerfile is the recipe for the
+# box. Docker is the oven that bakes and runs it. Render is the building that
+# owns the oven, keeps the lights on, and has a street address. You need all
+# three, and because the recipe is standard, the building is swappable: this
+# same Dockerfile runs on Fly.io, Railway, or a VPS with no changes.
+#
+# NOTE: this file is committed to a PUBLIC repo. Every secret below is declared
+# with `sync: false` and NO value, which means Render asks you for it once and
+# stores it itself. Never write a real key into this file.
+
+services:
+  - name: stardrive
+    type: web
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    region: oregon
+
+    # 2 GB of RAM. Not a vanity upgrade: a build runs `npm install` then
+    # `next build` for a customer's real Next.js site, and the 512 MB starter
+    # plan reliably runs out of memory partway through. A failed build is a
+    # customer watching a spinner for four minutes to be told nothing.
+    plan: standard
+
+    # `ok: true` means the process is answering, deliberately nothing more. A
+    # full disk or a stalled queue keeps returning 200 on purpose, because
+    # restarting the container cannot fix either, and a health check that said
+    # otherwise would turn one bad condition into a restart loop.
+    healthCheckPath: /v1/health
+
+    # THE FILING CABINET. Every account, API key, template, site, and encrypted
+    # hosting token lives here. Without a disk, all of it is erased on every
+    # deploy and every restart. The Dockerfile already points
+    # STARDRIVE_VAR_DIR at /data.
+    disk:
+      name: stardrive-data
+      mountPath: /data
+      sizeGB: 10
+
+    envVars:
+      # ── Render will PROMPT for these three when you create the Blueprint ──
+
+      # Encrypts every licensee's hosting tokens and every per-site key.
+      # Already generated and sitting in your local prod.env. Copy it from
+      # there, and keep a copy in a password manager: restore without it and
+      # you get accounts and sites whose credentials are all dead.
+      - key: STARDRIVE_SECRET
+        sync: false
+
+      # Your OpenAI key. Without it the Studio, the copywriter and Batch
+      # Building are all dormant and say so honestly.
+      - key: STARDRIVE_LLM_KEY
+        sync: false
+
+      # Unlocks GET /v1/ops, your own view of uptime, errors, disk and queue.
+      # Also generated already, also in prod.env.
+      - key: STARDRIVE_OPS_TOKEN
+        sync: false
+
+      # The address this service really answers on, scheme included, no
+      # trailing slash. Used for every link that LEAVES the server: email
+      # verification, password resets, and the intake link handed to a client.
+      #
+      # Render gives you a stardrive-xxxx.onrender.com address immediately and
+      # your custom domain later, so this is a prompt rather than a fixed
+      # value: put whichever is actually live, and update it in the dashboard
+      # when the domain is attached. Get it wrong and the links point nowhere.
+      - key: STARDRIVE_PUBLIC_URL
+        sync: false
+
+      # ── Safe to keep in the repo: settings, not secrets ──
+
+      # One build at a time. Each is `npm install` plus `next build`, which is
+      # hungry; two at once on 2 GB is how you get an out-of-memory failure
+      # that looks like a broken template. Raise it with the plan, not before.
+      - key: STARDRIVE_BUILD_CONCURRENCY
+        value: "1"
+
+      # Refuse to START a build with less than this free, rather than dying
+      # halfway through npm install and leaving a corrupt workspace that reads
+      # as a template bug.
+      - key: STARDRIVE_MIN_FREE_MB
+        value: "2048"
+
+    # Deploy automatically when main moves. Turn this off if you would rather
+    # press the button yourself.
+    autoDeploy: true
+
+# NOT SET HERE, ON PURPOSE:
+#
+#   PORT                     Render injects it; the server reads process.env.PORT.
+#   NODE_ENV, STARDRIVE_ENGINE, STARDRIVE_QA, STARDRIVE_VAR_DIR,
+#   STARDRIVE_SECURE_COOKIES
+#                            already baked into the Dockerfile.
+#   STARDRIVE_PRUNE_BUILDS   defaults ON in production, which is what keeps the
+#                            10 GB disk from filling with node_modules.
+#
+# ADD LATER, IN THE DASHBOARD, WHEN YOU ARE READY:
+#
+#   RESEND_API_KEY, STARDRIVE_EMAIL_FROM, STARDRIVE_LEADS_TO, STARDRIVE_ALERT_TO
+#     Email. Adding the key is ALSO what switches email verification on, so add
+#     it before you open signup, not after, or accounts split into two cohorts
+#     that behave differently. See docs/DEPLOYMENT.md.
+#
+#   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_STARTER|STUDIO|AGENCY
+#     Billing. The checkout and plan-flip code is built and tested; it activates
+#     on these keys.
