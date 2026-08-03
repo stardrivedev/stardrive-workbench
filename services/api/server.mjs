@@ -485,6 +485,29 @@ function resolveMappingBody(body, key) {
 }
 
 /**
+ * The origin to put in a link that LEAVES the server: a verification email, a
+ * password reset, an intake link handed to a client.
+ *
+ * `url.origin` is derived from the request's Host header, which is wrong in
+ * production in two separate ways. It is always `http://`, because TLS is
+ * terminated at the proxy, so an emailed one-shot auth token would travel as
+ * plaintext on the first hop. And the Host header is attacker-controlled, so
+ * anyone can ask for a reset on someone else's address and have the emailed
+ * link point at a host they own, which turns a victim clicking their own reset
+ * mail into a token handover.
+ *
+ * Trusting `x-forwarded-proto`/`x-forwarded-host` instead would fix the scheme
+ * and leave the poisoning, since those are just as forgeable when nothing
+ * strips them. So the answer is a value the operator states once and no
+ * request can influence. Falls back to the request origin, which is exactly
+ * right for local development and for the tests.
+ */
+function publicOrigin(url) {
+  const configured = String(process.env.STARDRIVE_PUBLIC_URL || '').trim();
+  return configured ? configured.replace(/\/+$/, '') : url.origin;
+}
+
+/**
  * The operator's own door. Deliberately NOT an API-key scope: keys belong to
  * licensees, and no licensee should ever read the queue, the disk, or another
  * tenant's error paths. Compared in constant time so the token cannot be
@@ -603,7 +626,7 @@ const ROUTES = [
       const { record, secret } = mintKey(store, { name: 'Default key', scopes: SCOPES, account: account.id });
       const token = accounts.createSession(account.id);
       // Fire-and-forget; both are no-ops until email is configured.
-      if (verifyToken) email.verify(account, `${url.origin}/auth/verify?token=${verifyToken}`);
+      if (verifyToken) email.verify(account, `${publicOrigin(url)}/auth/verify?token=${verifyToken}`);
       else email.welcome(account);
       return { status: 201, cookies: [sessionCookie(token)], body: { account, apiKey: { ...record, secret } } };
     },
@@ -625,7 +648,7 @@ const ROUTES = [
       }
       const reissued = accounts.reissueVerification(account.id);
       if (!reissued) return { status: 200, body: { sent: false, alreadyVerified: true } };
-      email.verify(reissued.account, `${url.origin}/auth/verify?token=${reissued.verifyToken}`);
+      email.verify(reissued.account, `${publicOrigin(url)}/auth/verify?token=${reissued.verifyToken}`);
       return { status: 200, body: { sent: true, to: reissued.account.email } };
     },
   },
@@ -668,7 +691,7 @@ const ROUTES = [
 
       const requested = accounts.requestPasswordReset(body?.email);
       if (requested) {
-        email.passwordReset(requested.account, `${url.origin}/workbench/#/reset?token=${requested.token}`);
+        email.passwordReset(requested.account, `${publicOrigin(url)}/workbench/#/reset?token=${requested.token}`);
       }
       return same; // identical whether or not that address has an account
     },
@@ -1278,7 +1301,7 @@ const ROUTES = [
         body: {
           link: intakeLinks.summary(record),
           // The only time the token exists outside the URL. Not recoverable.
-          url: `${url.origin}/intake/${token}`,
+          url: `${publicOrigin(url)}/intake/${token}`,
           note: 'Send this to your client. It is shown once: mint a new one if it is lost, which revokes this.',
         },
       };
@@ -2303,6 +2326,22 @@ server.listen(PORT, () => {
   // differ, and this line is how a caller learns which port to talk to.
   const bound = server.address()?.port ?? PORT;
   console.log(`[stardrive-api] v${VERSION} listening on http://localhost:${bound} (engine: ${ENGINE}, var: ${VAR_DIR})`);
+  // A fix that depends on remembering an env var is a fix that half-works, so
+  // say it out loud at the one moment an operator is watching the logs. Both
+  // failures are silent otherwise: unset falls back to the request origin
+  // (right in dev, wrong in production), and a value with no scheme yields
+  // links like "stardrive.dev/auth/verify?..." that no mail client will open.
+  const stated = String(process.env.STARDRIVE_PUBLIC_URL || '').trim();
+  if (!stated) {
+    if (process.env.NODE_ENV === 'production') {
+      console.warn('[stardrive-api] STARDRIVE_PUBLIC_URL is not set. Verification, password-reset and'
+        + ' client intake links will be built from the request Host header: http:// behind a TLS proxy,'
+        + ' and steerable by whoever calls. Set it to your real public address.');
+    }
+  } else if (!/^https?:\/\/[^/\s]+$/.test(stated.replace(/\/+$/, ''))) {
+    console.warn(`[stardrive-api] STARDRIVE_PUBLIC_URL is "${stated}", which is not an origin.`
+      + ' Expected scheme and host only, e.g. https://stardrive.dev. Links built from it will be broken.');
+  }
 });
 
 /**

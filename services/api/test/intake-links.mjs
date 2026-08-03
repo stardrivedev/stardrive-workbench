@@ -12,6 +12,7 @@
 import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
+import http from 'node:http';
 import path from 'node:path';
 import { startServer, stopAll } from './helpers/server.mjs';
 
@@ -25,8 +26,9 @@ const check = (name, fn) => Promise.resolve().then(fn).then(
 
 const { base: BASE } = await startServer({ varDir });
 
-const api = async (method, p, { key, body } = {}) => {
-  const res = await fetch(BASE + p, {
+/** Bound to a base so a second server can be driven the same way. */
+const makeApi = (base) => async (method, p, { key, body } = {}) => {
+  const res = await fetch(base + p, {
     method,
     headers: { ...(key ? { Authorization: `Bearer ${key}` } : {}), ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -37,18 +39,20 @@ const api = async (method, p, { key, body } = {}) => {
   return { status: res.status, body: json ?? {}, text, headers: res.headers };
 };
 
+const api = makeApi(BASE);
+
 /** An account with a built site to hang an intake link off. */
-async function licensee(email) {
-  const up = await api('POST', '/auth/signup', { body: { email, password: 'a-long-enough-password', company: 'Bread & Butter Studio' } });
+async function licensee(email, call = api) {
+  const up = await call('POST', '/auth/signup', { body: { email, password: 'a-long-enough-password', company: 'Bread & Butter Studio' } });
   assert.strictEqual(up.status, 201, up.text);
   const key = up.body.apiKey.secret;
-  const made = await api('POST', '/v1/sites', {
+  const made = await call('POST', '/v1/sites', {
     key,
     body: { templateId: 'd4-site-template', config: { siteName: 'Otley Bakes', modules: ['d4-cms-core', 'd4-careers-portal'] } },
   });
   assert.strictEqual(made.status, 202, made.text);
   for (let i = 0; i < 100; i += 1) {
-    const job = await api('GET', `/v1/jobs/${made.body.jobId}`, { key });
+    const job = await call('GET', `/v1/jobs/${made.body.jobId}`, { key });
     if (job.body.status === 'done') break;
     assert.notStrictEqual(job.body.status, 'failed', 'the dry build should not fail');
     await new Promise((r) => setTimeout(r, 100));
@@ -349,9 +353,60 @@ await check('the token cannot be used to walk out of its own directory', async (
   }
 });
 
+// The link is the product here: it gets sent to someone else, so the origin
+// printed into it has to be the one the operator meant, not whatever the
+// request happened to carry. Behind a TLS-terminating proxy the request is
+// always plain http, and the Host header is set by whoever is calling.
+const originVarDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stardrive-intake-origin-'));
+const { base: BASE2 } = await startServer({
+  varDir: originVarDir,
+  env: { STARDRIVE_PUBLIC_URL: 'https://stardrive.dev/' }, // trailing slash on purpose
+});
+const api2 = makeApi(BASE2);
+
+await check('a link that leaves the server carries the configured public origin', async () => {
+  const other = await licensee('origin-check@example.com', api2);
+  const minted = await api2('POST', `/v1/sites/${other.siteId}/intake-link`, { key: other.key, body: {} });
+  assert.strictEqual(minted.status, 201, minted.text);
+  assert.match(minted.body.url, /^https:\/\/stardrive\.dev\/intake\/[A-Za-z0-9_-]{20,}$/,
+    `stated once by the operator, trailing slash trimmed: ${minted.body.url}`);
+  assert.strictEqual(minted.body.url.includes(new URL(BASE2).port), false,
+    'and the port the request happened to arrive on does not leak into it');
+});
+
+await check('and a forged Host header cannot redirect it at somebody else', async () => {
+  const other = await licensee('host-forgery@example.com', api2);
+  // Raw http: fetch will not let a caller set Host, and that is exactly the
+  // header under test.
+  const body = '{}';
+  const u = new URL(`${BASE2}/v1/sites/${other.siteId}/intake-link`);
+  const forged = await new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: u.hostname, port: u.port, path: u.pathname, method: 'POST',
+      headers: {
+        Host: 'attacker.example',
+        Authorization: `Bearer ${other.key}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    }, (res) => {
+      let d = '';
+      res.on('data', (c) => { d += c; });
+      res.on('end', () => { try { resolve(JSON.parse(d)); } catch { reject(new Error(`not json: ${d.slice(0, 200)}`)); } });
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+  assert.ok(forged.url, `no link came back: ${JSON.stringify(forged).slice(0, 200)}`);
+  assert.strictEqual(forged.url.startsWith('https://stardrive.dev/intake/'), true,
+    `a client would have been sent to the attacker's host: ${forged.url}`);
+  assert.strictEqual(forged.url.includes('attacker.example'), false, 'not anywhere in it');
+});
+
 stopAll();
 await new Promise((r) => setTimeout(r, 300));
 fs.rmSync(varDir, { recursive: true, force: true });
+fs.rmSync(originVarDir, { recursive: true, force: true });
 
 if (failures) { console.error(`\n${failures} check(s) FAILED.`); process.exit(1); }
 console.log('\nAll client intake link checks passed.');
