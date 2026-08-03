@@ -26,6 +26,8 @@ import { injectAssetDisplay } from './asset-injector.mjs';
 import { renderContentModule, PLACEHOLDER_PHRASES } from './content.mjs';
 import { MODULE_SEEDS } from './seed.mjs';
 import { renderDockerfile, renderDeployGuide } from './portable.mjs';
+import { resolveModules } from './modules.mjs';
+import { planBackfill } from './shared-deps.mjs';
 import { repairTemplateSource } from '../../../packages/template-kit/index.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -126,6 +128,20 @@ function canonicalNextConfig(ts) {
 
 export default nextConfig;
 `;
+}
+
+/** Every file under `dir`, recursively, as absolute paths. */
+function walkFiles(dir) {
+  const out = [];
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of entries) {
+    if (e.name === 'node_modules' || e.name === '.next') continue;
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) out.push(...walkFiles(p));
+    else if (e.isFile()) out.push(p);
+  }
+  return out;
 }
 
 function writeSafe(outDir, relPath, file) {
@@ -368,7 +384,7 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
    * SAME assembler layers d4 modules onto their own design (deps, route
    * conflicts, per-client config all handled by the real engine).
    */
-  function stageImportedBase(stagingDir, resolved) {
+  function stageImportedBase(stagingDir, resolved, wanted = []) {
     const baseDir = path.join(stagingDir, 'd4-site-template');
     fs.mkdirSync(path.join(baseDir, 'files'), { recursive: true });
     const manifest = { ...resolved.manifest, name: 'd4-site-template', kind: 'site', copy: [{ from: 'files', to: '.' }] };
@@ -380,6 +396,58 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
         fs.cpSync(path.join(engineDir, name), path.join(stagingDir, name), { recursive: true });
       }
     }
+    return backfillSharedDeps(baseDir, resolved, wanted);
+  }
+
+  /**
+   * Give the imported template whatever the modules being layered on expect it
+   * to provide, and it does not.
+   *
+   * The customer's design always wins: only files the template genuinely lacks
+   * are added, so a template that ships its own PageHeader keeps it. See
+   * lib/shared-deps.mjs for why this is derived rather than an allowlist.
+   */
+  function backfillSharedDeps(baseDir, resolved, wanted) {
+    const referenceDir = path.join(engineDir, 'd4-site-template', 'files');
+    if (!fs.existsSync(referenceDir)) return [];
+
+    const readManifest = (name) => {
+      try { return JSON.parse(fs.readFileSync(path.join(engineDir, name, 'manifest.json'), 'utf-8')); }
+      catch { return null; }
+    };
+    // Every module that will really be built, not just the ticked ones: a
+    // required dependency imports the shared library just the same.
+    const moduleSources = [];
+    const moduleProvides = new Set();
+    for (const name of resolveModules(wanted, readManifest)) {
+      const dir = path.join(engineDir, name, 'files');
+      if (!fs.existsSync(dir)) continue;
+      for (const abs of walkFiles(dir)) {
+        const rel = path.relative(dir, abs).replace(/\\/g, '/');
+        moduleProvides.add(rel);
+        if (!/\.(tsx?|jsx?|mjs)$/.test(abs)) continue;
+        try { moduleSources.push(fs.readFileSync(abs, 'utf-8')); } catch { /* unreadable, skip */ }
+      }
+    }
+    if (!moduleSources.length) return [];
+
+    // What the assembled tree will contain before any backfill: the template's
+    // own files plus everything the modules bring. `@/lib/cms/auth` is a
+    // module's file, not the template's, and copying the reference's version
+    // over it would be two modules fighting for one path.
+    const templateFiles = new Set(resolved.bundle.files.map((f) => String(f.path).replace(/\\/g, '/')));
+    const add = planBackfill({
+      moduleSources,
+      templateHas: (rel) => templateFiles.has(rel) || moduleProvides.has(rel),
+      reference: {
+        // isFile, not exists: `@/components/ui` names a real DIRECTORY under
+        // the empty extension, and reading it throws EISDIR.
+        has: (rel) => { try { return fs.statSync(path.join(referenceDir, rel)).isFile(); } catch { return false; } },
+        read: (rel) => fs.readFileSync(path.join(referenceDir, rel), 'utf-8'),
+      },
+    });
+    for (const file of add) writeSafe(path.join(baseDir, 'files'), file.path, file);
+    return add.map((f) => f.path);
   }
 
   async function assembleReal(job, site) {
@@ -430,7 +498,10 @@ export function createJobRunner(store, { engine = 'dry', assets = null, engineDi
       log(job, `Assembling your template "${site.templateId}" with ${modules.length} engine module(s) layered on…`);
       const stagingDir = store.path('workspaces', `${job.siteId}.stage`);
       fs.rmSync(stagingDir, { recursive: true, force: true });
-      stageImportedBase(stagingDir, resolved);
+      const supplied = stageImportedBase(stagingDir, resolved, modules);
+      if (supplied.length) {
+        log(job, `Supplied ${supplied.length} shared component(s) your template did not include: ${supplied.join(', ')}.`);
+      }
       try {
         assemblyRecord = runAssembler(job, site, outDir, stagingDir, modules);
       } finally {

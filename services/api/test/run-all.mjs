@@ -36,7 +36,7 @@ const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
  */
 const SUITES = [
   'template-kit',
-  'accounts', 'site-env', 'seeds', 'module-coverage', 's3-signing', 'ops', 'jobs-runner',
+  'accounts', 'site-env', 'seeds', 'module-coverage', 'shared-deps', 's3-signing', 'ops', 'jobs-runner',
   'billing-money-path', 'backup-restore', 'batch-integration', 'intake-links', 'e2e',
   'console-a11y', 'console-responsive', 'console-states',
   'intake-ui', 'handoff-ui', 'batch-ui', 'studio-ui',
