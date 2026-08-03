@@ -291,6 +291,45 @@ const EVENT_HANDLER_RE = /\bon(?:Click|Change|Submit|Input|Focus|Blur|MouseEnter
 const SERVER_ONLY_RE = /from\s+['"]server-only['"]|export\s+default\s+async\s+function/;
 const JS_PATH_RE = /\.(tsx?|jsx?|mjs)$/;
 
+// A line that is only a comment. Comments never reach a visitor, so the dash
+// rule does not apply to them: rewriting them would churn first-party engine
+// files (nine of them say things like "the baked copy — pages never…") for no
+// reader's benefit, and would bury the real repairs in a wall of noise.
+const COMMENT_LINE_RE = /^\s*(\/\/|\*|\/\*)/;
+
+// A dash inside a regex literal is CODE, not copy: `.replace(/–|—/g, "-")` is
+// a dash-normalizing helper, and rewriting it to `.replace(/, |, /g, "-")`
+// would quietly break the file. seed.mjs has exactly that line, so a generated
+// template writing one is not far-fetched. Detecting regex literals properly
+// needs a parser, so the rule is conservative: leave the whole line alone. A
+// missed dash in a slug helper costs nothing; corrupted code costs a build.
+const REGEX_LITERAL_DASH_RE = /\/[^/\n]*[—–][^/\n]*\/[gimsuyd]*/;
+
+/**
+ * House style, applied to text a visitor will actually read: no em-dashes, no
+ * en-dashes. Line by line, so indentation survives — the copy generator can
+ * collapse runs of whitespace because it handles prose, and doing that to
+ * source would reformat the file.
+ *
+ * En-dashes become a hyphen rather than a comma, which is the one deliberate
+ * difference from copy-gen.mjs: in a template they are nearly always a range,
+ * and "Mon, Fri" for "Mon – Fri" is worse than wrong, it is misleading.
+ */
+export function stripDisplayDashes(text) {
+  let lines = 0;
+  const out = String(text).split('\n').map((line) => {
+    if (!/[—–]/.test(line)) return line;
+    if (COMMENT_LINE_RE.test(line) || REGEX_LITERAL_DASH_RE.test(line)) return line;
+    const fixed = line
+      .replace(/\s*—\s*/g, ', ')  // em-dash as punctuation
+      .replace(/\s*–\s*/g, '-')   // en-dash, almost always a range
+      .replace(/,\s*,/g, ',');    // tidy a doubled comma the above can create
+    if (fixed !== line) lines += 1;
+    return fixed;
+  }).join('\n');
+  return { text: out, lines };
+}
+
 /**
  * Deterministically repair the mechanical, build-breaking mistakes an LLM
  * template generator reliably makes, so a good generation is never bounced for
@@ -306,6 +345,11 @@ const JS_PATH_RE = /\.(tsx?|jsx?|mjs)$/;
  *      disallowed by the Next.js App Router (a webpack error TypeScript's
  *      ignoreBuildErrors does NOT catch). De-exported; the now-local
  *      const/function is harmless.
+ *   4. Em-dashes and en-dashes in text a visitor will read — house style, and
+ *      the one repair here that is about taste rather than compiling. The copy
+ *      generator has forbidden them in prompt and scrubbed them in code since
+ *      it was written; template generation had neither, so the first real
+ *      Studio run shipped "Thanks — your message has reached the workshop."
  * Steps 2→3 are ordered so a file that gains "use client" also drops any
  * server-only metadata. Returns { text, fixes }. `opts.path` gates the
  * JS-only repairs.
@@ -314,6 +358,12 @@ export function repairTemplateSource(text, { path = '' } = {}) {
   const fixes = [];
   let out = String(text);
   const isJs = JS_PATH_RE.test(path);
+
+  const dashed = stripDisplayDashes(out);
+  if (dashed.lines) {
+    out = dashed.text;
+    fixes.push(`removed em/en dashes from ${dashed.lines} line${dashed.lines > 1 ? 's' : ''} of visible text (house style)`);
+  }
 
   let dil = 0;
   out = out.replace(DILUTED_TW_FIX, (_m, g) => { dil += 1; return 'text-' + g; })

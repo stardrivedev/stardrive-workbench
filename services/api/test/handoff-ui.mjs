@@ -64,6 +64,26 @@ const asUser = (p, init = {}) => page.evaluate(async ({ p, init }) => {
   return { status: r.status, json, text };
 }, { p, init });
 
+/**
+ * Poll the SERVER until it reflects what was just saved.
+ *
+ * Waiting on the console's "Saved" marker looks equivalent and is not: the
+ * marker is still there from the PREVIOUS save, so `waitForFunction` on it
+ * returns on the first poll and the assertion that follows reads whatever was
+ * stored before the click. That raced intermittently and, when it lost, blamed
+ * the feature rather than the wait.
+ */
+async function untilStored(suffix, pred, what, timeoutMs = 8000) {
+  const started = Date.now();
+  let last = null;
+  while (Date.now() - started < timeoutMs) {
+    last = await asUser(`/v1/sites/${globalThis.__site}/${suffix}`);
+    if (pred(last)) return last;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  throw new Error(`${what} never reached the server within ${timeoutMs}ms. Last: ${String(last?.text).slice(0, 300)}`);
+}
+
 console.log('handoff UI:');
 
 await page.goto(BASE + '/workbench/', { waitUntil: 'networkidle' });
@@ -116,15 +136,13 @@ await check('saving a key persists it, and the input never echoes it back', asyn
   await page.fill('[data-env="RESEND_API_KEY"]', 're_live_browsersecret');
   await page.fill('[data-env="CONTACT_TO_EMAIL"]', 'owner@example.com');
   await page.click('[data-siteact="env-save"]');
-  await page.waitForFunction(() => /Saved/.test(document.querySelector('#launchOut')?.textContent || ''), null, { timeout: 8000 });
+  const stored = await untilStored('env', (r) => r.json?.set?.RESEND_API_KEY?.set === true, 'the Resend key');
 
   await page.waitForFunction(() => /saved/.test(document.querySelector('#envBlock')?.textContent || ''), null, { timeout: 8000 });
   const html = await page.innerHTML('#envBlock');
   assert.strictEqual(html.includes('re_live_browsersecret'), false, 'a secret must not come back into the DOM');
   assert.ok(html.includes('owner@example.com'), 'but an address they typed is theirs to see and correct');
 
-  const stored = await asUser(`/v1/sites/${globalThis.__site}/env`);
-  assert.strictEqual(stored.json.set.RESEND_API_KEY.set, true);
   assert.strictEqual(stored.json.missing.some((m) => m.name === 'RESEND_API_KEY'), false);
 });
 
@@ -148,9 +166,7 @@ await check('image storage is offered as a choice, and only the chosen half is s
   await page.fill('[data-env="S3_ACCESS_KEY_ID"]', 'AKIAEXAMPLE');
   await page.fill('[data-env="S3_SECRET_ACCESS_KEY"]', 's3-secret-value');
   await page.click('[data-siteact="env-save"]');
-  await page.waitForFunction(() => /Saved/.test(document.querySelector('#launchOut')?.textContent || ''), null, { timeout: 8000 });
-
-  const stored = await asUser(`/v1/sites/${globalThis.__site}/env`);
+  const stored = await untilStored('env', (r) => r.json?.set?.S3_BUCKET?.value === 'otley-images', 'the S3 bucket');
   assert.strictEqual(stored.json.set.S3_BUCKET.value, 'otley-images');
   assert.strictEqual(stored.json.set.S3_SECRET_ACCESS_KEY.set, true);
   assert.strictEqual(stored.text.includes('s3-secret-value'), false, 'and the secret never comes back');
@@ -162,11 +178,11 @@ await check('leaving a secret field blank does not erase the saved key', async (
   // The commonest way to lose a key: come back, change the email, save.
   await page.fill('[data-env="CONTACT_TO_EMAIL"]', 'newowner@example.com');
   await page.click('[data-siteact="env-save"]');
-  await page.waitForFunction(() => /Saved/.test(document.querySelector('#launchOut')?.textContent || ''), null, { timeout: 8000 });
-
-  const file = await asUser(`/v1/sites/${globalThis.__site}/env/file`);
+  // The edit landing is the PRECONDITION, not the point. Wait for it, then ask
+  // the real question: did the key nobody touched survive the save?
+  const file = await untilStored('env/file',
+    (r) => /^CONTACT_TO_EMAIL=newowner@example\.com$/m.test(r.text), 'the changed address');
   assert.match(file.text, /^RESEND_API_KEY=re_live_browsersecret$/m, 'the untouched key survived');
-  assert.match(file.text, /^CONTACT_TO_EMAIL=newowner@example\.com$/m, 'and the edit landed');
 });
 
 await check('the handoff reads for the client and lists only their own sections', async () => {

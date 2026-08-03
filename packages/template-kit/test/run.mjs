@@ -171,6 +171,54 @@ check('autofix de-exports metadata from a "use client" component; server metadat
   assert.strictEqual(fixes.some((f) => /server-only metadata/.test(f)), true);
 });
 
+check('autofix removes em/en dashes from visible text, and only from visible text', () => {
+  // The real one. The first live Studio generation shipped exactly this.
+  const confirmation = '        <p className="text-heading">Thanks — your message has reached the workshop.</p>\n';
+  const comment = '/**\n * Merges live rows over the baked copy — pages never go blank.\n */\n// A trailing note — kept, because nobody reads it on the site.\n';
+  const range = '<p>Open Mon – Fri, 9 – 5.</p>\n';
+  const indented = '            <span>Booked, we will confirm — usually within a day.</span>\n';
+
+  const { files: fixed, fixes } = autofixTemplateFiles([
+    { path: 'src/components/ContactForm.tsx', content: confirmation },
+    { path: 'src/lib/site-content.ts', content: comment },
+    { path: 'src/app/page.tsx', content: range },
+    { path: 'src/components/Booking.tsx', content: indented },
+  ]);
+  const byPath = Object.fromEntries(fixed.map((f) => [f.path, f]));
+
+  assert.strictEqual(
+    byPath['src/components/ContactForm.tsx'].content,
+    '        <p className="text-heading">Thanks, your message has reached the workshop.</p>\n',
+    'the dash goes and the indentation stays',
+  );
+  assert.strictEqual(byPath['src/lib/site-content.ts'].content, comment,
+    'comment lines are left alone: nothing there reaches a visitor');
+  assert.strictEqual(byPath['src/app/page.tsx'].content, '<p>Open Mon-Fri, 9-5.</p>\n',
+    'an en-dash is a range, so it becomes a hyphen rather than a comma');
+  assert.strictEqual(
+    byPath['src/components/Booking.tsx'].content,
+    '            <span>Booked, we will confirm, usually within a day.</span>\n',
+    'no doubled comma where the sentence already had one',
+  );
+  assert.strictEqual(fixes.some((f) => /em\/en dashes/.test(f)), true, 'and it says what it did');
+});
+check('the dash repair will not corrupt a dash inside a regex literal', () => {
+  // Our own seed.mjs has this exact line. Rewriting it would turn a slug
+  // helper into `.replace(/, |, /g, "-")`, which is broken and silent.
+  const helper = '  const slug = text.toLowerCase().replace(/–|—/g, "-");\n'
+    + '  return <p>Ready in 3 – 5 days.</p>;\n';
+  const { files, fixes } = autofixTemplateFiles([{ path: 'src/lib/slug.ts', content: helper }]);
+  assert.strictEqual(files[0].content.includes('.replace(/–|—/g, "-")'), true, 'the regex survives untouched');
+  assert.strictEqual(files[0].content.includes('Ready in 3-5 days.'), true, 'the copy on the next line is still repaired');
+  assert.strictEqual(fixes.some((f) => /em\/en dashes from 1 line/.test(f)), true, 'one line, not two');
+});
+check('the dash repair leaves a clean file byte-identical', () => {
+  const clean = 'export const x = 1;\n// nothing to do here\n<p>All good, nothing to fix.</p>\n';
+  const { files, fixes } = autofixTemplateFiles([{ path: 'src/x.tsx', content: clean }]);
+  assert.strictEqual(files[0].content, clean);
+  assert.deepStrictEqual(fixes, []);
+});
+
 console.log('bundle:');
 check('a complete site bundle validates (with no warnings)', () => {
   const v = validateBundle({ manifest: GOOD_MANIFEST, files: goodSiteFiles() });

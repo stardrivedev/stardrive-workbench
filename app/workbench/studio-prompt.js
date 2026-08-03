@@ -345,9 +345,16 @@ Never invent facts about a real business. All identity comes from
 siteConfig; placeholder copy elsewhere must be generic and clearly
 replaceable, written naturally for the audience the template targets.
 
+STYLE RULE (MUST): never use an em-dash or an en-dash in any text a
+visitor reads. Not in headings, body copy, button labels, form
+confirmations, empty states, alt text or metadata. Use a comma, a period,
+or restructure the sentence; write ranges with "to" ("9 to 5", "Mon to
+Fri"). This is house style and it is not negotiable.
+
 =====================================================================
 11. SELF-CHECK BEFORE DELIVERING (run this list, fix, then deliver)
 =====================================================================
+[ ] Zero em-dashes and en-dashes in any visible string
 [ ] manifest.json routes exactly match the pages that exist
 [ ] All eight section-5 files exist at their exact paths with the exact
     export names
